@@ -9,7 +9,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/songguo/songguo/internal/config"
+	"github.com/songguo/songguo/internal/proxy"
+	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/server"
+	"github.com/songguo/songguo/internal/store"
 )
 
 func getenv(key, def string) string {
@@ -32,12 +36,29 @@ func main() {
 		logger.Warn("SONGGUO_ADMIN_KEY is empty; the admin API will be UNPROTECTED")
 	}
 
-	// TODO(P1): load and watch the vendor config from configPath.
-	// TODO(P2): open the SQLite store at dbPath.
-	_ = configPath
-	_ = dbPath
+	manager, err := config.NewManager(configPath, logger)
+	if err != nil {
+		logger.Error("failed to load config", "path", configPath, "err", err)
+		os.Exit(1)
+	}
+	defer manager.Close()
 
-	srv := server.New(server.Options{Addr: listen})
+	st, err := store.Open(dbPath)
+	if err != nil {
+		logger.Error("failed to open store", "path", dbPath, "err", err)
+		os.Exit(1)
+	}
+	defer st.Close()
+
+	rt := router.New(manager.Current)
+	proxyHandler := proxy.NewHandler(proxy.Deps{
+		Snapshot: manager.Current,
+		Store:    st,
+		Router:   rt,
+		Logger:   logger,
+	})
+
+	srv := server.New(server.Options{Addr: listen, ProxyHandler: proxyHandler})
 
 	errCh := make(chan error, 1)
 	go func() {
