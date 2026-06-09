@@ -15,12 +15,12 @@ import { ErrorBanner } from '../components/ErrorBanner';
 import { Skeleton } from '../components/Skeleton';
 import { StatusPill } from '../components/StatusPill';
 import { useToast } from '../components/Toast';
-import { useFetch } from '../lib/useFetch';
+import { useFetch, LIVE_REFRESH_MS } from '../lib/useFetch';
 import { dateTime, money, ms } from '../lib/format';
 import styles from './Overview.module.css';
 
 const PAGE_SIZE = 25;
-const REFRESH_MS = 10_000;
+const REFRESH_MS = LIVE_REFRESH_MS;
 /** Number of <td> in a call row — the expanded panel spans all of them. */
 const COL_COUNT = 8;
 

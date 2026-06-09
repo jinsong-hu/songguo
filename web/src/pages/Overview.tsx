@@ -15,7 +15,7 @@ import type { Bucket } from '../api/types';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
 import { Skeleton } from '../components/Skeleton';
-import { useFetch } from '../lib/useFetch';
+import { LIVE_REFRESH_MS, useFetch, useLiveTick } from '../lib/useFetch';
 import { bucketLabel, int, money, ms, percent } from '../lib/format';
 import { CallsTable } from './CallsTable';
 import styles from './Overview.module.css';
@@ -33,20 +33,20 @@ const RANGES: RangeOption[] = [
   { key: '30d', label: '30d', seconds: 30 * 24 * 3600, bucket: 'day' },
 ];
 
-const REFRESH_MS = 30_000;
+const REFRESH_MS = LIVE_REFRESH_MS;
 
 export function OverviewPage() {
   const [rangeKey, setRangeKey] = useState('24h');
-  // Recompute now lazily per range change so the window is stable across renders.
-  const [tick] = useState(() => Date.now());
+  // `tick` advances on the live refresh cadence so the window tracks "now".
+  const tick = useLiveTick(REFRESH_MS);
   const range = RANGES.find((r) => r.key === rangeKey) ?? RANGES[0];
 
   const { since, until } = useMemo(() => {
-    const u = Math.floor(tick / 1000);
+    // `until` gets a +1s buffer so a call made in the current second isn't
+    // excluded by the backend's half-open [since, until) window.
+    const u = tick + 1;
     return { since: u - range.seconds, until: u };
-    // tick is stable; recompute only when range changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rangeKey]);
+  }, [tick, range]);
 
   const overview = useFetch(() => api.overview(since, until), [since, until], {
     intervalMs: REFRESH_MS,
