@@ -1,0 +1,202 @@
+.shell {
+  display: flex;
+  height: 100%;
+  width: 100%;
+}
+
+.sidebar {
+  width: var(--sidebar-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 18px 16px;
+}
+
+.brand img {
+  width: 26px;
+  height: 26px;
+}
+
+.wordmark {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 12px;
+  flex: 1;
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  font-size: 13.5px;
+  font-weight: 500;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.navItem:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.navItemActive {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+.navItemActive:hover {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+.footer {
+  padding: 14px 18px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.version {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.lock {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.lockProtected {
+  color: var(--accent);
+}
+
+.lockOpen {
+  color: var(--amber);
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 56px;
+  flex-shrink: 0;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.pageTitle {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.toolbarActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+/* Mobile: sidebar collapses into a top bar of icon links. */
+@media (max-width: 900px) {
+  .shell {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    height: 52px;
+    padding: 0 8px;
+  }
+
+  .brand {
+    padding: 0 8px;
+  }
+
+  .wordmark {
+    display: none;
+  }
+
+  .nav {
+    flex-direction: row;
+    padding: 0;
+    gap: 2px;
+    flex: 1;
+    overflow-x: auto;
+  }
+
+  .navItem span {
+    display: none;
+  }
+
+  .navItem {
+    height: 36px;
+    width: 36px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .footer {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    border-top: none;
+    padding: 0 8px;
+    white-space: nowrap;
+  }
+
+  .version {
+    display: none;
+  }
+
+  .toolbar {
+    padding: 0 16px;
+  }
+
+  .body {
+    padding: 16px;
+  }
+}

@@ -1,0 +1,274 @@
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.kpi {
+  padding: 14px 16px;
+}
+
+.kpiLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.kpiValue {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.kpiSub {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.kpiAmber {
+  background: var(--amber-weak);
+  border-color: color-mix(in srgb, var(--amber) 35%, var(--border));
+}
+.kpiAmber .kpiValue {
+  color: var(--amber);
+}
+
+.kpiDanger .kpiSub {
+  color: var(--danger);
+}
+
+.row2 {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 1040px) {
+  .row2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  padding: 16px;
+}
+
+.panelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.panelTitle {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.chartBox {
+  height: 240px;
+  width: 100%;
+}
+
+.modalityList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modalityRow {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.modalityTop {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.modalityName {
+  text-transform: capitalize;
+}
+
+.modalityCost {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+}
+
+.bar {
+  height: 7px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.barFill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.latencyGroup {
+  display: flex;
+  gap: 24px;
+}
+
+.latencyStat {
+  display: flex;
+  flex-direction: column;
+}
+
+.latencyLabel {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.latencyValue {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+/* Range switch (segmented control) */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.segBtn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  border-right: 1px solid var(--border);
+}
+
+.segBtn:last-child {
+  border-right: none;
+}
+
+.segBtn:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.segActive {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+.segActive:hover {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+/* Ledger */
+.ledgerPanel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.ledgerToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.search {
+  flex: 1;
+  min-width: 120px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.tableScroll {
+  overflow-x: auto;
+}
+
+.refreshDot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.live {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.pagerBtns {
+  display: flex;
+  gap: 8px;
+}
+
+.tooltip {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow);
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.tooltipLabel {
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.tooltipRow {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}

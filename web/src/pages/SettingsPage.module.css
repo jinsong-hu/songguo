@@ -1,0 +1,151 @@
+.sections {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 760px;
+}
+
+.panel {
+  padding: 18px;
+}
+
+.panelTitle {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.panelDesc {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+
+.themeRow {
+  display: flex;
+  gap: 8px;
+}
+
+.themeBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.themeBtn:hover {
+  background: var(--surface-2);
+}
+
+.themeActive {
+  border-color: var(--accent);
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+.themeActive:hover {
+  background: var(--accent-weak);
+}
+
+.connRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.connLabel {
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.connField {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.connValue {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  user-select: all;
+  word-break: break-all;
+}
+
+.connHint {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.meta {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 8px 16px;
+  font-size: 13px;
+}
+
+.metaKey {
+  color: var(--text-muted);
+}
+
+.metaVal {
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 11.5px;
+  font-weight: 500;
+  font-family: var(--font-sans);
+}
+
+.statusProtected {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+.statusOpen {
+  background: var(--amber-weak);
+  color: var(--amber);
+}
+
+.hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.hint code {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 11.5px;
+}
+
+.tableScroll {
+  overflow-x: auto;
+  margin-top: 4px;
+}

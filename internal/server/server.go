@@ -4,7 +4,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"net/http"
+	"path"
+	"strings"
+
+	"github.com/songguo/songguo/web"
 )
 
 // Options configures a Server.
@@ -50,7 +55,45 @@ func (s *Server) registerRoutes() {
 		// The dashboard and CLI call the admin API under http://<songguo>/api.
 		s.mux.Handle("/api/", s.opts.AdminHandler)
 	}
-	// TODO(P5): serve the embedded React dashboard at "/".
+	// Serve the embedded React dashboard at "/". The more specific /healthz,
+	// /v1/, and /api/ patterns registered above take precedence in ServeMux, so
+	// this catch-all only handles dashboard assets and client-side routes.
+	if sub, err := web.FS(); err == nil {
+		s.mux.Handle("/", spaHandler(sub))
+	}
+}
+
+// spaHandler serves the single-page app from the embedded filesystem. If the
+// requested path maps to an existing file it is served directly; otherwise
+// (a client-side route, which has no file extension) it falls back to
+// index.html with a 200 so the browser router can take over.
+func spaHandler(fsys fs.FS) http.Handler {
+	fileServer := http.FileServer(http.FS(fsys))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clean := path.Clean(strings.TrimPrefix(r.URL.Path, "/"))
+		if clean == "" || clean == "." {
+			clean = "index.html"
+		}
+		if _, err := fs.Stat(fsys, clean); err != nil {
+			// Unknown path: a deep client route or a 404. Serve the SPA shell so
+			// the React router can render the right view (or its own 404).
+			serveIndex(w, fsys)
+			return
+		}
+		fileServer.ServeHTTP(w, r)
+	})
+}
+
+// serveIndex writes the SPA entry document with a 200 status.
+func serveIndex(w http.ResponseWriter, fsys fs.FS) {
+	data, err := fs.ReadFile(fsys, "index.html")
+	if err != nil {
+		http.Error(w, "dashboard not built", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func handleHealthz(w http.ResponseWriter, _ *http.Request) {

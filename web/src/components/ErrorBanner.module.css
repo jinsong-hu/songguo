@@ -1,0 +1,34 @@
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius-control);
+  background: var(--danger-weak);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.icon {
+  flex-shrink: 0;
+}
+
+.msg {
+  flex: 1;
+}
+
+.retry {
+  border: 1px solid var(--danger);
+  background: transparent;
+  color: var(--danger);
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--radius-control);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.retry:hover {
+  background: var(--surface);
+}
