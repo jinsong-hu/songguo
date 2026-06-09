@@ -3,8 +3,8 @@ package api
 import (
 	"time"
 
+	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/config"
-	"github.com/songguo/songguo/internal/ledger"
 	"github.com/songguo/songguo/internal/store"
 )
 
@@ -49,7 +49,7 @@ func newTokenView(t store.Token, spent float64) tokenView {
 	return v
 }
 
-// entryView is the JSON representation of a ledger entry.
+// entryView is the JSON representation of a call entry.
 type entryView struct {
 	ID           int64             `json:"id"`
 	TS           string            `json:"ts"`
@@ -68,8 +68,8 @@ type entryView struct {
 	Tags         map[string]string `json:"tags"`
 }
 
-// newEntryView converts a ledger.Entry into its JSON view.
-func newEntryView(e ledger.Entry) entryView {
+// newEntryView converts a calls.Entry into its JSON view.
+func newEntryView(e calls.Entry) entryView {
 	usage := e.Usage
 	if usage == nil {
 		usage = map[string]any{}
@@ -139,8 +139,8 @@ type usageSeriesView struct {
 	Points []seriesPoint `json:"points"`
 }
 
-// ledgerView is the GET /api/ledger response.
-type ledgerView struct {
+// callsView is the GET /api/calls response.
+type callsView struct {
 	Entries []entryView `json:"entries"`
 	Total   int         `json:"total"`
 	Limit   int         `json:"limit"`

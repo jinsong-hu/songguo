@@ -39,7 +39,7 @@ export interface UsageSeries {
   points: SeriesPoint[];
 }
 
-export interface LedgerEntry {
+export interface CallEntry {
   id: number;
   ts: string;
   token_id: string;
@@ -57,8 +57,8 @@ export interface LedgerEntry {
   tags: Record<string, string>;
 }
 
-export interface LedgerPage {
-  entries: LedgerEntry[];
+export interface CallsPage {
+  entries: CallEntry[];
   total: number;
   limit: number;
   offset: number;
@@ -145,7 +145,7 @@ export interface PricingRow {
 
 export type StatusGroup = 'all' | 'ok' | 'error';
 
-export interface LedgerFilters {
+export interface CallsFilters {
   since?: number;
   until?: number;
   token_id?: string;

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/config"
-	"github.com/songguo/songguo/internal/ledger"
 	"github.com/songguo/songguo/internal/store"
 )
 
@@ -113,8 +113,8 @@ func TestAuthRequiredOnAllEndpoints(t *testing.T) {
 	endpoints := []struct{ method, path string }{
 		{"GET", "/api/overview"},
 		{"GET", "/api/usage/series"},
-		{"GET", "/api/ledger"},
-		{"GET", "/api/ledger/export?format=csv"},
+		{"GET", "/api/calls"},
+		{"GET", "/api/calls/export?format=csv"},
 		{"GET", "/api/tokens"},
 		{"POST", "/api/tokens"},
 		{"PATCH", "/api/tokens/x"},
@@ -187,12 +187,12 @@ func TestTokenCreateListPatchRevoke(t *testing.T) {
 	tokenID := created.ID
 	plaintext := created.Key
 
-	// Seed ledger so list shows computed spend.
-	if _, err := s.AppendLedger(ledger.Entry{
-		TS: time.Now(), TokenID: tokenID, Model: "gpt-4o", Modality: ledger.ModalityChat,
+	// Seed calls so list shows computed spend.
+	if _, err := s.AppendCall(calls.Entry{
+		TS: time.Now(), TokenID: tokenID, Model: "gpt-4o", Modality: calls.ModalityChat,
 		Vendor: "openai", Status: 200, Cost: 3.25,
 	}); err != nil {
-		t.Fatalf("AppendLedger: %v", err)
+		t.Fatalf("AppendCall: %v", err)
 	}
 
 	// List shows it with spent computed.
@@ -287,33 +287,33 @@ func TestCreateTokenNullBudget(t *testing.T) {
 	}
 }
 
-// --- (c) ledger ---
+// --- (c) calls ---
 
-func seedLedger(t *testing.T, s *store.Store) time.Time {
+func seedCalls(t *testing.T, s *store.Store) time.Time {
 	t.Helper()
 	base := time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
-	entries := []ledger.Entry{
-		{TS: base, TokenID: "tokA", Model: "gpt-4o", Modality: ledger.ModalityChat, Vendor: "openai", Status: 200, Cost: 0.10, LatencyMS: 100},
-		{TS: base.Add(1 * time.Minute), TokenID: "tokA", Model: "gpt-4o", Modality: ledger.ModalityChat, Vendor: "openai", Status: 500, Err: "boom", Cost: 0, LatencyMS: 200},
-		{TS: base.Add(2 * time.Minute), TokenID: "tokB", Model: "text-embedding-3-small", Modality: ledger.ModalityEmbedding, Vendor: "openai", Status: 200, Cost: 0.02, LatencyMS: 50},
-		{TS: base.Add(3 * time.Minute), TokenID: "tokB", Model: "deepseek-chat", Modality: ledger.ModalityChat, Vendor: "deepseek", Status: 200, Cost: 0.30, LatencyMS: 300},
+	entries := []calls.Entry{
+		{TS: base, TokenID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat, Vendor: "openai", Status: 200, Cost: 0.10, LatencyMS: 100},
+		{TS: base.Add(1 * time.Minute), TokenID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat, Vendor: "openai", Status: 500, Err: "boom", Cost: 0, LatencyMS: 200},
+		{TS: base.Add(2 * time.Minute), TokenID: "tokB", Model: "text-embedding-3-small", Modality: calls.ModalityEmbedding, Vendor: "openai", Status: 200, Cost: 0.02, LatencyMS: 50},
+		{TS: base.Add(3 * time.Minute), TokenID: "tokB", Model: "deepseek-chat", Modality: calls.ModalityChat, Vendor: "deepseek", Status: 200, Cost: 0.30, LatencyMS: 300},
 	}
 	for i, e := range entries {
-		if _, err := s.AppendLedger(e); err != nil {
-			t.Fatalf("AppendLedger[%d]: %v", i, err)
+		if _, err := s.AppendCall(e); err != nil {
+			t.Fatalf("AppendCall[%d]: %v", i, err)
 		}
 	}
 	return base
 }
 
-func TestLedgerFiltersAndPagination(t *testing.T) {
+func TestCallsFiltersAndPagination(t *testing.T) {
 	s := newTestStore(t)
-	seedLedger(t, s)
+	seedCalls(t, s)
 	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
 
 	// All.
-	rec := do(h, "GET", "/api/ledger", "secret", nil)
-	var all ledgerView
+	rec := do(h, "GET", "/api/calls", "secret", nil)
+	var all callsView
 	decodeBody(t, rec, &all)
 	if all.Total != 4 || len(all.Entries) != 4 {
 		t.Fatalf("all: total=%d entries=%d, want 4/4", all.Total, len(all.Entries))
@@ -323,46 +323,46 @@ func TestLedgerFiltersAndPagination(t *testing.T) {
 	}
 
 	// Filter by token.
-	rec = do(h, "GET", "/api/ledger?token_id=tokA", "secret", nil)
-	var byTok ledgerView
+	rec = do(h, "GET", "/api/calls?token_id=tokA", "secret", nil)
+	var byTok callsView
 	decodeBody(t, rec, &byTok)
 	if byTok.Total != 2 {
 		t.Errorf("token_id=tokA total = %d, want 2", byTok.Total)
 	}
 
 	// Filter by model.
-	rec = do(h, "GET", "/api/ledger?model=deepseek-chat", "secret", nil)
-	var byModel ledgerView
+	rec = do(h, "GET", "/api/calls?model=deepseek-chat", "secret", nil)
+	var byModel callsView
 	decodeBody(t, rec, &byModel)
 	if byModel.Total != 1 {
 		t.Errorf("model filter total = %d, want 1", byModel.Total)
 	}
 
 	// Filter by vendor.
-	rec = do(h, "GET", "/api/ledger?vendor=openai", "secret", nil)
-	var byVendor ledgerView
+	rec = do(h, "GET", "/api/calls?vendor=openai", "secret", nil)
+	var byVendor callsView
 	decodeBody(t, rec, &byVendor)
 	if byVendor.Total != 3 {
 		t.Errorf("vendor filter total = %d, want 3", byVendor.Total)
 	}
 
 	// Filter by status.
-	rec = do(h, "GET", "/api/ledger?status=500", "secret", nil)
-	var byStatus ledgerView
+	rec = do(h, "GET", "/api/calls?status=500", "secret", nil)
+	var byStatus callsView
 	decodeBody(t, rec, &byStatus)
 	if byStatus.Total != 1 {
 		t.Errorf("status filter total = %d, want 1", byStatus.Total)
 	}
 
 	// Pagination: limit=2 keeps total at 4 but returns 2 entries.
-	rec = do(h, "GET", "/api/ledger?limit=2&offset=0", "secret", nil)
-	var page1 ledgerView
+	rec = do(h, "GET", "/api/calls?limit=2&offset=0", "secret", nil)
+	var page1 callsView
 	decodeBody(t, rec, &page1)
 	if page1.Total != 4 || len(page1.Entries) != 2 || page1.Limit != 2 {
 		t.Errorf("page1: total=%d entries=%d limit=%d", page1.Total, len(page1.Entries), page1.Limit)
 	}
-	rec = do(h, "GET", "/api/ledger?limit=2&offset=2", "secret", nil)
-	var page2 ledgerView
+	rec = do(h, "GET", "/api/calls?limit=2&offset=2", "secret", nil)
+	var page2 callsView
 	decodeBody(t, rec, &page2)
 	if len(page2.Entries) != 2 || page2.Offset != 2 {
 		t.Errorf("page2: entries=%d offset=%d", len(page2.Entries), page2.Offset)
@@ -381,12 +381,12 @@ func TestLedgerFiltersAndPagination(t *testing.T) {
 	}
 }
 
-func TestLedgerExportCSV(t *testing.T) {
+func TestCallsExportCSV(t *testing.T) {
 	s := newTestStore(t)
-	seedLedger(t, s)
+	seedCalls(t, s)
 	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
 
-	rec := do(h, "GET", "/api/ledger/export?format=csv", "secret", nil)
+	rec := do(h, "GET", "/api/calls/export?format=csv", "secret", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("export csv: code = %d", rec.Code)
 	}
@@ -406,12 +406,12 @@ func TestLedgerExportCSV(t *testing.T) {
 	}
 }
 
-func TestLedgerExportJSON(t *testing.T) {
+func TestCallsExportJSON(t *testing.T) {
 	s := newTestStore(t)
-	seedLedger(t, s)
+	seedCalls(t, s)
 	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
 
-	rec := do(h, "GET", "/api/ledger/export?format=json", "secret", nil)
+	rec := do(h, "GET", "/api/calls/export?format=json", "secret", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("export json: code = %d", rec.Code)
 	}
@@ -422,9 +422,9 @@ func TestLedgerExportJSON(t *testing.T) {
 	}
 }
 
-func TestLedgerExportBadFormat(t *testing.T) {
+func TestCallsExportBadFormat(t *testing.T) {
 	h := testHandler(t, Deps{AdminKey: "secret"})
-	rec := do(h, "GET", "/api/ledger/export?format=xml", "secret", nil)
+	rec := do(h, "GET", "/api/calls/export?format=xml", "secret", nil)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("bad format: code = %d, want 400", rec.Code)
 	}
@@ -435,7 +435,7 @@ func TestLedgerExportBadFormat(t *testing.T) {
 func TestOverviewMath(t *testing.T) {
 	s := newTestStore(t)
 
-	// Create a budgeted token; seed its ledger so runway math is exercised.
+	// Create a budgeted token; seed its calls so runway math is exercised.
 	budget := 100.0
 	tok, _, err := s.CreateToken(store.NewToken{Name: "budgeted", Budget: &budget})
 	if err != nil {
@@ -444,14 +444,14 @@ func TestOverviewMath(t *testing.T) {
 
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
 	// Spend within the last 7 days for daily_burn. Put 14.0 total over the week.
-	weekEntries := []ledger.Entry{
-		{TS: now.Add(-24 * time.Hour), TokenID: tok.ID, Model: "gpt-4o", Modality: ledger.ModalityChat, Vendor: "openai", Status: 200, Cost: 6.0, LatencyMS: 100},
-		{TS: now.Add(-48 * time.Hour), TokenID: tok.ID, Model: "dall-e-3", Modality: ledger.ModalityImage, Vendor: "openai", Status: 500, Cost: 1.0, LatencyMS: 300},
-		{TS: now.Add(-72 * time.Hour), TokenID: tok.ID, Model: "tts-1", Modality: ledger.ModalityTTS, Vendor: "openai", Status: 0, Cost: 7.0, LatencyMS: 200},
+	weekEntries := []calls.Entry{
+		{TS: now.Add(-24 * time.Hour), TokenID: tok.ID, Model: "gpt-4o", Modality: calls.ModalityChat, Vendor: "openai", Status: 200, Cost: 6.0, LatencyMS: 100},
+		{TS: now.Add(-48 * time.Hour), TokenID: tok.ID, Model: "dall-e-3", Modality: calls.ModalityImage, Vendor: "openai", Status: 500, Cost: 1.0, LatencyMS: 300},
+		{TS: now.Add(-72 * time.Hour), TokenID: tok.ID, Model: "tts-1", Modality: calls.ModalityTTS, Vendor: "openai", Status: 0, Cost: 7.0, LatencyMS: 200},
 	}
 	for i, e := range weekEntries {
-		if _, err := s.AppendLedger(e); err != nil {
-			t.Fatalf("AppendLedger[%d]: %v", i, err)
+		if _, err := s.AppendCall(e); err != nil {
+			t.Fatalf("AppendCall[%d]: %v", i, err)
 		}
 	}
 
@@ -513,8 +513,8 @@ func TestOverviewNullRunwayNoBudget(t *testing.T) {
 		t.Fatalf("CreateToken: %v", err)
 	}
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
-	if _, err := s.AppendLedger(ledger.Entry{TS: now.Add(-time.Hour), Vendor: "openai", Status: 200, Cost: 5, LatencyMS: 10}); err != nil {
-		t.Fatalf("AppendLedger: %v", err)
+	if _, err := s.AppendCall(calls.Entry{TS: now.Add(-time.Hour), Vendor: "openai", Status: 200, Cost: 5, LatencyMS: 10}); err != nil {
+		t.Fatalf("AppendCall: %v", err)
 	}
 	h := testHandler(t, Deps{Store: s, AdminKey: "secret", Now: func() time.Time { return now }})
 	rec := do(h, "GET", "/api/overview", "secret", nil)
@@ -527,11 +527,11 @@ func TestOverviewNullRunwayNoBudget(t *testing.T) {
 
 // --- (e) usage series ---
 
-func seedSeriesLedger(t *testing.T, s *store.Store, now time.Time) {
+func seedSeriesCalls(t *testing.T, s *store.Store, now time.Time) {
 	t.Helper()
 	// now is 2026-06-09 12:00 UTC. Put traffic on day -1 and day -3 (relative
 	// to now), leaving day -2 as a gap inside the default 7-day window.
-	entries := []ledger.Entry{
+	entries := []calls.Entry{
 		// day -1: 2 rows, 1 error (500); cost 0.10 + 0.20.
 		{TS: now.Add(-24 * time.Hour), Vendor: "openai", Status: 200, Cost: 0.10, LatencyMS: 10},
 		{TS: now.Add(-24 * time.Hour).Add(time.Hour), Vendor: "openai", Status: 500, Cost: 0.20, LatencyMS: 20},
@@ -539,8 +539,8 @@ func seedSeriesLedger(t *testing.T, s *store.Store, now time.Time) {
 		{TS: now.Add(-72 * time.Hour), Vendor: "openai", Status: 0, Cost: 1.0, LatencyMS: 30},
 	}
 	for i, e := range entries {
-		if _, err := s.AppendLedger(e); err != nil {
-			t.Fatalf("AppendLedger[%d]: %v", i, err)
+		if _, err := s.AppendCall(e); err != nil {
+			t.Fatalf("AppendCall[%d]: %v", i, err)
 		}
 	}
 }
@@ -548,7 +548,7 @@ func seedSeriesLedger(t *testing.T, s *store.Store, now time.Time) {
 func TestUsageSeriesDefaults(t *testing.T) {
 	s := newTestStore(t)
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
-	seedSeriesLedger(t, s, now)
+	seedSeriesCalls(t, s, now)
 	h := testHandler(t, Deps{Store: s, AdminKey: "secret", Now: func() time.Time { return now }})
 
 	rec := do(h, "GET", "/api/usage/series", "secret", nil)
@@ -645,11 +645,11 @@ func TestUsageSeriesAuthAndBadBucket(t *testing.T) {
 func TestVendorsNeverLeakAPIKey(t *testing.T) {
 	s := newTestStore(t)
 	// Seed some traffic so stats are computed.
-	if _, err := s.AppendLedger(ledger.Entry{TS: time.Now(), Vendor: "openai", Status: 200, LatencyMS: 100}); err != nil {
-		t.Fatalf("AppendLedger: %v", err)
+	if _, err := s.AppendCall(calls.Entry{TS: time.Now(), Vendor: "openai", Status: 200, LatencyMS: 100}); err != nil {
+		t.Fatalf("AppendCall: %v", err)
 	}
-	if _, err := s.AppendLedger(ledger.Entry{TS: time.Now(), Vendor: "openai", Status: 500, LatencyMS: 200}); err != nil {
-		t.Fatalf("AppendLedger: %v", err)
+	if _, err := s.AppendCall(calls.Entry{TS: time.Now(), Vendor: "openai", Status: 500, LatencyMS: 200}); err != nil {
+		t.Fatalf("AppendCall: %v", err)
 	}
 	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
 

@@ -53,10 +53,10 @@ func parseIntDefault(r *http.Request, key string, def int) int {
 	return n
 }
 
-// ledgerFilterFromQuery builds a store.LedgerFilter from the request query,
+// callFilterFromQuery builds a store.CallFilter from the request query,
 // applying the given default and cap to the limit.
-func ledgerFilterFromQuery(r *http.Request, defLimit, capLimit int) store.LedgerFilter {
-	f := store.LedgerFilter{
+func callFilterFromQuery(r *http.Request, defLimit, capLimit int) store.CallFilter {
+	f := store.CallFilter{
 		TokenID: r.URL.Query().Get("token_id"),
 		Model:   r.URL.Query().Get("model"),
 		Vendor:  r.URL.Query().Get("vendor"),
@@ -91,9 +91,9 @@ func ledgerFilterFromQuery(r *http.Request, defLimit, capLimit int) store.Ledger
 // --- handlers ---
 
 const (
-	defaultLedgerAPILimit = 50
-	maxLedgerAPILimit     = 500
-	exportMaxRows         = 100000
+	defaultCallsAPILimit = 50
+	maxCallsAPILimit     = 500
+	exportMaxRows        = 100000
 )
 
 // handleOverview computes the dashboard summary over a window (default last 30d).
@@ -256,19 +256,19 @@ func (a *api) handleUsageSeries(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, usageSeriesView{Bucket: label, Points: views})
 }
 
-// handleLedger returns a filtered, paginated page of ledger entries plus the
+// handleCalls returns a filtered, paginated page of call entries plus the
 // total count for the same filter.
-func (a *api) handleLedger(w http.ResponseWriter, r *http.Request) {
-	f := ledgerFilterFromQuery(r, defaultLedgerAPILimit, maxLedgerAPILimit)
+func (a *api) handleCalls(w http.ResponseWriter, r *http.Request) {
+	f := callFilterFromQuery(r, defaultCallsAPILimit, maxCallsAPILimit)
 
-	entries, err := a.store.QueryLedger(f)
+	entries, err := a.store.QueryCalls(f)
 	if err != nil {
-		a.serverError(w, "query ledger", err)
+		a.serverError(w, "query calls", err)
 		return
 	}
-	total, err := a.store.CountLedger(f)
+	total, err := a.store.CountCalls(f)
 	if err != nil {
-		a.serverError(w, "count ledger", err)
+		a.serverError(w, "count calls", err)
 		return
 	}
 
@@ -277,7 +277,7 @@ func (a *api) handleLedger(w http.ResponseWriter, r *http.Request) {
 		views = append(views, newEntryView(e))
 	}
 
-	writeJSON(w, http.StatusOK, ledgerView{
+	writeJSON(w, http.StatusOK, callsView{
 		Entries: views,
 		Total:   total,
 		Limit:   f.Limit,

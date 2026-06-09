@@ -1,14 +1,14 @@
-// Package ledger records per-token usage and enforces budgets.
+// Package calls records per-token usage and enforces budgets.
 //
 // It holds only pure domain types: an append-only Entry is written for every
 // proxied call attempt (including each failover attempt). Persistence lives in
 // the store package; budget enforcement and dashboard views are queries over
-// the resulting ledger.
-package ledger
+// the resulting call log.
+package calls
 
 import "time"
 
-// Modality is the kind of AI call a ledger Entry records.
+// Modality is the kind of AI call an Entry records.
 type Modality string
 
 // Known modalities. ModalityUnknown is the zero-value fallback.
@@ -23,7 +23,7 @@ const (
 	ModalityUnknown   Modality = "unknown"
 )
 
-// Entry is one append-only ledger record (one call attempt).
+// Entry is one append-only call record (one call attempt).
 type Entry struct {
 	ID           int64
 	TS           time.Time // when the call completed

@@ -7,18 +7,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/songguo/songguo/internal/ledger"
+	"github.com/songguo/songguo/internal/calls"
 )
 
-// defaultLedgerLimit and maxLedgerLimit bound QueryLedger result sizes.
+// defaultCallsLimit and maxCallsLimit bound QueryCalls result sizes.
 const (
-	defaultLedgerLimit = 100
-	maxLedgerLimit     = 1000
+	defaultCallsLimit = 100
+	maxCallsLimit     = 1000
 )
 
-// AppendLedger writes one append-only entry and returns its autoincrement id.
+// AppendCall writes one append-only entry and returns its autoincrement id.
 // Usage and Tags are JSON-encoded; ts is stored as unix milliseconds.
-func (s *Store) AppendLedger(e ledger.Entry) (int64, error) {
+func (s *Store) AppendCall(e calls.Entry) (int64, error) {
 	usageJSON, err := marshalMap(e.Usage)
 	if err != nil {
 		return 0, fmt.Errorf("store: encode usage: %w", err)
@@ -34,7 +34,7 @@ func (s *Store) AppendLedger(e ledger.Entry) (int64, error) {
 	}
 	modality := e.Modality
 	if modality == "" {
-		modality = ledger.ModalityUnknown
+		modality = calls.ModalityUnknown
 	}
 	attempt := e.Attempt
 	if attempt == 0 {
@@ -42,24 +42,24 @@ func (s *Store) AppendLedger(e ledger.Entry) (int64, error) {
 	}
 
 	res, err := s.db.Exec(
-		`INSERT INTO ledger
+		`INSERT INTO calls
 		 (ts, token_id, model, modality, vendor, credential_id, attempt, status, err, usage, cost, latency_ms, stream, tags)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ts.UnixMilli(), e.TokenID, e.Model, string(modality), e.Vendor, e.CredentialID,
 		attempt, e.Status, e.Err, usageJSON, e.Cost, e.LatencyMS, boolToInt(e.Stream), tagsJSON,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("store: append ledger: %w", err)
+		return 0, fmt.Errorf("store: append call: %w", err)
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
-		return 0, fmt.Errorf("store: append ledger id: %w", err)
+		return 0, fmt.Errorf("store: append call id: %w", err)
 	}
 	return id, nil
 }
 
-// LedgerFilter selects and pages ledger rows. Zero-value fields are ignored.
-type LedgerFilter struct {
+// CallFilter selects and pages call rows. Zero-value fields are ignored.
+type CallFilter struct {
 	Since   *time.Time
 	Until   *time.Time
 	TokenID string
@@ -71,7 +71,7 @@ type LedgerFilter struct {
 }
 
 // where builds the shared WHERE clause and its positional arguments.
-func (f LedgerFilter) where() (string, []any) {
+func (f CallFilter) where() (string, []any) {
 	var (
 		conds []string
 		args  []any
@@ -106,17 +106,17 @@ func (f LedgerFilter) where() (string, []any) {
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
-const ledgerSelect = `SELECT id, ts, token_id, model, modality, vendor, credential_id, attempt, status, err, usage, cost, latency_ms, stream, tags FROM ledger`
+const callsSelect = `SELECT id, ts, token_id, model, modality, vendor, credential_id, attempt, status, err, usage, cost, latency_ms, stream, tags FROM calls`
 
-// QueryLedger returns matching entries ordered by ts DESC. Limit defaults to
+// QueryCalls returns matching entries ordered by ts DESC. Limit defaults to
 // 100 and is capped at 1000.
-func (s *Store) QueryLedger(f LedgerFilter) ([]ledger.Entry, error) {
+func (s *Store) QueryCalls(f CallFilter) ([]calls.Entry, error) {
 	limit := f.Limit
 	if limit <= 0 {
-		limit = defaultLedgerLimit
+		limit = defaultCallsLimit
 	}
-	if limit > maxLedgerLimit {
-		limit = maxLedgerLimit
+	if limit > maxCallsLimit {
+		limit = maxCallsLimit
 	}
 	offset := f.Offset
 	if offset < 0 {
@@ -124,44 +124,44 @@ func (s *Store) QueryLedger(f LedgerFilter) ([]ledger.Entry, error) {
 	}
 
 	clause, args := f.where()
-	query := ledgerSelect + clause + " ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?"
+	query := callsSelect + clause + " ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("store: query ledger: %w", err)
+		return nil, fmt.Errorf("store: query calls: %w", err)
 	}
 	defer rows.Close()
 
-	var out []ledger.Entry
+	var out []calls.Entry
 	for rows.Next() {
 		e, err := scanEntry(rows)
 		if err != nil {
-			return nil, fmt.Errorf("store: scan ledger: %w", err)
+			return nil, fmt.Errorf("store: scan call: %w", err)
 		}
 		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: query ledger: %w", err)
+		return nil, fmt.Errorf("store: query calls: %w", err)
 	}
 	return out, nil
 }
 
-// CountLedger returns the number of rows matching the filter (Limit/Offset are
+// CountCalls returns the number of rows matching the filter (Limit/Offset are
 // ignored).
-func (s *Store) CountLedger(f LedgerFilter) (int, error) {
+func (s *Store) CountCalls(f CallFilter) (int, error) {
 	clause, args := f.where()
 	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM ledger`+clause, args...).Scan(&n); err != nil {
-		return 0, fmt.Errorf("store: count ledger: %w", err)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM calls`+clause, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count calls: %w", err)
 	}
 	return n, nil
 }
 
-// SpendByToken sums cost for all ledger rows of a token, optionally since a
+// SpendByToken sums cost for all call rows of a token, optionally since a
 // time.
 func (s *Store) SpendByToken(tokenID string, since *time.Time) (float64, error) {
-	query := `SELECT COALESCE(SUM(cost), 0) FROM ledger WHERE token_id = ?`
+	query := `SELECT COALESCE(SUM(cost), 0) FROM calls WHERE token_id = ?`
 	args := []any{tokenID}
 	if since != nil {
 		query += " AND ts >= ?"
@@ -189,7 +189,7 @@ func (s *Store) TotalSpend(since, until *time.Time) (float64, error) {
 		conds = append(conds, "ts < ?")
 		args = append(args, until.UnixMilli())
 	}
-	query := `SELECT COALESCE(SUM(cost), 0) FROM ledger`
+	query := `SELECT COALESCE(SUM(cost), 0) FROM calls`
 	if len(conds) > 0 {
 		query += " WHERE " + strings.Join(conds, " AND ")
 	}
@@ -215,7 +215,7 @@ func (s *Store) SpendByModality(since, until *time.Time) (map[string]float64, er
 		conds = append(conds, "ts < ?")
 		args = append(args, until.UnixMilli())
 	}
-	query := `SELECT modality, COALESCE(SUM(cost), 0) FROM ledger`
+	query := `SELECT modality, COALESCE(SUM(cost), 0) FROM calls`
 	if len(conds) > 0 {
 		query += " WHERE " + strings.Join(conds, " AND ")
 	}
@@ -244,10 +244,10 @@ func (s *Store) SpendByModality(since, until *time.Time) (map[string]float64, er
 	return out, nil
 }
 
-// scanEntry reads a single ledger.Entry from a *sql.Rows.
-func scanEntry(rows *sql.Rows) (ledger.Entry, error) {
+// scanEntry reads a single calls.Entry from a *sql.Rows.
+func scanEntry(rows *sql.Rows) (calls.Entry, error) {
 	var (
-		e         ledger.Entry
+		e         calls.Entry
 		tsMillis  int64
 		modality  string
 		usageJSON string
@@ -258,17 +258,17 @@ func scanEntry(rows *sql.Rows) (ledger.Entry, error) {
 		&e.ID, &tsMillis, &e.TokenID, &e.Model, &modality, &e.Vendor, &e.CredentialID,
 		&e.Attempt, &e.Status, &e.Err, &usageJSON, &e.Cost, &e.LatencyMS, &stream, &tagsJSON,
 	); err != nil {
-		return ledger.Entry{}, err
+		return calls.Entry{}, err
 	}
 	e.TS = time.UnixMilli(tsMillis)
-	e.Modality = ledger.Modality(modality)
+	e.Modality = calls.Modality(modality)
 	e.Stream = stream != 0
 
 	if err := json.Unmarshal([]byte(usageJSON), &e.Usage); err != nil {
-		return ledger.Entry{}, fmt.Errorf("store: decode usage: %w", err)
+		return calls.Entry{}, fmt.Errorf("store: decode usage: %w", err)
 	}
 	if err := json.Unmarshal([]byte(tagsJSON), &e.Tags); err != nil {
-		return ledger.Entry{}, fmt.Errorf("store: decode tags: %w", err)
+		return calls.Entry{}, fmt.Errorf("store: decode tags: %w", err)
 	}
 	return e, nil
 }

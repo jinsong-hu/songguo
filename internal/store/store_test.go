@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/songguo/songguo/internal/ledger"
+	"github.com/songguo/songguo/internal/calls"
 )
 
 func openTestStore(t *testing.T) *Store {
@@ -198,44 +198,44 @@ func TestListTokens(t *testing.T) {
 	}
 }
 
-func TestLedgerAppendQueryAndAggregations(t *testing.T) {
+func TestCallsAppendQueryAndAggregations(t *testing.T) {
 	s := openTestStore(t)
 
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	st200 := 200
-	entries := []ledger.Entry{
+	entries := []calls.Entry{
 		{
-			TS: base, TokenID: "tokA", Model: "gpt-4o", Modality: ledger.ModalityChat,
+			TS: base, TokenID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat,
 			Vendor: "openai", CredentialID: "c1", Attempt: 1, Status: 200,
 			Usage: map[string]any{"prompt_tokens": float64(10), "completion_tokens": float64(5)},
 			Cost:  0.10, LatencyMS: 120, Stream: true,
 			Tags: map[string]string{"team": "eng"},
 		},
 		{
-			TS: base.Add(1 * time.Minute), TokenID: "tokA", Model: "gpt-4o", Modality: ledger.ModalityChat,
+			TS: base.Add(1 * time.Minute), TokenID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat,
 			Vendor: "openai", CredentialID: "c1", Attempt: 1, Status: 500, Err: "upstream error",
 			Cost: 0.05, LatencyMS: 300,
 		},
 		{
 			TS: base.Add(2 * time.Minute), TokenID: "tokB", Model: "text-embedding-3-small",
-			Modality: ledger.ModalityEmbedding, Vendor: "openai", CredentialID: "c2", Attempt: 1, Status: 200,
+			Modality: calls.ModalityEmbedding, Vendor: "openai", CredentialID: "c2", Attempt: 1, Status: 200,
 			Usage: map[string]any{"total_tokens": float64(42)}, Cost: 0.02, LatencyMS: 40,
 		},
 		{
 			TS: base.Add(3 * time.Minute), TokenID: "tokB", Model: "dall-e-3",
-			Modality: ledger.ModalityImage, Vendor: "openai", CredentialID: "c2", Attempt: 2, Status: 200,
+			Modality: calls.ModalityImage, Vendor: "openai", CredentialID: "c2", Attempt: 2, Status: 200,
 			Cost: 0.40, LatencyMS: 900,
 		},
 	}
 
 	var ids []int64
 	for i, e := range entries {
-		id, err := s.AppendLedger(e)
+		id, err := s.AppendCall(e)
 		if err != nil {
-			t.Fatalf("AppendLedger[%d]: %v", i, err)
+			t.Fatalf("AppendCall[%d]: %v", i, err)
 		}
 		if id <= 0 {
-			t.Fatalf("AppendLedger[%d] id = %d", i, id)
+			t.Fatalf("AppendCall[%d] id = %d", i, id)
 		}
 		ids = append(ids, id)
 	}
@@ -244,19 +244,19 @@ func TestLedgerAppendQueryAndAggregations(t *testing.T) {
 	}
 
 	// Ordering: newest first.
-	all, err := s.QueryLedger(LedgerFilter{})
+	all, err := s.QueryCalls(CallFilter{})
 	if err != nil {
-		t.Fatalf("QueryLedger: %v", err)
+		t.Fatalf("QueryCalls: %v", err)
 	}
 	if len(all) != 4 {
-		t.Fatalf("QueryLedger all len = %d, want 4", len(all))
+		t.Fatalf("QueryCalls all len = %d, want 4", len(all))
 	}
 	if !all[0].TS.After(all[1].TS) {
 		t.Errorf("results not ordered ts DESC: %v then %v", all[0].TS, all[1].TS)
 	}
 
 	// Round-trip Usage and Tags on the most recent chat entry.
-	var chat *ledger.Entry
+	var chat *calls.Entry
 	for i := range all {
 		if all[i].Model == "gpt-4o" && all[i].Status == 200 {
 			chat = &all[i]
@@ -277,27 +277,27 @@ func TestLedgerAppendQueryAndAggregations(t *testing.T) {
 	}
 
 	// Filter by token.
-	tokA, err := s.QueryLedger(LedgerFilter{TokenID: "tokA"})
+	tokA, err := s.QueryCalls(CallFilter{TokenID: "tokA"})
 	if err != nil {
-		t.Fatalf("QueryLedger(tokA): %v", err)
+		t.Fatalf("QueryCalls(tokA): %v", err)
 	}
 	if len(tokA) != 2 {
 		t.Errorf("tokA rows = %d, want 2", len(tokA))
 	}
 
 	// Filter by model + status.
-	chats, err := s.QueryLedger(LedgerFilter{Model: "gpt-4o", Status: &st200})
+	chats, err := s.QueryCalls(CallFilter{Model: "gpt-4o", Status: &st200})
 	if err != nil {
-		t.Fatalf("QueryLedger(model+status): %v", err)
+		t.Fatalf("QueryCalls(model+status): %v", err)
 	}
 	if len(chats) != 1 {
 		t.Errorf("gpt-4o status=200 rows = %d, want 1", len(chats))
 	}
 
 	// Filter by vendor.
-	vrows, err := s.QueryLedger(LedgerFilter{Vendor: "openai"})
+	vrows, err := s.QueryCalls(CallFilter{Vendor: "openai"})
 	if err != nil {
-		t.Fatalf("QueryLedger(vendor): %v", err)
+		t.Fatalf("QueryCalls(vendor): %v", err)
 	}
 	if len(vrows) != 4 {
 		t.Errorf("vendor rows = %d, want 4", len(vrows))
@@ -306,22 +306,22 @@ func TestLedgerAppendQueryAndAggregations(t *testing.T) {
 	// Time window [since, until).
 	since := base.Add(1 * time.Minute)
 	until := base.Add(3 * time.Minute)
-	win, err := s.QueryLedger(LedgerFilter{Since: &since, Until: &until})
+	win, err := s.QueryCalls(CallFilter{Since: &since, Until: &until})
 	if err != nil {
-		t.Fatalf("QueryLedger(window): %v", err)
+		t.Fatalf("QueryCalls(window): %v", err)
 	}
 	if len(win) != 2 {
 		t.Errorf("window rows = %d, want 2", len(win))
 	}
 
 	// Limit + Offset.
-	page1, err := s.QueryLedger(LedgerFilter{Limit: 2, Offset: 0})
+	page1, err := s.QueryCalls(CallFilter{Limit: 2, Offset: 0})
 	if err != nil {
-		t.Fatalf("QueryLedger(page1): %v", err)
+		t.Fatalf("QueryCalls(page1): %v", err)
 	}
-	page2, err := s.QueryLedger(LedgerFilter{Limit: 2, Offset: 2})
+	page2, err := s.QueryCalls(CallFilter{Limit: 2, Offset: 2})
 	if err != nil {
-		t.Fatalf("QueryLedger(page2): %v", err)
+		t.Fatalf("QueryCalls(page2): %v", err)
 	}
 	if len(page1) != 2 || len(page2) != 2 {
 		t.Fatalf("paging lens = %d,%d want 2,2", len(page1), len(page2))
@@ -330,20 +330,20 @@ func TestLedgerAppendQueryAndAggregations(t *testing.T) {
 		t.Error("pages overlap")
 	}
 
-	// CountLedger respects filters and ignores paging.
-	total, err := s.CountLedger(LedgerFilter{})
+	// CountCalls respects filters and ignores paging.
+	total, err := s.CountCalls(CallFilter{})
 	if err != nil {
-		t.Fatalf("CountLedger: %v", err)
+		t.Fatalf("CountCalls: %v", err)
 	}
 	if total != 4 {
-		t.Errorf("CountLedger all = %d, want 4", total)
+		t.Errorf("CountCalls all = %d, want 4", total)
 	}
-	countA, err := s.CountLedger(LedgerFilter{TokenID: "tokA", Limit: 1})
+	countA, err := s.CountCalls(CallFilter{TokenID: "tokA", Limit: 1})
 	if err != nil {
-		t.Fatalf("CountLedger(tokA): %v", err)
+		t.Fatalf("CountCalls(tokA): %v", err)
 	}
 	if countA != 2 {
-		t.Errorf("CountLedger(tokA) = %d, want 2", countA)
+		t.Errorf("CountCalls(tokA) = %d, want 2", countA)
 	}
 
 	// SpendByToken sums all rows of a token (incl. error rows).
@@ -385,33 +385,33 @@ func TestLedgerAppendQueryAndAggregations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SpendByModality: %v", err)
 	}
-	if !approx(byMod[string(ledger.ModalityChat)], 0.15) {
-		t.Errorf("modality chat = %v, want 0.15", byMod[string(ledger.ModalityChat)])
+	if !approx(byMod[string(calls.ModalityChat)], 0.15) {
+		t.Errorf("modality chat = %v, want 0.15", byMod[string(calls.ModalityChat)])
 	}
-	if !approx(byMod[string(ledger.ModalityEmbedding)], 0.02) {
-		t.Errorf("modality embedding = %v, want 0.02", byMod[string(ledger.ModalityEmbedding)])
+	if !approx(byMod[string(calls.ModalityEmbedding)], 0.02) {
+		t.Errorf("modality embedding = %v, want 0.02", byMod[string(calls.ModalityEmbedding)])
 	}
-	if !approx(byMod[string(ledger.ModalityImage)], 0.40) {
-		t.Errorf("modality image = %v, want 0.40", byMod[string(ledger.ModalityImage)])
+	if !approx(byMod[string(calls.ModalityImage)], 0.40) {
+		t.Errorf("modality image = %v, want 0.40", byMod[string(calls.ModalityImage)])
 	}
 }
 
-func TestAppendLedgerDefaults(t *testing.T) {
+func TestAppendCallDefaults(t *testing.T) {
 	s := openTestStore(t)
 	before := time.Now()
-	id, err := s.AppendLedger(ledger.Entry{TokenID: "x"}) // zero TS, modality, attempt
+	id, err := s.AppendCall(calls.Entry{TokenID: "x"}) // zero TS, modality, attempt
 	if err != nil {
-		t.Fatalf("AppendLedger: %v", err)
+		t.Fatalf("AppendCall: %v", err)
 	}
-	got, err := s.QueryLedger(LedgerFilter{TokenID: "x"})
+	got, err := s.QueryCalls(CallFilter{TokenID: "x"})
 	if err != nil || len(got) != 1 {
-		t.Fatalf("QueryLedger: %v len=%d", err, len(got))
+		t.Fatalf("QueryCalls: %v len=%d", err, len(got))
 	}
 	e := got[0]
 	if e.ID != id {
 		t.Errorf("id = %d, want %d", e.ID, id)
 	}
-	if e.Modality != ledger.ModalityUnknown {
+	if e.Modality != calls.ModalityUnknown {
 		t.Errorf("default Modality = %q, want unknown", e.Modality)
 	}
 	if e.Attempt != 1 {

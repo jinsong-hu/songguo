@@ -10,12 +10,12 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/songguo/songguo/internal/ledger"
+	"github.com/songguo/songguo/internal/calls"
 )
 
 // Result is the outcome of classifying a request.
 type Result struct {
-	Modality ledger.Modality
+	Modality calls.Modality
 	Model    string
 }
 
@@ -34,7 +34,7 @@ func Classify(method, path string, body []byte) Result {
 
 // modalityFromPath maps an upstream path to a modality using case-insensitive
 // suffix matching. Trailing slashes and query strings are ignored.
-func modalityFromPath(path string) ledger.Modality {
+func modalityFromPath(path string) calls.Modality {
 	p := strings.ToLower(path)
 	if i := strings.IndexByte(p, '?'); i >= 0 {
 		p = p[:i]
@@ -43,21 +43,21 @@ func modalityFromPath(path string) ledger.Modality {
 
 	switch {
 	case strings.HasSuffix(p, "/chat/completions"):
-		return ledger.ModalityChat
+		return calls.ModalityChat
 	case strings.HasSuffix(p, "/completions"):
-		return ledger.ModalityChat
+		return calls.ModalityChat
 	case strings.HasSuffix(p, "/embeddings"):
-		return ledger.ModalityEmbedding
+		return calls.ModalityEmbedding
 	case strings.HasSuffix(p, "/audio/speech"):
-		return ledger.ModalityTTS
+		return calls.ModalityTTS
 	case strings.HasSuffix(p, "/audio/transcriptions"),
 		strings.HasSuffix(p, "/audio/translations"):
-		return ledger.ModalitySTT
+		return calls.ModalitySTT
 	case strings.HasSuffix(p, "/images/generations"),
 		strings.HasSuffix(p, "/images/edits"):
-		return ledger.ModalityImage
+		return calls.ModalityImage
 	default:
-		return ledger.ModalityUnknown
+		return calls.ModalityUnknown
 	}
 }
 

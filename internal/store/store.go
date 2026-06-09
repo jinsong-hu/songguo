@@ -19,7 +19,7 @@ import (
 // where an active row was required).
 var ErrNotFound = errors.New("store: not found")
 
-// Store is a handle to the SQLite-backed ledger and token tables.
+// Store is a handle to the SQLite-backed calls and token tables.
 type Store struct {
 	db *sql.DB
 }
@@ -79,7 +79,7 @@ func (s *Store) migrate() error {
 			created_at INTEGER NOT NULL,
 			revoked_at INTEGER
 		)`,
-		`CREATE TABLE IF NOT EXISTS ledger (
+		`CREATE TABLE IF NOT EXISTS calls (
 			id            INTEGER PRIMARY KEY AUTOINCREMENT,
 			ts            INTEGER NOT NULL,
 			token_id      TEXT NOT NULL DEFAULT '',
@@ -96,11 +96,11 @@ func (s *Store) migrate() error {
 			stream        INTEGER NOT NULL DEFAULT 0,
 			tags          TEXT NOT NULL DEFAULT '{}'
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_ledger_ts ON ledger(ts)`,
-		`CREATE INDEX IF NOT EXISTS idx_ledger_token_id ON ledger(token_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_ledger_model ON ledger(model)`,
-		`CREATE INDEX IF NOT EXISTS idx_ledger_vendor ON ledger(vendor)`,
-		`CREATE INDEX IF NOT EXISTS idx_ledger_status ON ledger(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_calls_ts ON calls(ts)`,
+		`CREATE INDEX IF NOT EXISTS idx_calls_token_id ON calls(token_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_calls_model ON calls(model)`,
+		`CREATE INDEX IF NOT EXISTS idx_calls_vendor ON calls(vendor)`,
+		`CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {

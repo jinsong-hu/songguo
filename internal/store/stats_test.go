@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/songguo/songguo/internal/ledger"
+	"github.com/songguo/songguo/internal/calls"
 )
 
 func TestOverviewStats(t *testing.T) {
@@ -29,11 +29,11 @@ func TestOverviewStats(t *testing.T) {
 		{100, 200},
 	}
 	for i, r := range rows {
-		if _, err := s.AppendLedger(ledger.Entry{
+		if _, err := s.AppendCall(calls.Entry{
 			TS: base.Add(time.Duration(i) * time.Minute), TokenID: "t", Model: "m",
 			Vendor: "v", Status: r.status, LatencyMS: r.latency,
 		}); err != nil {
-			t.Fatalf("AppendLedger[%d]: %v", i, err)
+			t.Fatalf("AppendCall[%d]: %v", i, err)
 		}
 	}
 
@@ -77,11 +77,11 @@ func TestOverviewStatsWindow(t *testing.T) {
 	s := openTestStore(t)
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	for i := 0; i < 5; i++ {
-		if _, err := s.AppendLedger(ledger.Entry{
+		if _, err := s.AppendCall(calls.Entry{
 			TS: base.Add(time.Duration(i) * time.Minute), Vendor: "v",
 			Status: 200, LatencyMS: int64((i + 1) * 10),
 		}); err != nil {
-			t.Fatalf("AppendLedger: %v", err)
+			t.Fatalf("AppendCall: %v", err)
 		}
 	}
 	since := base.Add(1 * time.Minute)
@@ -101,7 +101,7 @@ func TestVendorStats(t *testing.T) {
 
 	// openai: 3 rows, 1 error (500); latencies 100,200,300 -> avg 200; last status 500.
 	// anthropic: 2 rows, 0 errors; latencies 50,150 -> avg 100; last status 200.
-	entries := []ledger.Entry{
+	entries := []calls.Entry{
 		{TS: base.Add(0), Vendor: "openai", Status: 200, LatencyMS: 100},
 		{TS: base.Add(1 * time.Minute), Vendor: "openai", Status: 200, LatencyMS: 200},
 		{TS: base.Add(2 * time.Minute), Vendor: "openai", Status: 500, LatencyMS: 300},
@@ -109,8 +109,8 @@ func TestVendorStats(t *testing.T) {
 		{TS: base.Add(4 * time.Minute), Vendor: "anthropic", Status: 200, LatencyMS: 150},
 	}
 	for i, e := range entries {
-		if _, err := s.AppendLedger(e); err != nil {
-			t.Fatalf("AppendLedger[%d]: %v", i, err)
+		if _, err := s.AppendCall(e); err != nil {
+			t.Fatalf("AppendCall[%d]: %v", i, err)
 		}
 	}
 

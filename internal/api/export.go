@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/songguo/songguo/internal/ledger"
+	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/store"
 )
 
@@ -17,9 +17,9 @@ var csvHeader = []string{
 	"attempt", "status", "cost", "latency_ms", "stream", "err",
 }
 
-// handleLedgerExport streams a downloadable export of the filtered ledger as
+// handleCallsExport streams a downloadable export of the filtered calls as
 // either CSV (default) or JSON. Rows are capped at exportMaxRows.
-func (a *api) handleLedgerExport(w http.ResponseWriter, r *http.Request) {
+func (a *api) handleCallsExport(w http.ResponseWriter, r *http.Request) {
 	format := r.URL.Query().Get("format")
 	if format == "" {
 		format = "csv"
@@ -29,9 +29,9 @@ func (a *api) handleLedgerExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reuse the same filters as /api/ledger but ignore pagination; pull up to
+	// Reuse the same filters as /api/calls but ignore pagination; pull up to
 	// exportMaxRows in batches bounded by the store's max page size.
-	f := ledgerFilterFromQuery(r, exportMaxRows, exportMaxRows)
+	f := callFilterFromQuery(r, exportMaxRows, exportMaxRows)
 	f.Offset = parseIntDefault(r, "offset", 0)
 	if f.Offset < 0 {
 		f.Offset = 0
@@ -39,14 +39,14 @@ func (a *api) handleLedgerExport(w http.ResponseWriter, r *http.Request) {
 
 	entries, err := a.collectForExport(f)
 	if err != nil {
-		a.serverError(w, "export ledger", err)
+		a.serverError(w, "export calls", err)
 		return
 	}
 
 	switch format {
 	case "json":
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Disposition", `attachment; filename="ledger.json"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="calls.json"`)
 		w.WriteHeader(http.StatusOK)
 		views := make([]entryView, 0, len(entries))
 		for _, e := range entries {
@@ -55,7 +55,7 @@ func (a *api) handleLedgerExport(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(views)
 	default: // csv
 		w.Header().Set("Content-Type", "text/csv")
-		w.Header().Set("Content-Disposition", `attachment; filename="ledger.csv"`)
+		w.Header().Set("Content-Disposition", `attachment; filename="calls.csv"`)
 		w.WriteHeader(http.StatusOK)
 		cw := csv.NewWriter(w)
 		_ = cw.Write(csvHeader)
@@ -79,18 +79,18 @@ func (a *api) handleLedgerExport(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// collectForExport pages through QueryLedger (which caps a single call at its
-// own maxLedgerLimit) until exportMaxRows rows are gathered or the data runs
+// collectForExport pages through QueryCalls (which caps a single call at its
+// own maxCallsLimit) until exportMaxRows rows are gathered or the data runs
 // out.
-func (a *api) collectForExport(f store.LedgerFilter) ([]ledger.Entry, error) {
-	const pageSize = 1000 // store caps a single QueryLedger at 1000.
-	var out []ledger.Entry
+func (a *api) collectForExport(f store.CallFilter) ([]calls.Entry, error) {
+	const pageSize = 1000 // store caps a single QueryCalls at 1000.
+	var out []calls.Entry
 	offset := f.Offset
 	for len(out) < exportMaxRows {
 		page := f
 		page.Limit = pageSize
 		page.Offset = offset
-		rows, err := a.store.QueryLedger(page)
+		rows, err := a.store.QueryCalls(page)
 		if err != nil {
 			return nil, err
 		}

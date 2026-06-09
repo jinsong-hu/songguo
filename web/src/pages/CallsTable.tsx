@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Download, Search } from 'lucide-react';
 import { api } from '../api/client';
-import type { LedgerFilters, StatusGroup } from '../api/types';
+import type { CallsFilters, StatusGroup } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Skeleton } from '../components/Skeleton';
@@ -14,7 +14,7 @@ import styles from './Overview.module.css';
 const PAGE_SIZE = 25;
 const REFRESH_MS = 10_000;
 
-interface LedgerTableProps {
+interface CallsTableProps {
   since: number;
   until: number;
 }
@@ -25,7 +25,7 @@ const STATUS_GROUPS: { value: StatusGroup; label: string }[] = [
   { value: 'error', label: 'Errors' },
 ];
 
-export function LedgerTable({ since, until }: LedgerTableProps) {
+export function CallsTable({ since, until }: CallsTableProps) {
   const [model, setModel] = useState('');
   const [vendor, setVendor] = useState('');
   const [status, setStatus] = useState<StatusGroup>('all');
@@ -33,7 +33,7 @@ export function LedgerTable({ since, until }: LedgerTableProps) {
   const [exporting, setExporting] = useState(false);
   const toast = useToast();
 
-  const filters: LedgerFilters = useMemo(
+  const filters: CallsFilters = useMemo(
     () => ({
       since,
       until,
@@ -47,7 +47,7 @@ export function LedgerTable({ since, until }: LedgerTableProps) {
   );
 
   const { data, error, initialLoading, refetch } = useFetch(
-    () => api.ledger(filters),
+    () => api.calls(filters),
     [since, until, model, vendor, status, offset],
     { intervalMs: REFRESH_MS },
   );
@@ -60,8 +60,8 @@ export function LedgerTable({ since, until }: LedgerTableProps) {
   const doExport = async (format: 'csv' | 'json') => {
     setExporting(true);
     try {
-      await api.exportLedger(format, filters);
-      toast.success(`Exported ledger as ${format.toUpperCase()}.`);
+      await api.exportCalls(format, filters);
+      toast.success(`Exported calls as ${format.toUpperCase()}.`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Export failed.');
     } finally {
@@ -75,8 +75,8 @@ export function LedgerTable({ since, until }: LedgerTableProps) {
   const origin = window.location.origin;
 
   return (
-    <div className={`card ${styles.ledgerPanel}`}>
-      <div className={styles.ledgerToolbar}>
+    <div className={`card ${styles.callsPanel}`}>
+      <div className={styles.callsToolbar}>
         <div className={styles.search} style={{ position: 'relative' }}>
           <Search
             size={14}

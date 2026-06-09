@@ -1,7 +1,7 @@
 // Package api implements the admin/dashboard HTTP API.
 //
 // It exposes a read-mostly JSON API under /api consumed by the React
-// dashboard: usage overview, ledger browsing/export, token CRUD, vendor
+// dashboard: usage overview, call browsing/export, token CRUD, vendor
 // inspection/health, settings, and pricing. Every route is gated by a single
 // admin bearer key compared in constant time. Vendor API keys are never
 // serialized — only masked previews are returned.
@@ -83,8 +83,8 @@ func NewHandler(d Deps) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/overview", a.handleOverview)
 	mux.HandleFunc("GET /api/usage/series", a.handleUsageSeries)
-	mux.HandleFunc("GET /api/ledger", a.handleLedger)
-	mux.HandleFunc("GET /api/ledger/export", a.handleLedgerExport)
+	mux.HandleFunc("GET /api/calls", a.handleCalls)
+	mux.HandleFunc("GET /api/calls/export", a.handleCallsExport)
 	mux.HandleFunc("GET /api/tokens", a.handleListTokens)
 	mux.HandleFunc("POST /api/tokens", a.handleCreateToken)
 	mux.HandleFunc("PATCH /api/tokens/{id}", a.handlePatchToken)

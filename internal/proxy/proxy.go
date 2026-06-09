@@ -2,7 +2,7 @@
 //
 // The handler is a gate plus a meter: it authenticates the consumer token,
 // enforces scope, budget and rate limits, routes the request to an upstream
-// vendor (with failover), and records every attempt in the ledger. It NEVER
+// vendor (with failover), and records every attempt as a call. It NEVER
 // rewrites the request or response body — the only mutation is the
 // Authorization header, swapped from the consumer's Songguo token to the chosen
 // upstream credential. Metering is read-only sniffing and must never block or
@@ -33,8 +33,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/config"
-	"github.com/songguo/songguo/internal/ledger"
 	"github.com/songguo/songguo/internal/meter"
 	"github.com/songguo/songguo/internal/pricing"
 	"github.com/songguo/songguo/internal/router"
@@ -249,7 +249,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // for the upstream URL.
 type route struct {
 	model       string
-	modality    ledger.Modality
+	modality    calls.Modality
 	targets     []router.Target
 	upstreamURL func(router.Target) string
 }
@@ -402,7 +402,7 @@ func originOf(base string) (string, error) {
 // usage as it passes. Streaming responses are streamed chunk-by-chunk and
 // flushed; non-streaming responses are buffered (bounded) and written whole.
 func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Response,
-	tokenID, model string, modality ledger.Modality, t router.Target, attempt int,
+	tokenID, model string, modality calls.Modality, t router.Target, attempt int,
 	latency int64, tags map[string]string) {
 	defer resp.Body.Close()
 
@@ -425,7 +425,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		}
 	}
 
-	h.append(ledger.Entry{
+	h.append(calls.Entry{
 		TS:           h.now(),
 		TokenID:      tokenID,
 		Model:        model,
@@ -487,14 +487,14 @@ func (h *handler) copyBody(w http.ResponseWriter, src io.Reader) map[string]any 
 	return meter.ExtractUsage(body)
 }
 
-// recordFailure appends a ledger row for a failed (failover-eligible) attempt.
-func (h *handler) recordFailure(tokenID, model string, modality ledger.Modality,
+// recordFailure appends a call row for a failed (failover-eligible) attempt.
+func (h *handler) recordFailure(tokenID, model string, modality calls.Modality,
 	t router.Target, attempt, status int, err error, latency int64, tags map[string]string) {
 	detail := ""
 	if err != nil {
 		detail = err.Error()
 	}
-	h.append(ledger.Entry{
+	h.append(calls.Entry{
 		TS:           h.now(),
 		TokenID:      tokenID,
 		Model:        model,
@@ -510,10 +510,10 @@ func (h *handler) recordFailure(tokenID, model string, modality ledger.Modality,
 	})
 }
 
-// append writes a ledger entry, logging (never surfacing) any failure.
-func (h *handler) append(e ledger.Entry) {
-	if _, err := h.store.AppendLedger(e); err != nil {
-		h.logger.Error("ledger append failed", "err", err, "vendor", e.Vendor, "model", e.Model)
+// append writes a call entry, logging (never surfacing) any failure.
+func (h *handler) append(e calls.Entry) {
+	if _, err := h.store.AppendCall(e); err != nil {
+		h.logger.Error("call append failed", "err", err, "vendor", e.Vendor, "model", e.Model)
 	}
 }
 
@@ -595,7 +595,7 @@ func contains(s []string, v string) bool {
 	return false
 }
 
-// extractTags builds the ledger tags from, in order of precedence, the
+// extractTags builds the call tags from, in order of precedence, the
 // X-Songguo-Tags header (a JSON string map) then a top-level "metadata" object
 // of string->string in the request body. Any parse error is ignored.
 func extractTags(headerVal string, body []byte) map[string]string {

@@ -21,8 +21,8 @@ Songguo is **single-tenant, multi-token**: one owner, many scoped keys. No accou
 - **号池 routing + failover** — multiple vendors per model and multiple credentials per vendor; priority → weighted round-robin, credential rotation, automatic failover on `429`/`5xx`.
 - **Budgets & scope** per token (hard cap, allowed models, per-token RPM). Over-budget calls are rejected, not transformed.
 - **Read-only metering** — usage sniffed from the native payload (with coarse fallback); a parse failure never blocks traffic. Per-model pricing yields true cost.
-- **Append-only ledger** — one row per call attempt; every dashboard view is a query over it.
-- **Dashboard** (light + dark, pine-green) — Overview (spend, runway, by-modality, latency percentiles, live ledger with filters + CSV/JSON export), Vendors (health + connectivity test), Tokens (CRUD with budget bars), Settings.
+- **Append-only call log** — one row per call attempt; every dashboard view is a query over it.
+- **Dashboard** (light + dark, pine-green) — Overview (spend, runway, by-modality, latency percentiles, recent calls with filters + CSV/JSON export), Vendors (health + connectivity test), Tokens (CRUD with budget bars), Settings.
 - **File-based vendor config with hot-reload** — edit `config.yaml`, changes apply with no restart (inotify, with an automatic polling fallback).
 - **One binary.** Pure-Go SQLite (no cgo), the dashboard embedded via `go:embed`.
 
@@ -49,7 +49,7 @@ client = OpenAI(base_url="http://localhost:8080/v1", api_key="sg-...")  # your S
 client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": "hi"}])
 ```
 
-The call is forwarded to whichever vendor serves `gpt-4o`, metered into the ledger, and counted against the token's budget.
+The call is forwarded to whichever vendor serves `gpt-4o`, metered into the call log, and counted against the token's budget.
 
 ## Configuration
 
@@ -103,13 +103,13 @@ Songguo's transparent proxy serves two shapes from one handler, chosen by the re
 
 ## Architecture
 
-One binary, single-tenant, SQLite by default, near-zero ops. The Ledger is the spine — an append-only table of sniffed calls. The gateway holds a live in-memory view of the file config so vendor/key/model/price changes apply without a restart. The only mutation Songguo makes to a forwarded request is swapping in the upstream credential.
+One binary, single-tenant, SQLite by default, near-zero ops. The call log is the spine — an append-only table of sniffed calls. The gateway holds a live in-memory view of the file config so vendor/key/model/price changes apply without a restart. The only mutation Songguo makes to a forwarded request is swapping in the upstream credential.
 
 ```
 internal/
   config/   file-based vendor config + hot-reload (watch or poll)
-  store/    SQLite: append-only ledger + tokens + aggregations
-  ledger/   ledger domain types
+  store/    SQLite: append-only call log + tokens + aggregations
+  calls/    call-log domain types
   pricing/  usage + price table -> cost
   meter/    read-only modality/usage sniffing (JSON + SSE)
   router/   号池 candidate selection, weighted RR, health/failover
@@ -135,4 +135,4 @@ In dev you can run the Vite dev server (`cd web && npm run dev`) which proxies `
 
 ## Not in v1 (deferred)
 
-Async multimodal channels (image/video submit→poll) are now **forwardable** via `/x/<vendor>/...` passthrough — submit and poll both flow through and are logged. Still deferred to v2: **realtime WebSocket voice**, **per-image / per-second media metering** (passthrough media calls are forwarded and recorded, but token-based cost only applies when the vendor returns token usage), MCP tool proxying, tag-based business attribution, and cross-model cost×latency optimization. The ledger schema already carries the fields these will use.
+Async multimodal channels (image/video submit→poll) are now **forwardable** via `/x/<vendor>/...` passthrough — submit and poll both flow through and are logged. Still deferred to v2: **realtime WebSocket voice**, **per-image / per-second media metering** (passthrough media calls are forwarded and recorded, but token-based cost only applies when the vendor returns token usage), MCP tool proxying, tag-based business attribution, and cross-model cost×latency optimization. The calls schema already carries the fields these will use.

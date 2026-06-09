@@ -70,7 +70,7 @@ export function bucketLabel(iso: string, bucket: 'hour' | 'day'): string {
   return bucket === 'hour' ? timeFmt.format(d) : dayFmt.format(d);
 }
 
-/** Status group for a ledger entry, mapping to a pill style. */
+/** Status group for a call entry, mapping to a pill style. */
 export function statusKind(status: number): 'ok' | 'warn' | 'err' {
   if (status >= 200 && status < 300) return 'ok';
   if (status >= 400 && status < 500) return 'warn';

@@ -1,7 +1,7 @@
 import type {
+  CallsFilters,
+  CallsPage,
   CreateTokenBody,
-  LedgerFilters,
-  LedgerPage,
   Overview,
   PatchTokenBody,
   PricingRow,
@@ -111,7 +111,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-function ledgerQuery(f: LedgerFilters): string {
+function callsQuery(f: CallsFilters): string {
   return qs({
     since: f.since,
     until: f.until,
@@ -133,7 +133,7 @@ export const api = {
   series: (since: number, until: number, bucket: 'hour' | 'day') =>
     request<UsageSeries>(`/usage/series${qs({ since, until, bucket })}`),
 
-  ledger: (f: LedgerFilters) => request<LedgerPage>(`/ledger${ledgerQuery(f)}`),
+  calls: (f: CallsFilters) => request<CallsPage>(`/calls${callsQuery(f)}`),
 
   tokens: () => request<Token[]>('/tokens'),
 
@@ -159,13 +159,13 @@ export const api = {
   pricing: () => request<PricingRow[]>('/pricing'),
 
   /**
-   * Download the ledger export as a Blob using the auth header, then trigger a
+   * Download the calls export as a Blob using the auth header, then trigger a
    * browser save. A plain anchor href cannot carry the Authorization header.
    */
-  async exportLedger(format: 'csv' | 'json', f: LedgerFilters): Promise<void> {
-    const query = ledgerQuery({ ...f, limit: undefined, offset: undefined });
+  async exportCalls(format: 'csv' | 'json', f: CallsFilters): Promise<void> {
+    const query = callsQuery({ ...f, limit: undefined, offset: undefined });
     const sep = query ? '&' : '?';
-    const res = await fetch(`/api/ledger/export${query}${sep}format=${format}`, {
+    const res = await fetch(`/api/calls/export${query}${sep}format=${format}`, {
       headers: authHeaders(),
     });
     if (res.status === 401) {
@@ -177,7 +177,7 @@ export const api = {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `ledger.${format}`;
+    a.download = `calls.${format}`;
     document.body.appendChild(a);
     a.click();
     a.remove();

@@ -17,7 +17,7 @@ import { Page } from '../components/Layout';
 import { Skeleton } from '../components/Skeleton';
 import { useFetch } from '../lib/useFetch';
 import { bucketLabel, int, money, ms, percent } from '../lib/format';
-import { LedgerTable } from './LedgerTable';
+import { CallsTable } from './CallsTable';
 import styles from './Overview.module.css';
 
 interface RangeOption {
@@ -211,8 +211,8 @@ export function OverviewPage() {
         </div>
       </div>
 
-      {/* Live ledger */}
-      <LedgerTable since={since} until={until} />
+      {/* Recent calls */}
+      <CallsTable since={since} until={until} />
     </Page>
   );
 }

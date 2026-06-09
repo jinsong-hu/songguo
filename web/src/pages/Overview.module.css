@@ -185,13 +185,13 @@
   color: var(--accent);
 }
 
-/* Ledger */
-.ledgerPanel {
+/* Calls */
+.callsPanel {
   padding: 0;
   overflow: hidden;
 }
 
-.ledgerToolbar {
+.callsToolbar {
   display: flex;
   align-items: center;
   gap: 8px;

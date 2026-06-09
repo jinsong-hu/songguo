@@ -59,7 +59,7 @@ func (s *Store) OverviewStats(since, until *time.Time) (OverviewStats, error) {
 	clause, args := windowClause(since, until)
 
 	rows, err := s.db.Query(
-		`SELECT latency_ms, status FROM ledger`+clause+` ORDER BY latency_ms ASC`,
+		`SELECT latency_ms, status FROM calls`+clause+` ORDER BY latency_ms ASC`,
 		args...,
 	)
 	if err != nil {
@@ -108,7 +108,7 @@ func (s *Store) VendorStats(since, until *time.Time) (map[string]VendorStat, err
 		        COUNT(*),
 		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END),
 		        COALESCE(AVG(latency_ms), 0)
-		   FROM ledger`+clause+`
+		   FROM calls`+clause+`
 		  GROUP BY vendor`,
 		args...,
 	)
@@ -132,12 +132,12 @@ func (s *Store) VendorStats(since, until *time.Time) (map[string]VendorStat, err
 		return nil, fmt.Errorf("store: vendor stats: %w", err)
 	}
 
-	// Resolve the last status per vendor: the row with the largest id (ledger
-	// is append-only, so the max id is the most recent row) within the window.
+	// Resolve the last status per vendor: the row with the largest id (the
+	// calls table is append-only, so the max id is the most recent row) within the window.
 	lastRows, err := s.db.Query(
 		`SELECT l.vendor, l.status
-		   FROM ledger l
-		   JOIN (SELECT vendor, MAX(id) AS mid FROM ledger`+clause+` GROUP BY vendor) m
+		   FROM calls l
+		   JOIN (SELECT vendor, MAX(id) AS mid FROM calls`+clause+` GROUP BY vendor) m
 		     ON l.vendor = m.vendor AND l.id = m.mid`,
 		args...,
 	)
@@ -219,7 +219,7 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 		        COALESCE(SUM(cost), 0),
 		        COUNT(*),
 		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END)
-		   FROM ledger
+		   FROM calls
 		  WHERE ts >= ? AND ts < ?
 		  GROUP BY bucket_start`,
 		bucketMs, bucketMs, sinceMs, untilMs,

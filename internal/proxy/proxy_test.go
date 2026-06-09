@@ -137,15 +137,15 @@ func (e *testEnv) post(t *testing.T, path, token, body string) *http.Response {
 	return resp
 }
 
-func (e *testEnv) ledgerRows(t *testing.T) []ledgerRow {
+func (e *testEnv) callRows(t *testing.T) []callRow {
 	t.Helper()
-	entries, err := e.store.QueryLedger(storeFilterAll())
+	entries, err := e.store.QueryCalls(storeFilterAll())
 	if err != nil {
-		t.Fatalf("QueryLedger: %v", err)
+		t.Fatalf("QueryCalls: %v", err)
 	}
-	out := make([]ledgerRow, len(entries))
+	out := make([]callRow, len(entries))
 	for i, en := range entries {
-		out[i] = ledgerRow{
+		out[i] = callRow{
 			Vendor:  en.Vendor,
 			Status:  en.Status,
 			Attempt: en.Attempt,
@@ -159,7 +159,7 @@ func (e *testEnv) ledgerRows(t *testing.T) []ledgerRow {
 	return out
 }
 
-type ledgerRow struct {
+type callRow struct {
 	Vendor  string
 	Status  int
 	Attempt int
@@ -170,7 +170,7 @@ type ledgerRow struct {
 	Tags    map[string]string
 }
 
-func storeFilterAll() store.LedgerFilter { return store.LedgerFilter{Limit: 1000} }
+func storeFilterAll() store.CallFilter { return store.CallFilter{Limit: 1000} }
 
 // approxEqual compares two costs with a small tolerance, since costs round-trip
 // through SQLite REAL and float arithmetic is not bit-exact.
@@ -256,9 +256,9 @@ vendors:
 		t.Errorf("upstream body changed:\n got %q\nwant %q", up.lastBody, reqBody)
 	}
 
-	rows := env.ledgerRows(t)
+	rows := env.callRows(t)
 	if len(rows) != 1 {
-		t.Fatalf("ledger rows = %d, want 1", len(rows))
+		t.Fatalf("call rows = %d, want 1", len(rows))
 	}
 	r := rows[0]
 	// cost = 2.50*10/1e6 + 10.00*20/1e6 = 0.000225
@@ -301,9 +301,9 @@ vendors:
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 
-	rows := env.ledgerRows(t)
+	rows := env.callRows(t)
 	if len(rows) != 1 {
-		t.Fatalf("ledger rows = %d, want 1", len(rows))
+		t.Fatalf("call rows = %d, want 1", len(rows))
 	}
 	wantCost := 0.02 * 8 / 1e6
 	if !approxEqual(rows[0].Cost, wantCost) {
@@ -314,7 +314,7 @@ vendors:
 	}
 }
 
-// --- Test 3: invalid / missing token -> 401, no ledger row ---
+// --- Test 3: invalid / missing token -> 401, no call row ---
 
 func TestInvalidToken(t *testing.T) {
 	up := &mockUpstream{}
@@ -338,8 +338,8 @@ func TestInvalidToken(t *testing.T) {
 	}
 	resp2.Body.Close()
 
-	if rows := env.ledgerRows(t); len(rows) != 0 {
-		t.Fatalf("ledger rows = %d, want 0 (no upstream call on auth failure)", len(rows))
+	if rows := env.callRows(t); len(rows) != 0 {
+		t.Fatalf("call rows = %d, want 0 (no upstream call on auth failure)", len(rows))
 	}
 	if up.calls != 0 {
 		t.Fatalf("upstream calls = %d, want 0", up.calls)
@@ -432,7 +432,7 @@ func TestRateLimit(t *testing.T) {
 	}
 }
 
-// --- Test 7: failover A(500) -> B(200), two ledger rows ---
+// --- Test 7: failover A(500) -> B(200), two call rows ---
 
 func TestFailover(t *testing.T) {
 	upA := &mockUpstream{forceStatus: 500}
@@ -480,12 +480,12 @@ vendors:
 		t.Errorf("vendorA calls = %d, want 1", upA.calls)
 	}
 
-	rows := env.ledgerRows(t)
+	rows := env.callRows(t)
 	if len(rows) != 2 {
-		t.Fatalf("ledger rows = %d, want 2", len(rows))
+		t.Fatalf("call rows = %d, want 2", len(rows))
 	}
 	// Rows are ts DESC; find by vendor.
-	var aRow, bRow *ledgerRow
+	var aRow, bRow *callRow
 	for i := range rows {
 		switch rows[i].Vendor {
 		case "vendorA":
@@ -523,9 +523,9 @@ func TestAllFailPassthrough(t *testing.T) {
 	if string(body) != `{"error":"forced"}` {
 		t.Errorf("body = %q, want upstream body verbatim", body)
 	}
-	rows := env.ledgerRows(t)
+	rows := env.callRows(t)
 	if len(rows) != 1 {
-		t.Fatalf("ledger rows = %d, want 1", len(rows))
+		t.Fatalf("call rows = %d, want 1", len(rows))
 	}
 	if rows[0].Status != 500 {
 		t.Errorf("row status = %d, want 500", rows[0].Status)
@@ -553,7 +553,7 @@ func TestNoVendor(t *testing.T) {
 	}
 }
 
-// --- Test 10: streaming -> SSE bytes unchanged, ledger captures usage+cost ---
+// --- Test 10: streaming -> SSE bytes unchanged, call captures usage+cost ---
 
 func TestStreaming(t *testing.T) {
 	up := &mockUpstream{}
@@ -601,13 +601,13 @@ vendors:
 		}
 	}
 
-	rows := env.ledgerRows(t)
+	rows := env.callRows(t)
 	if len(rows) != 1 {
-		t.Fatalf("ledger rows = %d, want 1", len(rows))
+		t.Fatalf("call rows = %d, want 1", len(rows))
 	}
 	r := rows[0]
 	if !r.Stream {
-		t.Errorf("ledger stream flag = false, want true")
+		t.Errorf("call stream flag = false, want true")
 	}
 	if got := r.Usage["total_tokens"]; got != float64(30) {
 		t.Errorf("streamed usage total_tokens = %v, want 30", got)
@@ -764,9 +764,9 @@ vendors:
 		t.Fatalf("status = %d, want 200 (request must reach /api/v3/chat/completions)", resp.StatusCode)
 	}
 
-	rows := env.ledgerRows(t)
+	rows := env.callRows(t)
 	if len(rows) != 1 {
-		t.Fatalf("ledger rows = %d, want 1", len(rows))
+		t.Fatalf("call rows = %d, want 1", len(rows))
 	}
 	wantCost := 2.50*10/1e6 + 10.00*20/1e6
 	if !approxEqual(rows[0].Cost, wantCost) {
@@ -851,9 +851,9 @@ func TestPassthroughNativeUsage(t *testing.T) {
 		t.Errorf("upstream auth = %q, want the vendor key", gotAuth)
 	}
 
-	rows := env.ledgerRows(t)
+	rows := env.callRows(t)
 	if len(rows) != 1 {
-		t.Fatalf("ledger rows = %d, want 1", len(rows))
+		t.Fatalf("call rows = %d, want 1", len(rows))
 	}
 	// input_tokens=12, output_tokens=8 -> 0.40*12/1e6 + 1.20*8/1e6.
 	wantCost := 0.40*12/1e6 + 1.20*8/1e6
@@ -891,9 +891,9 @@ func TestPassthroughModelLessGet(t *testing.T) {
 		t.Fatalf("upstream paths = %v, want [/api/v1/tasks/abc]", gotPaths)
 	}
 
-	rows := env.ledgerRows(t)
+	rows := env.callRows(t)
 	if len(rows) != 1 || rows[0].Status != 200 {
-		t.Fatalf("ledger rows = %+v, want 1 with status 200", rows)
+		t.Fatalf("call rows = %+v, want 1 with status 200", rows)
 	}
 }
 
@@ -990,9 +990,9 @@ vendors:
 		t.Fatalf("status = %d, want 200 (retry on 2nd credential)", resp.StatusCode)
 	}
 
-	rows := env.ledgerRows(t)
+	rows := env.callRows(t)
 	if len(rows) != 2 {
-		t.Fatalf("ledger rows = %d, want 2 (one per credential attempt)", len(rows))
+		t.Fatalf("call rows = %d, want 2 (one per credential attempt)", len(rows))
 	}
 	var got500, got200 bool
 	for _, r := range rows {

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/songguo/songguo/internal/ledger"
+	"github.com/songguo/songguo/internal/calls"
 )
 
 func TestUsageSeriesDayBuckets(t *testing.T) {
@@ -18,7 +18,7 @@ func TestUsageSeriesDayBuckets(t *testing.T) {
 	day2 := day0.AddDate(0, 0, 2)
 	day3 := day0.AddDate(0, 0, 3)
 
-	entries := []ledger.Entry{
+	entries := []calls.Entry{
 		// day0: 2 rows, 1 error (500); cost 0.10 + 0.20 = 0.30.
 		{TS: day0.Add(1 * time.Hour), Vendor: "v", Status: 200, Cost: 0.10, LatencyMS: 10},
 		{TS: day0.Add(5 * time.Hour), Vendor: "v", Status: 500, Cost: 0.20, LatencyMS: 20},
@@ -29,8 +29,8 @@ func TestUsageSeriesDayBuckets(t *testing.T) {
 		{TS: day2.Add(4 * time.Hour), Vendor: "v", Status: 404, Cost: 3.0, LatencyMS: 50},
 	}
 	for i, e := range entries {
-		if _, err := s.AppendLedger(e); err != nil {
-			t.Fatalf("AppendLedger[%d]: %v", i, err)
+		if _, err := s.AppendCall(e); err != nil {
+			t.Fatalf("AppendCall[%d]: %v", i, err)
 		}
 	}
 
@@ -72,13 +72,13 @@ func TestUsageSeriesHourBuckets(t *testing.T) {
 	s := openTestStore(t)
 	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	// Rows in hour 0 and hour 2; hour 1 is a gap.
-	rows := []ledger.Entry{
+	rows := []calls.Entry{
 		{TS: base.Add(10 * time.Minute), Vendor: "v", Status: 200, Cost: 1, LatencyMS: 1},
 		{TS: base.Add(2*time.Hour + 5*time.Minute), Vendor: "v", Status: 200, Cost: 2, LatencyMS: 1},
 	}
 	for i, e := range rows {
-		if _, err := s.AppendLedger(e); err != nil {
-			t.Fatalf("AppendLedger[%d]: %v", i, err)
+		if _, err := s.AppendCall(e); err != nil {
+			t.Fatalf("AppendCall[%d]: %v", i, err)
 		}
 	}
 	pts, err := s.UsageSeries(base, base.Add(3*time.Hour), time.Hour)
