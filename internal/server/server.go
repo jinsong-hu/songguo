@@ -13,6 +13,8 @@ type Options struct {
 	Addr string
 	// ProxyHandler, if non-nil, is mounted under /v1/ as the transparent proxy.
 	ProxyHandler http.Handler
+	// AdminHandler, if non-nil, is mounted under /api/ as the admin/dashboard API.
+	AdminHandler http.Handler
 }
 
 // Server wraps an *http.Server and its route mux.
@@ -44,7 +46,11 @@ func (s *Server) registerRoutes() {
 		// Consumers point their SDK base URL at http://<songguo>/v1.
 		s.mux.Handle("/v1/", s.opts.ProxyHandler)
 	}
-	// TODO(P4): mount the admin/dashboard API under /admin.
+	if s.opts.AdminHandler != nil {
+		// The dashboard and CLI call the admin API under http://<songguo>/api.
+		s.mux.Handle("/api/", s.opts.AdminHandler)
+	}
+	// TODO(P5): serve the embedded React dashboard at "/".
 }
 
 func handleHealthz(w http.ResponseWriter, _ *http.Request) {

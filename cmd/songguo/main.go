@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/songguo/songguo/internal/api"
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/proxy"
 	"github.com/songguo/songguo/internal/router"
@@ -58,7 +59,21 @@ func main() {
 		Logger:   logger,
 	})
 
-	srv := server.New(server.Options{Addr: listen, ProxyHandler: proxyHandler})
+	adminHandler := api.NewHandler(api.Deps{
+		Store:      st,
+		Snapshot:   manager.Current,
+		AdminKey:   adminKey,
+		Logger:     logger,
+		Version:    "dev",
+		ConfigPath: configPath,
+		DBPath:     dbPath,
+	})
+
+	srv := server.New(server.Options{
+		Addr:         listen,
+		ProxyHandler: proxyHandler,
+		AdminHandler: adminHandler,
+	})
 
 	errCh := make(chan error, 1)
 	go func() {
