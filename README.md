@@ -22,7 +22,9 @@ Songguo is **single-tenant, multi-token**: one owner, many scoped keys. No accou
 - **Budgets & scope** per token (hard cap, allowed models, per-token RPM). Over-budget calls are rejected, not transformed.
 - **Read-only metering** — usage sniffed from the native payload (with coarse fallback); a parse failure never blocks traffic. Per-model pricing yields true cost.
 - **Append-only call log** — one row per call attempt; every dashboard view is a query over it.
-- **Dashboard** (light + dark, pine-green) — Overview (spend, runway, by-modality, latency percentiles, recent calls with filters + CSV/JSON export), Vendors (health + connectivity test), Tokens (CRUD with budget bars), Settings.
+- **WebSocket passthrough** — realtime APIs (OpenAI Realtime, streaming ASR/TTS) proxied over `/x/<vendor>/`: the handshake is replayed with the credential swapped, frames are piped untouched, and the session is metered by bytes + duration.
+- **Opt-in request/response capture** — store the raw request + response bodies (headers redacted, size-capped, retained) and inspect them by expanding a call in the dashboard. Off by default; per-token override.
+- **Dashboard** (light + dark, pine-green) — Overview (spend, runway, by-modality, latency percentiles, recent calls with filters + CSV/JSON export, expand a row to view its captured request/response), Vendors (health + connectivity test), Tokens (CRUD with budget bars), Settings.
 - **File-based vendor config with hot-reload** — edit `config.yaml`, changes apply with no restart (inotify, with an automatic polling fallback).
 - **One binary.** Pure-Go SQLite (no cgo), the dashboard embedded via `go:embed`.
 
@@ -73,9 +75,13 @@ vendors:
 Songguo's transparent proxy serves two shapes from one handler, chosen by the request path:
 
 - **Model-routed (`/v1/...`)** — the ergonomic default. Point any OpenAI-compatible SDK at `http://<songguo>/v1`; the model is read from the body and routed across every vendor that serves it (priority → weighted RR → credential rotation → failover). The upstream URL is `base_url + (path after /v1)`.
-- **Explicit passthrough (`/x/<vendor>/...`)** — pin a vendor by name and forward the rest of the path to its **host** (`base_url`'s `scheme://host`, path stripped). **No model is required**, which makes DashScope's native generation endpoints and async image/video **submit→poll** flows forwardable (e.g. `POST /x/bailian/api/v1/services/aigc/.../generation`, then `GET /x/bailian/api/v1/tasks/{id}`). Failover here is across that vendor's **own credentials** only; a scoped token may be limited to specific vendors.
+- **Explicit passthrough (`/x/<vendor>/...`)** — pin a vendor by name and forward the rest of the path to its **host** (`base_url`'s `scheme://host`, path stripped). **No model is required**, which makes DashScope's native generation endpoints and async image/video **submit→poll** flows forwardable (e.g. `POST /x/bailian/api/v1/services/aigc/.../generation`, then `GET /x/bailian/api/v1/tasks/{id}`). **WebSocket upgrades on this path are proxied too** (realtime APIs): the handshake is replayed with the credential swapped and frames are piped untouched, metered by bytes + duration. Failover here is across that vendor's **own credentials** only; a scoped token may be limited to specific vendors.
 
 **`base_url` convention:** it is the vendor's *published* base **including any version/path prefix** — OpenAI `https://api.openai.com/v1`, Ark/方舟 `https://ark.cn-beijing.volces.com/api/v3`, DashScope/百炼 `https://dashscope.aliyuncs.com/compatible-mode/v1`, DeepSeek `https://api.deepseek.com`. So a model-routed `/v1/chat/completions` reaches `…/api/v3/chat/completions` on Ark, while a passthrough `/x/bailian/api/v1/tasks/abc` reaches `https://dashscope.aliyuncs.com/api/v1/tasks/abc`.
+
+### Request/response capture (optional)
+
+Off by default. Set `settings.capture: true` in `config.yaml` to record the raw request + response bodies for each call — view them by expanding a call row in the dashboard. Bodies are size-capped (`capture_max_bytes`, default 32 KB) and pruned to the newest `capture_retain` rows (default 10000); captured headers are redacted (no `Authorization`). A token can override the global setting (`capture: true|false`). WebSocket sessions record metadata only (bytes/duration), not frames.
 
 ### Environment variables
 
@@ -96,7 +102,7 @@ Songguo's transparent proxy serves two shapes from one handler, chosen by the re
 | Path | Purpose |
 |------|---------|
 | `/v1/*` | Transparent proxy, model-routed (consumer traffic) |
-| `/x/<vendor>/*` | Transparent proxy, explicit-vendor passthrough (native / async / rerank) |
+| `/x/<vendor>/*` | Transparent proxy, explicit-vendor passthrough (native / async / rerank / **WebSocket**) |
 | `/api/*` | Admin REST API (admin-key gated) |
 | `/` | Embedded dashboard |
 | `/healthz` | Liveness |
@@ -135,4 +141,4 @@ In dev you can run the Vite dev server (`cd web && npm run dev`) which proxies `
 
 ## Not in v1 (deferred)
 
-Async multimodal channels (image/video submit→poll) are now **forwardable** via `/x/<vendor>/...` passthrough — submit and poll both flow through and are logged. Still deferred to v2: **realtime WebSocket voice**, **per-image / per-second media metering** (passthrough media calls are forwarded and recorded, but token-based cost only applies when the vendor returns token usage), MCP tool proxying, tag-based business attribution, and cross-model cost×latency optimization. The calls schema already carries the fields these will use.
+Async multimodal channels (image/video submit→poll) are **forwardable** via `/x/<vendor>/...` passthrough, and **realtime WebSocket** APIs are proxied (metered by bytes + duration). Still deferred: **per-image / per-second media metering** (passthrough media + WebSocket calls are forwarded and recorded, but dollar cost is only computed when the vendor returns token usage), **vendor-specific WebSocket auth** (the WS handshake swaps the `Authorization: Bearer` header — providers that authenticate realtime via signed URLs / query-param tokens need per-vendor handling), AK/SK request signing, MCP tool proxying, tag-based business attribution, and cross-model cost×latency optimization. The calls schema already carries the fields these will use.
