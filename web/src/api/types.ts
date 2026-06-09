@@ -55,6 +55,25 @@ export interface CallEntry {
   latency_ms: number;
   stream: boolean;
   tags: Record<string, string>;
+  /** Whether a captured request/response payload exists for this call. */
+  has_trace: boolean;
+}
+
+/** One side (request or response) of a captured trace. */
+export interface TraceSide {
+  headers: Record<string, string>;
+  body: string;
+  /** True when `body` is base64-encoded binary rather than UTF-8 text. */
+  body_base64?: boolean;
+  content_type: string;
+  truncated: boolean;
+}
+
+export interface CallTrace {
+  call_id: number;
+  request: TraceSide;
+  response: TraceSide;
+  captured_at: string;
 }
 
 export interface CallsPage {
@@ -71,6 +90,8 @@ export interface Token {
   budget: number | null;
   scope: string[];
   rpm: number;
+  /** Per-token capture override: null = inherit global, true = on, false = off. */
+  capture: boolean | null;
   created_at: string;
   revoked_at: string | null;
   spent: number;
@@ -84,9 +105,13 @@ export interface CreateTokenBody {
   budget?: number | null;
   scope?: string[];
   rpm?: number;
+  /** null/omitted inherits global capture; true/false overrides it. */
+  capture?: boolean | null;
 }
 
-export type PatchTokenBody = Partial<Pick<Token, 'name' | 'budget' | 'scope' | 'rpm'>>;
+export type PatchTokenBody = Partial<
+  Pick<Token, 'name' | 'budget' | 'scope' | 'rpm' | 'capture'>
+>;
 
 export interface Credential {
   id: string;
@@ -133,6 +158,12 @@ export interface Settings {
   admin_protected: boolean;
   version: string;
   watch_mode?: string;
+  /** Whether request/response capture is globally enabled. */
+  capture: boolean;
+  /** Max captured body size in bytes (bodies beyond this are truncated). */
+  capture_max_bytes: number;
+  /** How many captured payloads are retained. */
+  capture_retain: number;
 }
 
 export interface PricingRow {

@@ -31,6 +31,21 @@ export function int(n: number): string {
   return intFmt.format(Math.round(n));
 }
 
+/** Format a byte count into a compact human string, e.g. "32 KB", "1.5 MB". */
+export function bytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return '—';
+  if (n < 1024) return `${n} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let val = n / 1024;
+  let i = 0;
+  while (val >= 1024 && i < units.length - 1) {
+    val /= 1024;
+    i += 1;
+  }
+  const rounded = val >= 100 || Number.isInteger(val) ? Math.round(val) : Math.round(val * 10) / 10;
+  return `${rounded} ${units[i]}`;
+}
+
 /** Format an error rate fraction (0..1) as a percent, e.g. "2.4%". */
 export function percent(fraction: number): string {
   return `${(fraction * 100).toFixed(1)}%`;

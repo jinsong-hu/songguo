@@ -1,6 +1,7 @@
 import type {
   CallsFilters,
   CallsPage,
+  CallTrace,
   CreateTokenBody,
   Overview,
   PatchTokenBody,
@@ -134,6 +135,9 @@ export const api = {
     request<UsageSeries>(`/usage/series${qs({ since, until, bucket })}`),
 
   calls: (f: CallsFilters) => request<CallsPage>(`/calls${callsQuery(f)}`),
+
+  /** Fetch the captured request/response trace for a call. 404 if none. */
+  trace: (id: number) => request<CallTrace>(`/calls/${id}/trace`),
 
   tokens: () => request<Token[]>('/tokens'),
 

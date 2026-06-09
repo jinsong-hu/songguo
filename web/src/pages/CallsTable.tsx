@@ -1,7 +1,15 @@
 import { useCallback, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, Search } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  FileText,
+  Search,
+} from 'lucide-react';
 import { api } from '../api/client';
-import type { CallsFilters, StatusGroup } from '../api/types';
+import type { CallEntry, CallsFilters, CallTrace, StatusGroup, TraceSide } from '../api/types';
+import { CopyButton } from '../components/CopyButton';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Skeleton } from '../components/Skeleton';
@@ -13,6 +21,8 @@ import styles from './Overview.module.css';
 
 const PAGE_SIZE = 25;
 const REFRESH_MS = 10_000;
+/** Number of <td> in a call row — the expanded panel spans all of them. */
+const COL_COUNT = 8;
 
 interface CallsTableProps {
   since: number;
@@ -31,6 +41,7 @@ export function CallsTable({ since, until }: CallsTableProps) {
   const [status, setStatus] = useState<StatusGroup>('all');
   const [offset, setOffset] = useState(0);
   const [exporting, setExporting] = useState(false);
+  const [expanded, setExpanded] = useState<number | null>(null);
   const toast = useToast();
 
   const filters: CallsFilters = useMemo(
@@ -54,7 +65,12 @@ export function CallsTable({ since, until }: CallsTableProps) {
 
   const resetAndSet = useCallback((fn: () => void) => {
     setOffset(0);
+    setExpanded(null);
     fn();
+  }, []);
+
+  const toggleRow = useCallback((id: number) => {
+    setExpanded((cur) => (cur === id ? null : id));
   }, []);
 
   const doExport = async (format: 'csv' | 'json') => {
@@ -161,6 +177,7 @@ export function CallsTable({ since, until }: CallsTableProps) {
             <table className="table">
               <thead>
                 <tr>
+                  <th className={styles.expandCol} aria-label="Expand" />
                   <th>Time</th>
                   <th>Model</th>
                   <th>Modality</th>
@@ -172,23 +189,12 @@ export function CallsTable({ since, until }: CallsTableProps) {
               </thead>
               <tbody>
                 {data.entries.map((e) => (
-                  <tr key={e.id}>
-                    <td className="mono" style={{ color: 'var(--text-muted)' }}>
-                      {dateTime(e.ts)}
-                    </td>
-                    <td className="mono">{e.model || '—'}</td>
-                    <td>
-                      <span className="chip" style={{ textTransform: 'capitalize' }}>
-                        {e.modality || '—'}
-                      </span>
-                    </td>
-                    <td>{e.vendor || '—'}</td>
-                    <td className="num">{money(e.cost)}</td>
-                    <td className="num">{ms(e.latency_ms)}</td>
-                    <td>
-                      <StatusPill status={e.status} />
-                    </td>
-                  </tr>
+                  <CallRow
+                    key={e.id}
+                    entry={e}
+                    open={expanded === e.id}
+                    onToggle={() => toggleRow(e.id)}
+                  />
                 ))}
               </tbody>
             </table>
@@ -201,14 +207,20 @@ export function CallsTable({ since, until }: CallsTableProps) {
               <button
                 className="btn btn-sm"
                 disabled={offset === 0}
-                onClick={() => setOffset((o) => Math.max(0, o - PAGE_SIZE))}
+                onClick={() => {
+                  setExpanded(null);
+                  setOffset((o) => Math.max(0, o - PAGE_SIZE));
+                }}
               >
                 <ChevronLeft size={14} /> Prev
               </button>
               <button
                 className="btn btn-sm"
                 disabled={to >= total}
-                onClick={() => setOffset((o) => o + PAGE_SIZE)}
+                onClick={() => {
+                  setExpanded(null);
+                  setOffset((o) => o + PAGE_SIZE);
+                }}
               >
                 Next <ChevronRight size={14} />
               </button>
@@ -216,6 +228,169 @@ export function CallsTable({ since, until }: CallsTableProps) {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+interface CallRowProps {
+  entry: CallEntry;
+  open: boolean;
+  onToggle: () => void;
+}
+
+function CallRow({ entry, open, onToggle }: CallRowProps) {
+  return (
+    <>
+      <tr
+        className={`${styles.callRow} ${open ? styles.callRowOpen : ''}`}
+        onClick={onToggle}
+      >
+        <td className={styles.expandCol}>
+          <button
+            type="button"
+            className={styles.expandBtn}
+            aria-label={open ? 'Collapse row' : 'Expand row'}
+            aria-expanded={open}
+            onClick={(ev) => {
+              ev.stopPropagation();
+              onToggle();
+            }}
+          >
+            <ChevronDown
+              size={14}
+              className={`${styles.chevron} ${open ? styles.chevronOpen : ''}`}
+            />
+          </button>
+        </td>
+        <td className="mono" style={{ color: 'var(--text-muted)' }}>
+          <span className={styles.timeCell}>
+            {dateTime(entry.ts)}
+            {entry.has_trace && (
+              <FileText
+                size={12}
+                className={styles.traceIcon}
+                aria-label="Captured payload available"
+              />
+            )}
+          </span>
+        </td>
+        <td className="mono">{entry.model || '—'}</td>
+        <td>
+          <span className="chip" style={{ textTransform: 'capitalize' }}>
+            {entry.modality || '—'}
+          </span>
+        </td>
+        <td>{entry.vendor || '—'}</td>
+        <td className="num">{money(entry.cost)}</td>
+        <td className="num">{ms(entry.latency_ms)}</td>
+        <td>
+          <StatusPill status={entry.status} />
+        </td>
+      </tr>
+      {open && (
+        <tr className={styles.traceRow}>
+          <td colSpan={COL_COUNT} className={styles.traceCell}>
+            <TracePanel entry={entry} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function TracePanel({ entry }: { entry: CallEntry }) {
+  const trace = useFetch<CallTrace>(() => api.trace(entry.id), [entry.id], {
+    enabled: entry.has_trace,
+  });
+
+  if (!entry.has_trace) {
+    return (
+      <div className={styles.traceNote}>
+        No captured payload — capture is off, or this call predates it.
+      </div>
+    );
+  }
+
+  if (trace.error) {
+    return (
+      <div className={styles.tracePanel}>
+        <ErrorBanner message={trace.error} onRetry={trace.refetch} />
+      </div>
+    );
+  }
+
+  if (trace.initialLoading || !trace.data) {
+    return (
+      <div className={styles.tracePanel}>
+        <div className={styles.traceGrid}>
+          {['Request', 'Response'].map((side) => (
+            <div key={side} className={styles.traceSide}>
+              <div className={styles.traceSideHead}>{side}</div>
+              <Skeleton height={14} style={{ marginBottom: 8 }} />
+              <Skeleton height={80} />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.tracePanel}>
+      <div className={styles.traceGrid}>
+        <TraceSidePane title="Request" side={trace.data.request} />
+        <TraceSidePane title="Response" side={trace.data.response} />
+      </div>
+    </div>
+  );
+}
+
+/** Pretty-print JSON bodies with 2-space indent; fall back to raw text. */
+function prettyBody(body: string): string {
+  try {
+    return JSON.stringify(JSON.parse(body), null, 2);
+  } catch {
+    return body;
+  }
+}
+
+function TraceSidePane({ title, side }: { title: string; side: TraceSide }) {
+  const headerEntries = Object.entries(side.headers);
+  const display = side.body_base64 ? side.body : prettyBody(side.body);
+  return (
+    <div className={styles.traceSide}>
+      <div className={styles.traceSideHead}>
+        <span>{title}</span>
+        {side.content_type && (
+          <span className="chip chip-mono">{side.content_type}</span>
+        )}
+        {side.truncated && (
+          <span className={`chip ${styles.truncatedChip}`}>truncated</span>
+        )}
+        {side.body_base64 && (
+          <span className={`chip ${styles.binaryChip}`}>binary (base64)</span>
+        )}
+      </div>
+
+      {headerEntries.length > 0 && (
+        <dl className={styles.headerList}>
+          {headerEntries.map(([k, v]) => (
+            <div key={k} className={styles.headerItem}>
+              <dt className={styles.headerKey}>{k}</dt>
+              <dd className={styles.headerVal}>{v}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      <div className={styles.bodyWrap}>
+        <div className={styles.bodyActions}>
+          <CopyButton value={side.body} className={styles.copyBody} />
+        </div>
+        <pre className={styles.bodyCode}>
+          {display || <span className="muted">(empty)</span>}
+        </pre>
+      </div>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { Info, Lock, LockOpen, LogOut, Moon, Sun } from 'lucide-react';
+import { Camera, Info, Lock, LockOpen, LogOut, Moon, Sun } from 'lucide-react';
 import { api } from '../api/client';
 import { CopyButton } from '../components/CopyButton';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -7,6 +7,7 @@ import { Skeleton } from '../components/Skeleton';
 import { useFetch } from '../lib/useFetch';
 import { useSettings } from '../lib/settingsContext';
 import { useTheme } from '../lib/useTheme';
+import { bytes, int } from '../lib/format';
 import styles from './SettingsPage.module.css';
 
 export function SettingsPage() {
@@ -101,6 +102,40 @@ export function SettingsPage() {
                 <span className={styles.metaVal}>{settings.watch_mode}</span>
               </>
             )}
+          </div>
+        </div>
+
+        {/* Capture */}
+        <div className={`card ${styles.panel}`}>
+          <div className={styles.panelTitle}>Capture</div>
+          <div className={styles.panelDesc}>
+            Request/response payload capture for logged calls.
+          </div>
+          <div className={styles.meta}>
+            <span className={styles.metaKey}>Status</span>
+            <span>
+              <span
+                className={`${styles.statusBadge} ${
+                  settings.capture ? styles.statusProtected : styles.statusOpen
+                }`}
+              >
+                <Camera size={11} />
+                {settings.capture ? 'On' : 'Off'}
+              </span>
+            </span>
+
+            <span className={styles.metaKey}>Max body size</span>
+            <span className={styles.metaVal}>{bytes(settings.capture_max_bytes)}</span>
+
+            <span className={styles.metaKey}>Retention</span>
+            <span className={styles.metaVal}>
+              {int(settings.capture_retain)} payloads
+            </span>
+          </div>
+          <div className={styles.hint}>
+            <Info size={14} />
+            Configured in <code>config.yaml</code> (hot-reloaded); can be overridden per
+            token.
           </div>
         </div>
 

@@ -20,6 +20,27 @@ type ModalState =
   | { kind: 'reveal'; token: Token }
   | { kind: 'revoke'; token: Token };
 
+/** Three-way capture override choice shown in the token form. */
+type CaptureChoice = 'default' | 'on' | 'off';
+
+const CAPTURE_CHOICES: { value: CaptureChoice; label: string }[] = [
+  { value: 'default', label: 'Default' },
+  { value: 'on', label: 'On' },
+  { value: 'off', label: 'Off' },
+];
+
+function toCaptureChoice(capture: boolean | null | undefined): CaptureChoice {
+  if (capture === true) return 'on';
+  if (capture === false) return 'off';
+  return 'default';
+}
+
+function fromCaptureChoice(choice: CaptureChoice): boolean | null {
+  if (choice === 'on') return true;
+  if (choice === 'off') return false;
+  return null;
+}
+
 export function TokensPage() {
   const tokens = useFetch(() => api.tokens(), []);
   const pricing = useFetch(() => api.pricing(), []);
@@ -98,7 +119,12 @@ export function TokensPage() {
               <tbody>
                 {tokens.data.map((t) => (
                   <tr key={t.id}>
-                    <td>{t.name}</td>
+                    <td>
+                      <span className={styles.nameCell}>
+                        {t.name}
+                        <CaptureBadge capture={t.capture} />
+                      </span>
+                    </td>
                     <td className="mono">{t.key_prefix}</td>
                     <td>
                       <UsageCell spent={t.spent} budget={t.budget} />
@@ -200,6 +226,15 @@ function UsageCell({ spent, budget }: { spent: number; budget: number | null }) 
   );
 }
 
+function CaptureBadge({ capture }: { capture: boolean | null }) {
+  if (capture == null) return null;
+  return (
+    <span className={`chip ${capture ? styles.captureOn : styles.captureOff}`}>
+      capture: {capture ? 'on' : 'off'}
+    </span>
+  );
+}
+
 function ScopeChips({ scope }: { scope: string[] }) {
   if (!scope || scope.length === 0) {
     return <span className="muted">all models</span>;
@@ -235,6 +270,7 @@ function TokenForm({ token, modelOptions, onClose, onCreated, onSaved }: TokenFo
   );
   const [rpm, setRpm] = useState(token?.rpm ? String(token.rpm) : '');
   const [scope, setScope] = useState<string[]>(token?.scope ?? []);
+  const [capture, setCapture] = useState<CaptureChoice>(toCaptureChoice(token?.capture));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -262,6 +298,7 @@ function TokenForm({ token, modelOptions, onClose, onCreated, onSaved }: TokenFo
       setErr('RPM must be a non-negative number.');
       return;
     }
+    const captureVal = fromCaptureChoice(capture);
 
     setBusy(true);
     setErr(null);
@@ -272,6 +309,7 @@ function TokenForm({ token, modelOptions, onClose, onCreated, onSaved }: TokenFo
           budget: budgetVal,
           scope,
           rpm: rpmVal,
+          capture: captureVal,
         };
         await api.patchToken(token.id, body);
         onSaved();
@@ -281,6 +319,7 @@ function TokenForm({ token, modelOptions, onClose, onCreated, onSaved }: TokenFo
           budget: budgetVal,
           scope,
           rpm: rpmVal,
+          capture: captureVal,
         };
         const created = await api.createToken(body);
         onCreated(created);
@@ -378,6 +417,29 @@ function TokenForm({ token, modelOptions, onClose, onCreated, onSaved }: TokenFo
               ))}
             </div>
           )}
+        </div>
+
+        <div className={styles.field}>
+          <span className={styles.fieldLabel}>Capture</span>
+          <span className={styles.fieldHint}>
+            Capture request/response payloads for this token. Default inherits the global
+            setting.
+          </span>
+          <div className={styles.captureSeg} role="group" aria-label="Capture override">
+            {CAPTURE_CHOICES.map((c) => (
+              <button
+                key={c.value}
+                type="button"
+                className={`${styles.captureBtn} ${
+                  capture === c.value ? styles.captureBtnActive : ''
+                }`}
+                aria-pressed={capture === c.value}
+                onClick={() => setCapture(c.value)}
+              >
+                {c.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {err && (
