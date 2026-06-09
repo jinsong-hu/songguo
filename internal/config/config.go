@@ -16,9 +16,23 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Default capture tuning, applied during normalization when a value is unset
+// (zero) or non-positive.
+const (
+	defaultCaptureMaxBytes = 32768
+	defaultCaptureRetain   = 10000
+)
+
 // Settings holds gateway-wide options.
 type Settings struct {
 	Listen string `yaml:"listen"`
+
+	// Capture toggles opt-in request/response body capture. Off by default.
+	Capture bool `yaml:"capture"`
+	// CaptureMaxBytes caps each stored body (per side). Defaults to 32768.
+	CaptureMaxBytes int `yaml:"capture_max_bytes"`
+	// CaptureRetain keeps this many most-recent payload rows. Defaults to 10000.
+	CaptureRetain int `yaml:"capture_retain"`
 }
 
 // Credential is a single upstream API key within a vendor's key pool (号池).
@@ -89,6 +103,15 @@ func isNotExist(err error) bool {
 
 // normalize applies defaults that should hold regardless of validity.
 func normalize(cfg *Config) {
+	// Capture caps fall back to sane defaults when unset or non-positive, so a
+	// 0/negative value never disables a body to zero length.
+	if cfg.Settings.CaptureMaxBytes <= 0 {
+		cfg.Settings.CaptureMaxBytes = defaultCaptureMaxBytes
+	}
+	if cfg.Settings.CaptureRetain <= 0 {
+		cfg.Settings.CaptureRetain = defaultCaptureRetain
+	}
+
 	for i := range cfg.Vendors {
 		if cfg.Vendors[i].Weight <= 0 {
 			cfg.Vendors[i].Weight = 1
@@ -100,6 +123,13 @@ func normalize(cfg *Config) {
 // load surfaces the full list rather than the first failure.
 func validate(cfg *Config) error {
 	var problems []error
+
+	if cfg.Settings.CaptureMaxBytes < 0 {
+		problems = append(problems, fmt.Errorf("settings: capture_max_bytes must be non-negative"))
+	}
+	if cfg.Settings.CaptureRetain < 0 {
+		problems = append(problems, fmt.Errorf("settings: capture_retain must be non-negative"))
+	}
 
 	seenVendor := make(map[string]struct{}, len(cfg.Vendors))
 	seenCredential := make(map[string]string) // credential id -> vendor that first declared it

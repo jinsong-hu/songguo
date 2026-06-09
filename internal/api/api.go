@@ -85,6 +85,7 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("GET /api/usage/series", a.handleUsageSeries)
 	mux.HandleFunc("GET /api/calls", a.handleCalls)
 	mux.HandleFunc("GET /api/calls/export", a.handleCallsExport)
+	mux.HandleFunc("GET /api/calls/{id}/trace", a.handleCallTrace)
 	mux.HandleFunc("GET /api/tokens", a.handleListTokens)
 	mux.HandleFunc("POST /api/tokens", a.handleCreateToken)
 	mux.HandleFunc("PATCH /api/tokens/{id}", a.handlePatchToken)

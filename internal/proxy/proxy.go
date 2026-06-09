@@ -163,6 +163,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Decide capture once: a per-token override (if set) wins over the global
+	// snapshot setting. The settings are also resolved here so the cap/retain
+	// used for this request are stable even if config hot-reloads mid-flight.
+	capCfg := h.captureFor(token)
+
 	// 3. Resolve the route. Mode is decided by the mount path: explicit-vendor
 	// passthrough under /x/, otherwise model-routed under /v1/. Resolution sets
 	// the model/modality, the candidate targets (with their failover policy),
@@ -238,7 +243,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// This is the chosen response (either a non-failover status, or the last
 		// target even if it failed). Report health, then forward verbatim.
 		h.router.Report(t.Vendor.Name, t.Credential.ID, resp.StatusCode, nil)
-		h.forward(w, r, resp, token.ID, rt.model, rt.modality, t, attempt, latency, tags)
+		h.forward(w, r, resp, token.ID, rt.model, rt.modality, t, attempt, latency, tags, capCfg, body)
 		return
 	}
 }
@@ -398,12 +403,38 @@ func originOf(base string) (string, error) {
 	return u.Scheme + "://" + u.Host, nil
 }
 
+// captureConfig is the resolved, per-request capture decision plus the caps to
+// apply when it is enabled. It is computed once so a mid-request config reload
+// cannot change the behaviour for an in-flight call.
+type captureConfig struct {
+	on       bool
+	maxBytes int
+	retain   int
+}
+
+// captureFor resolves whether to capture this request: a non-nil per-token
+// override wins, otherwise the global snapshot setting decides. The caps come
+// from the snapshot regardless.
+func (h *handler) captureFor(token store.Token) captureConfig {
+	var settings config.Settings
+	if snap := h.snapshot(); snap != nil {
+		settings = snap.Settings()
+	}
+	on := settings.Capture
+	if token.Capture != nil {
+		on = *token.Capture
+	}
+	return captureConfig{on: on, maxBytes: settings.CaptureMaxBytes, retain: settings.CaptureRetain}
+}
+
 // forward copies the chosen upstream response to the client verbatim and sniffs
 // usage as it passes. Streaming responses are streamed chunk-by-chunk and
 // flushed; non-streaming responses are buffered (bounded) and written whole.
+// When capture is on, it also tees a capped copy of the response body and
+// persists the redacted request/response payload after the call row is written.
 func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Response,
 	tokenID, model string, modality calls.Modality, t router.Target, attempt int,
-	latency int64, tags map[string]string) {
+	latency int64, tags map[string]string, capCfg captureConfig, reqBody []byte) {
 	defer resp.Body.Close()
 
 	stream := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
@@ -411,11 +442,15 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	copyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 
-	var usage map[string]any
+	var (
+		usage         map[string]any
+		respBody      []byte
+		respTruncated bool
+	)
 	if stream {
-		usage = h.streamBody(r.Context(), w, resp.Body)
+		usage, respBody, respTruncated = h.streamBody(r.Context(), w, resp.Body, capCfg)
 	} else {
-		usage = h.copyBody(w, resp.Body)
+		usage, respBody, respTruncated = h.copyBody(w, resp.Body, capCfg)
 	}
 
 	cost := 0.0
@@ -425,7 +460,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		}
 	}
 
-	h.append(calls.Entry{
+	id, err := h.store.AppendCall(calls.Entry{
 		TS:           h.now(),
 		TokenID:      tokenID,
 		Model:        model,
@@ -440,14 +475,50 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		Stream:       stream,
 		Tags:         tags,
 	})
+	if err != nil {
+		h.logger.Error("call append failed", "err", err, "vendor", t.Vendor.Name, "model", model)
+		return
+	}
+
+	if capCfg.on {
+		h.savePayload(id, r, reqBody, resp, respBody, respTruncated, capCfg)
+	}
 }
 
-// streamBody tees the SSE stream to both the client and a usage scanner,
-// flushing after each chunk so nothing is buffered. It returns the sniffed
-// usage (possibly nil).
-func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.Reader) map[string]any {
+// savePayload builds and persists the redacted request/response payload for the
+// served attempt. Any failure is logged only — never surfaced to the client.
+func (h *handler) savePayload(callID int64, r *http.Request, reqBody []byte,
+	resp *http.Response, respBody []byte, respTruncated bool, capCfg captureConfig) {
+	storedReq, reqTruncated := capBytes(reqBody, capCfg.maxBytes)
+	p := store.Payload{
+		CallID:          callID,
+		ReqHeaders:      redactHeaders(r.Header),
+		ReqBody:         storedReq,
+		ReqContentType:  r.Header.Get("Content-Type"),
+		ReqTruncated:    reqTruncated,
+		RespHeaders:     redactHeaders(resp.Header),
+		RespBody:        respBody,
+		RespContentType: resp.Header.Get("Content-Type"),
+		RespTruncated:   respTruncated,
+		CreatedAt:       h.now(),
+	}
+	if err := h.store.SavePayload(p, capCfg.retain); err != nil {
+		h.logger.Error("save payload failed", "err", err, "call_id", callID)
+	}
+}
+
+// streamBody tees the SSE stream to the client, a usage scanner, and (when
+// capture is on) a capped buffer, flushing after each chunk so nothing is
+// buffered for the client. It returns the sniffed usage plus the captured body
+// and whether it was truncated.
+func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.Reader, capCfg captureConfig) (map[string]any, []byte, bool) {
 	scanner := meter.NewStreamUsageScanner()
 	flusher, _ := w.(http.Flusher)
+
+	var capture *cappedBuffer
+	if capCfg.on {
+		capture = newCappedBuffer(capCfg.maxBytes)
+	}
 
 	buf := make([]byte, 32*1024)
 	for {
@@ -461,6 +532,9 @@ func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.
 				break
 			}
 			_, _ = scanner.Write(chunk)
+			if capture != nil {
+				capture.Write(chunk)
+			}
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -469,12 +543,16 @@ func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.
 			break
 		}
 	}
-	return scanner.Usage()
+	if capture != nil {
+		return scanner.Usage(), capture.Bytes(), capture.Truncated()
+	}
+	return scanner.Usage(), nil, false
 }
 
 // copyBody reads the full (bounded) non-streaming body, writes it to the client
-// unchanged, and extracts usage from it.
-func (h *handler) copyBody(w http.ResponseWriter, src io.Reader) map[string]any {
+// unchanged, and extracts usage from it. When capture is on it returns a capped
+// copy of the body and whether it was truncated.
+func (h *handler) copyBody(w http.ResponseWriter, src io.Reader, capCfg captureConfig) (map[string]any, []byte, bool) {
 	body, _, err := readBounded(src, h.maxBodyBytes)
 	if err != nil {
 		h.logger.Error("read upstream body failed", "err", err)
@@ -484,7 +562,12 @@ func (h *handler) copyBody(w http.ResponseWriter, src io.Reader) map[string]any 
 			h.logger.Error("write client body failed", "err", werr)
 		}
 	}
-	return meter.ExtractUsage(body)
+	usage := meter.ExtractUsage(body)
+	if capCfg.on {
+		captured, truncated := capBytes(body, capCfg.maxBytes)
+		return usage, captured, truncated
+	}
+	return usage, nil, false
 }
 
 // recordFailure appends a call row for a failed (failover-eligible) attempt.
@@ -518,6 +601,85 @@ func (h *handler) append(e calls.Entry) {
 }
 
 // --- helpers ---
+
+// redactedHeaders are request/response headers stripped before a payload is
+// stored, so captured traces never persist consumer or upstream secrets.
+var redactedHeaders = map[string]struct{}{
+	"Authorization": {},
+	"Api-Key":       {},
+	"X-Api-Key":     {},
+	"Cookie":        {},
+}
+
+// redactHeaders flattens an http.Header into a string map (first value per
+// header), dropping sensitive headers entirely.
+func redactHeaders(h http.Header) map[string]string {
+	out := make(map[string]string, len(h))
+	for k, vs := range h {
+		if _, drop := redactedHeaders[http.CanonicalHeaderKey(k)]; drop {
+			continue
+		}
+		if len(vs) > 0 {
+			out[k] = vs[0]
+		}
+	}
+	return out
+}
+
+// capBytes returns a copy of b truncated to max bytes, plus whether truncation
+// occurred. A non-positive max returns the bytes unchanged (the caller's caps
+// are already normalized to positive defaults).
+func capBytes(b []byte, max int) (out []byte, truncated bool) {
+	if max <= 0 || len(b) <= max {
+		cp := make([]byte, len(b))
+		copy(cp, b)
+		return cp, false
+	}
+	cp := make([]byte, max)
+	copy(cp, b[:max])
+	return cp, true
+}
+
+// cappedBuffer accumulates written bytes up to a fixed cap, recording whether
+// any bytes were dropped. It is an io.Writer-like sink used to tee a streaming
+// response into a bounded capture buffer without ever blocking the stream.
+type cappedBuffer struct {
+	buf       []byte
+	max       int
+	truncated bool
+}
+
+// newCappedBuffer returns a buffer that stores at most max bytes.
+func newCappedBuffer(max int) *cappedBuffer {
+	return &cappedBuffer{max: max}
+}
+
+// Write appends as much of p as fits under the cap; the rest is discarded and
+// the truncated flag is set. It never returns an error.
+func (c *cappedBuffer) Write(p []byte) {
+	if c.max <= 0 {
+		return
+	}
+	remaining := c.max - len(c.buf)
+	if remaining <= 0 {
+		if len(p) > 0 {
+			c.truncated = true
+		}
+		return
+	}
+	if len(p) > remaining {
+		c.buf = append(c.buf, p[:remaining]...)
+		c.truncated = true
+		return
+	}
+	c.buf = append(c.buf, p...)
+}
+
+// Bytes returns the accumulated bytes (may be nil if nothing was written).
+func (c *cappedBuffer) Bytes() []byte { return c.buf }
+
+// Truncated reports whether any bytes were dropped due to the cap.
+func (c *cappedBuffer) Truncated() bool { return c.truncated }
 
 // bearerToken extracts the key from an Authorization header value, accepting
 // either "Bearer <key>" (case-insensitive scheme) or a raw "<key>".

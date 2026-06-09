@@ -76,6 +76,7 @@ func (s *Store) migrate() error {
 			budget     REAL,
 			scope      TEXT NOT NULL DEFAULT '[]',
 			rpm        INTEGER NOT NULL DEFAULT 0,
+			capture    INTEGER,
 			created_at INTEGER NOT NULL,
 			revoked_at INTEGER
 		)`,
@@ -95,6 +96,18 @@ func (s *Store) migrate() error {
 			latency_ms    INTEGER NOT NULL DEFAULT 0,
 			stream        INTEGER NOT NULL DEFAULT 0,
 			tags          TEXT NOT NULL DEFAULT '{}'
+		)`,
+		`CREATE TABLE IF NOT EXISTS payloads (
+			call_id          INTEGER PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE,
+			req_headers      TEXT NOT NULL DEFAULT '{}',
+			req_body         BLOB,
+			req_content_type TEXT NOT NULL DEFAULT '',
+			req_truncated    INTEGER NOT NULL DEFAULT 0,
+			resp_headers     TEXT NOT NULL DEFAULT '{}',
+			resp_body        BLOB,
+			resp_content_type TEXT NOT NULL DEFAULT '',
+			resp_truncated   INTEGER NOT NULL DEFAULT 0,
+			created_at       INTEGER NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_ts ON calls(ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_token_id ON calls(token_id)`,

@@ -25,6 +25,14 @@
 settings:
   listen: ":8080"          # overridden by SONGGUO_LISTEN if set
 
+  # Opt-in request/response body capture (for the dashboard trace view).
+  # OFF by default. When on, the served attempt of each proxied call stores its
+  # (redacted) request and response bodies in the payloads table. A per-token
+  # override (set via the admin API) takes precedence over this global flag.
+  # capture: false           # master switch; true to capture bodies
+  # capture_max_bytes: 32768 # per-body cap; longer bodies are truncated
+  # capture_retain: 10000    # keep only this many most-recent payload rows
+
 vendors:
   - name: openai-main
     base_url: https://api.openai.com/v1   # vendor's OpenAI-compatible base (includes /v1)

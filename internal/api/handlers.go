@@ -273,8 +273,19 @@ func (a *api) handleCalls(w http.ResponseWriter, r *http.Request) {
 	}
 
 	views := make([]entryView, 0, len(entries))
+	ids := make([]int64, 0, len(entries))
 	for _, e := range entries {
-		views = append(views, newEntryView(e))
+		ids = append(ids, e.ID)
+	}
+	hasTrace, err := a.store.HasPayloads(ids)
+	if err != nil {
+		a.serverError(w, "has payloads", err)
+		return
+	}
+	for _, e := range entries {
+		v := newEntryView(e)
+		v.HasTrace = hasTrace[e.ID]
+		views = append(views, v)
 	}
 
 	writeJSON(w, http.StatusOK, callsView{
@@ -283,6 +294,27 @@ func (a *api) handleCalls(w http.ResponseWriter, r *http.Request) {
 		Limit:   f.Limit,
 		Offset:  f.Offset,
 	})
+}
+
+// handleCallTrace returns the captured request/response payload for a call, or
+// 404 when no payload was stored for it. Bodies are returned as UTF-8 text when
+// valid, else base64 (flagged per side).
+func (a *api) handleCallTrace(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "trace not found")
+		return
+	}
+	p, err := a.store.GetPayload(id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "trace not found")
+			return
+		}
+		a.serverError(w, "get payload", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newTraceView(p))
 }
 
 // handleListTokens returns all tokens with computed lifetime spend.
@@ -306,10 +338,11 @@ func (a *api) handleListTokens(w http.ResponseWriter, r *http.Request) {
 
 // createTokenReq is the POST /api/tokens body.
 type createTokenReq struct {
-	Name   string    `json:"name"`
-	Budget *float64  `json:"budget"`
-	Scope  *[]string `json:"scope"`
-	RPM    *int      `json:"rpm"`
+	Name    string    `json:"name"`
+	Budget  *float64  `json:"budget"`
+	Scope   *[]string `json:"scope"`
+	RPM     *int      `json:"rpm"`
+	Capture *bool     `json:"capture"`
 }
 
 // handleCreateToken creates a token and returns it once with the plaintext key.
@@ -323,7 +356,7 @@ func (a *api) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "name is required")
 		return
 	}
-	nt := store.NewToken{Name: req.Name, Budget: req.Budget}
+	nt := store.NewToken{Name: req.Name, Budget: req.Budget, Capture: req.Capture}
 	if req.Scope != nil {
 		nt.Scope = *req.Scope
 	}
@@ -346,10 +379,11 @@ func (a *api) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 // TokenUpdate uses a *float64 set-or-unchanged; PATCH cannot reset budget to
 // null (documented limitation for v1).
 type patchTokenReq struct {
-	Name   *string   `json:"name"`
-	Budget *float64  `json:"budget"`
-	Scope  *[]string `json:"scope"`
-	RPM    *int      `json:"rpm"`
+	Name    *string   `json:"name"`
+	Budget  *float64  `json:"budget"`
+	Scope   *[]string `json:"scope"`
+	RPM     *int      `json:"rpm"`
+	Capture *bool     `json:"capture"`
 }
 
 // handlePatchToken applies a subset of fields to a token.
@@ -361,10 +395,11 @@ func (a *api) handlePatchToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	upd := store.TokenUpdate{
-		Name:   req.Name,
-		Budget: req.Budget,
-		Scope:  req.Scope,
-		RPM:    req.RPM,
+		Name:    req.Name,
+		Budget:  req.Budget,
+		Scope:   req.Scope,
+		RPM:     req.RPM,
+		Capture: req.Capture,
 	}
 	tok, err := a.store.UpdateToken(id, upd)
 	if err != nil {
@@ -482,16 +517,19 @@ func (a *api) handleTestVendor(w http.ResponseWriter, r *http.Request) {
 
 // handleSettings returns non-secret runtime settings.
 func (a *api) handleSettings(w http.ResponseWriter, r *http.Request) {
-	listen := ""
+	var settings config.Settings
 	if snap := a.snap(); snap != nil {
-		listen = snap.Settings().Listen
+		settings = snap.Settings()
 	}
 	writeJSON(w, http.StatusOK, settingsView{
-		Listen:         listen,
-		ConfigPath:     a.configPath,
-		DBPath:         a.dbPath,
-		AdminProtected: a.adminKey != "",
-		Version:        a.version,
+		Listen:          settings.Listen,
+		ConfigPath:      a.configPath,
+		DBPath:          a.dbPath,
+		AdminProtected:  a.adminKey != "",
+		Version:         a.version,
+		Capture:         settings.Capture,
+		CaptureMaxBytes: settings.CaptureMaxBytes,
+		CaptureRetain:   settings.CaptureRetain,
 	})
 }
 

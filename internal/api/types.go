@@ -1,7 +1,9 @@
 package api
 
 import (
+	"encoding/base64"
 	"time"
+	"unicode/utf8"
 
 	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/config"
@@ -17,6 +19,7 @@ type tokenView struct {
 	Budget    *float64 `json:"budget"`
 	Scope     []string `json:"scope"`
 	RPM       int      `json:"rpm"`
+	Capture   *bool    `json:"capture"`
 	CreatedAt string   `json:"created_at"`
 	RevokedAt *string  `json:"revoked_at"`
 	Spent     float64  `json:"spent"`
@@ -38,6 +41,7 @@ func newTokenView(t store.Token, spent float64) tokenView {
 		Budget:    t.Budget,
 		Scope:     scope,
 		RPM:       t.RPM,
+		Capture:   t.Capture,
 		CreatedAt: t.CreatedAt.UTC().Format(time.RFC3339),
 		Spent:     spent,
 		Active:    t.RevokedAt == nil,
@@ -66,6 +70,7 @@ type entryView struct {
 	LatencyMS    int64             `json:"latency_ms"`
 	Stream       bool              `json:"stream"`
 	Tags         map[string]string `json:"tags"`
+	HasTrace     bool              `json:"has_trace"`
 }
 
 // newEntryView converts a calls.Entry into its JSON view.
@@ -236,12 +241,32 @@ type testVendorView struct {
 // settingsView is the GET /api/settings response. It never exposes the admin
 // key.
 type settingsView struct {
-	Listen         string `json:"listen"`
-	ConfigPath     string `json:"config_path"`
-	DBPath         string `json:"db_path"`
-	AdminProtected bool   `json:"admin_protected"`
-	Version        string `json:"version"`
-	WatchMode      string `json:"watch_mode,omitempty"`
+	Listen          string `json:"listen"`
+	ConfigPath      string `json:"config_path"`
+	DBPath          string `json:"db_path"`
+	AdminProtected  bool   `json:"admin_protected"`
+	Version         string `json:"version"`
+	WatchMode       string `json:"watch_mode,omitempty"`
+	Capture         bool   `json:"capture"`
+	CaptureMaxBytes int    `json:"capture_max_bytes"`
+	CaptureRetain   int    `json:"capture_retain"`
+}
+
+// traceSideView is one side (request or response) of a captured trace.
+type traceSideView struct {
+	Headers     map[string]string `json:"headers"`
+	Body        string            `json:"body"`
+	BodyBase64  bool              `json:"body_base64,omitempty"`
+	ContentType string            `json:"content_type"`
+	Truncated   bool              `json:"truncated"`
+}
+
+// traceView is the GET /api/calls/{id}/trace response.
+type traceView struct {
+	CallID     int64         `json:"call_id"`
+	Request    traceSideView `json:"request"`
+	Response   traceSideView `json:"response"`
+	CapturedAt string        `json:"captured_at"`
 }
 
 // pricingRow is one flattened pricing entry for GET /api/pricing.
@@ -251,6 +276,38 @@ type pricingRow struct {
 	Input  float64 `json:"input"`
 	Output float64 `json:"output"`
 	Unit   string  `json:"unit"`
+}
+
+// newTraceView converts a stored payload into its JSON trace view, encoding
+// each body as UTF-8 text when valid, else base64.
+func newTraceView(p store.Payload) traceView {
+	return traceView{
+		CallID:     p.CallID,
+		Request:    newTraceSide(p.ReqHeaders, p.ReqBody, p.ReqContentType, p.ReqTruncated),
+		Response:   newTraceSide(p.RespHeaders, p.RespBody, p.RespContentType, p.RespTruncated),
+		CapturedAt: p.CreatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+// newTraceSide builds one side of a trace, choosing a UTF-8 string body when
+// the bytes are valid UTF-8 and a base64 encoding (with body_base64=true)
+// otherwise so binary payloads survive JSON transport.
+func newTraceSide(headers map[string]string, body []byte, contentType string, truncated bool) traceSideView {
+	if headers == nil {
+		headers = map[string]string{}
+	}
+	side := traceSideView{
+		Headers:     headers,
+		ContentType: contentType,
+		Truncated:   truncated,
+	}
+	if utf8.Valid(body) {
+		side.Body = string(body)
+	} else {
+		side.Body = base64.StdEncoding.EncodeToString(body)
+		side.BodyBase64 = true
+	}
+	return side
 }
 
 // maskKey returns a masked preview of an API key: first 3 + "…" + last 2 chars,

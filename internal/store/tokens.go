@@ -27,25 +27,28 @@ type Token struct {
 	Budget    *float64 // nil = unlimited
 	Scope     []string // empty = all allowed
 	RPM       int      // 0 = unlimited
+	Capture   *bool    // nil = inherit global, false = off, true = on
 	CreatedAt time.Time
 	RevokedAt *time.Time // nil = active
 }
 
 // NewToken describes a token to create.
 type NewToken struct {
-	Name   string
-	Budget *float64
-	Scope  []string
-	RPM    int
+	Name    string
+	Budget  *float64
+	Scope   []string
+	RPM     int
+	Capture *bool
 }
 
 // TokenUpdate carries optional field updates; nil pointers leave a field
 // unchanged.
 type TokenUpdate struct {
-	Name   *string
-	Budget *float64
-	Scope  *[]string
-	RPM    *int
+	Name    *string
+	Budget  *float64
+	Scope   *[]string
+	RPM     *int
+	Capture *bool
 }
 
 // HashKey returns the lowercase hex sha256 of a plaintext key. The proxy auth
@@ -106,9 +109,9 @@ func (s *Store) CreateToken(nt NewToken) (Token, string, error) {
 	createdAt := time.Now()
 
 	_, err = s.db.Exec(
-		`INSERT INTO tokens (id, name, key_hash, key_prefix, budget, scope, rpm, created_at, revoked_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-		id, nt.Name, HashKey(key), prefix, nt.Budget, string(scopeJSON), nt.RPM, createdAt.Unix(),
+		`INSERT INTO tokens (id, name, key_hash, key_prefix, budget, scope, rpm, capture, created_at, revoked_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+		id, nt.Name, HashKey(key), prefix, nt.Budget, string(scopeJSON), nt.RPM, boolPtrToNull(nt.Capture), createdAt.Unix(),
 	)
 	if err != nil {
 		return Token{}, "", fmt.Errorf("store: create token: %w", err)
@@ -121,12 +124,13 @@ func (s *Store) CreateToken(nt NewToken) (Token, string, error) {
 		Budget:    nt.Budget,
 		Scope:     scope,
 		RPM:       nt.RPM,
+		Capture:   nt.Capture,
 		CreatedAt: createdAt.Truncate(time.Second),
 	}, key, nil
 }
 
 // tokenSelect is the shared column list for scanning a Token.
-const tokenSelect = `SELECT id, name, key_prefix, budget, scope, rpm, created_at, revoked_at FROM tokens`
+const tokenSelect = `SELECT id, name, key_prefix, budget, scope, rpm, capture, created_at, revoked_at FROM tokens`
 
 // scanToken reads a single Token row from a *sql.Row or *sql.Rows.
 func scanToken(sc interface{ Scan(...any) error }) (Token, error) {
@@ -134,15 +138,20 @@ func scanToken(sc interface{ Scan(...any) error }) (Token, error) {
 		t         Token
 		budget    sql.NullFloat64
 		scopeJSON string
+		capture   sql.NullInt64
 		createdAt int64
 		revokedAt sql.NullInt64
 	)
-	if err := sc.Scan(&t.ID, &t.Name, &t.KeyPrefix, &budget, &scopeJSON, &t.RPM, &createdAt, &revokedAt); err != nil {
+	if err := sc.Scan(&t.ID, &t.Name, &t.KeyPrefix, &budget, &scopeJSON, &t.RPM, &capture, &createdAt, &revokedAt); err != nil {
 		return Token{}, err
 	}
 	if budget.Valid {
 		b := budget.Float64
 		t.Budget = &b
+	}
+	if capture.Valid {
+		c := capture.Int64 != 0
+		t.Capture = &c
 	}
 	if err := json.Unmarshal([]byte(scopeJSON), &t.Scope); err != nil {
 		return Token{}, fmt.Errorf("store: decode scope: %w", err)
@@ -238,6 +247,10 @@ func (s *Store) UpdateToken(id string, upd TokenUpdate) (Token, error) {
 		sets = append(sets, "rpm = ?")
 		args = append(args, *upd.RPM)
 	}
+	if upd.Capture != nil {
+		sets = append(sets, "capture = ?")
+		args = append(args, boolToInt(*upd.Capture))
+	}
 
 	if len(sets) > 0 {
 		query := "UPDATE tokens SET " + sets[0]
@@ -270,4 +283,13 @@ func (s *Store) RevokeToken(id string) error {
 		return fmt.Errorf("store: token %q: %w", id, ErrNotFound)
 	}
 	return nil
+}
+
+// boolPtrToNull converts a *bool into a value suitable for a nullable INTEGER
+// column: nil yields a SQL NULL, otherwise 0/1.
+func boolPtrToNull(b *bool) any {
+	if b == nil {
+		return nil
+	}
+	return boolToInt(*b)
 }
