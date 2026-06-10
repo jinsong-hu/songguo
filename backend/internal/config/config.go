@@ -48,10 +48,20 @@ type Price struct {
 	Unit   string  `yaml:"unit"` // e.g. per_1m_tokens, per_1k_tokens, per_token, per_call, per_image, per_second, per_char
 }
 
+// Adapter names the upstream wire protocol a vendor speaks. It governs how the
+// proxy authenticates (header style) and, where supported, how usage is read
+// back for metering. An empty adapter normalizes to AdapterOpenAI.
+const (
+	AdapterOpenAI    = "openai-compatible"
+	AdapterAnthropic = "anthropic-compatible"
+	AdapterMCP       = "mcp"
+)
+
 // Vendor is an upstream AI provider.
 type Vendor struct {
 	Name         string           `yaml:"name"`
 	BaseURL      string           `yaml:"base_url"`
+	Adapter      string           `yaml:"adapter"` // wire protocol; default openai-compatible
 	ServedModels []string         `yaml:"served_models"`
 	Priority     int              `yaml:"priority"` // lower = preferred; default 0
 	Weight       int              `yaml:"weight"`   // weighted round-robin within a priority; normalized to >=1
@@ -72,7 +82,14 @@ func Parse(data []byte) (*Snapshot, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	return Build(cfg)
+}
 
+// Build normalizes, validates, and indexes an in-memory Config into an
+// immutable Snapshot. It is the source-agnostic core shared by the YAML path
+// (Parse) and the SQLite-backed config manager, which assembles a Config from
+// stored service rows. Build takes ownership of cfg's slices/maps.
+func Build(cfg Config) (*Snapshot, error) {
 	normalize(&cfg)
 
 	if err := validate(&cfg); err != nil {
@@ -115,6 +132,9 @@ func normalize(cfg *Config) {
 	for i := range cfg.Vendors {
 		if cfg.Vendors[i].Weight <= 0 {
 			cfg.Vendors[i].Weight = 1
+		}
+		if cfg.Vendors[i].Adapter == "" {
+			cfg.Vendors[i].Adapter = AdapterOpenAI
 		}
 	}
 }

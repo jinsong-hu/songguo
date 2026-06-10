@@ -2,10 +2,15 @@ import type {
   CallsFilters,
   CallsPage,
   CallTrace,
+  Catalog,
+  CreateServiceBody,
   CreateTokenBody,
   Overview,
+  PatchServiceBody,
   PatchTokenBody,
   PricingRow,
+  Service,
+  ServiceCredential,
   Settings,
   Token,
   UsageSeries,
@@ -159,6 +164,41 @@ export const api = {
     request<VendorTestResult>(`/vendors/${encodeURIComponent(name)}/test`, {
       method: 'POST',
     }),
+
+  // --- Services (SQLite-backed config) ---
+
+  services: () => request<Service[]>('/services'),
+
+  createService: (body: CreateServiceBody) =>
+    request<Service>('/services', { method: 'POST', body: JSON.stringify(body) }),
+
+  patchService: (id: string, body: PatchServiceBody) =>
+    request<Service>(`/services/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  deleteService: (id: string) =>
+    request<void>(`/services/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  addCredential: (id: string, apiKey: string) =>
+    request<ServiceCredential>(`/services/${encodeURIComponent(id)}/credentials`, {
+      method: 'POST',
+      body: JSON.stringify({ api_key: apiKey }),
+    }),
+
+  deleteCredential: (id: string, cid: string) =>
+    request<void>(
+      `/services/${encodeURIComponent(id)}/credentials/${encodeURIComponent(cid)}`,
+      { method: 'DELETE' },
+    ),
+
+  testService: (id: string) =>
+    request<VendorTestResult>(`/services/${encodeURIComponent(id)}/test`, {
+      method: 'POST',
+    }),
+
+  catalog: () => request<Catalog>('/catalog'),
 
   pricing: () => request<PricingRow[]>('/pricing'),
 

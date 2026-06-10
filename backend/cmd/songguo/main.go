@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/songguo/songguo/internal/api"
-	"github.com/songguo/songguo/internal/config"
+	"github.com/songguo/songguo/internal/configsvc"
 	"github.com/songguo/songguo/internal/proxy"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/server"
@@ -37,19 +37,25 @@ func main() {
 		logger.Warn("SONGGUO_ADMIN_KEY is empty; the admin API will be UNPROTECTED")
 	}
 
-	manager, err := config.NewManager(configPath, logger)
-	if err != nil {
-		logger.Error("failed to load config", "path", configPath, "err", err)
-		os.Exit(1)
-	}
-	defer manager.Close()
-
 	st, err := store.Open(dbPath)
 	if err != nil {
 		logger.Error("failed to open store", "path", dbPath, "err", err)
 		os.Exit(1)
 	}
 	defer st.Close()
+
+	// Vendor/service config lives in SQLite and is managed from the dashboard.
+	// On first boot (no services yet) import a legacy config.yaml if present, so
+	// existing file-based deployments carry over. The file is not watched.
+	if _, err := configsvc.SeedFromConfig(st, configPath, logger); err != nil {
+		logger.Error("config seed failed", "err", err)
+	}
+
+	manager, err := configsvc.NewManager(st, logger)
+	if err != nil {
+		logger.Error("failed to build config", "err", err)
+		os.Exit(1)
+	}
 
 	rt := router.New(manager.Current)
 	proxyHandler := proxy.NewHandler(proxy.Deps{
@@ -62,6 +68,7 @@ func main() {
 	adminHandler := api.NewHandler(api.Deps{
 		Store:      st,
 		Snapshot:   manager.Current,
+		Reload:     manager.Reload,
 		AdminKey:   adminKey,
 		Logger:     logger,
 		Version:    "dev",

@@ -151,6 +151,95 @@ export interface VendorTestResult {
   error?: string;
 }
 
+// --- Services (SQLite-backed vendor/service config) ---
+
+export interface ServiceModel {
+  model: string;
+  input: number;
+  output: number;
+  unit: string;
+}
+
+export interface ServiceCredential {
+  id: string;
+  masked_key: string;
+  created_at: string;
+}
+
+export interface Service {
+  id: string;
+  name: string;
+  vendor: string;
+  adapter: string;
+  base_url: string;
+  priority: number;
+  weight: number;
+  enabled: boolean;
+  catalog_id: string;
+  credentials: ServiceCredential[];
+  models: ServiceModel[];
+  created_at: string;
+  updated_at: string;
+  stats: VendorStats;
+}
+
+export interface CreateServiceBody {
+  name: string;
+  vendor?: string;
+  adapter: string;
+  base_url: string;
+  priority?: number;
+  weight?: number;
+  enabled?: boolean;
+  catalog_id?: string;
+  api_keys?: string[];
+  models: ServiceModel[];
+}
+
+export type PatchServiceBody = Partial<{
+  name: string;
+  vendor: string;
+  adapter: string;
+  base_url: string;
+  priority: number;
+  weight: number;
+  enabled: boolean;
+  models: ServiceModel[];
+}>;
+
+// --- Catalog (read-only preset directory) ---
+
+export interface CatalogModel {
+  model: string;
+  input: number;
+  output: number;
+  unit: string;
+  context?: number;
+  modalities?: string[];
+}
+
+export interface CatalogService {
+  id: string;
+  name: string;
+  kind: string;
+  adapter: string;
+  base_url: string;
+  docs?: string;
+  note?: string;
+  models: CatalogModel[];
+}
+
+export interface CatalogVendor {
+  id: string;
+  name: string;
+  homepage?: string;
+  services: CatalogService[];
+}
+
+export interface Catalog {
+  vendors: CatalogVendor[];
+}
+
 export interface Settings {
   listen: string;
   config_path: string;

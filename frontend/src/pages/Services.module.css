@@ -4,9 +4,13 @@
   gap: 14px;
 }
 
-.vendor {
+.service {
   padding: 0;
   overflow: hidden;
+}
+
+.service.disabled {
+  opacity: 0.72;
 }
 
 .head {
@@ -25,13 +29,19 @@
 .nameRow {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 4px;
 }
 
 .name {
   font-size: 15px;
   font-weight: 600;
+}
+
+.vendorTag {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .baseUrl {
@@ -62,18 +72,27 @@
   color: var(--danger);
 }
 
+.draft {
+  background: var(--amber-weak);
+  color: var(--amber);
+}
+
+.off {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
 .headRight {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .testResult {
   font-size: 12px;
   font-family: var(--font-mono);
-  text-align: right;
-  max-width: 220px;
+  padding: 0 16px 12px;
 }
 
 .testOk {
@@ -94,6 +113,10 @@
   .body {
     grid-template-columns: 1fr;
   }
+  .headRight {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
 }
 
 .section {
@@ -109,16 +132,11 @@
   color: var(--text-muted);
 }
 
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.meta {
+.metaRow {
   display: flex;
   gap: 20px;
   flex-wrap: wrap;
+  margin-bottom: 4px;
 }
 
 .metaItem {
@@ -140,18 +158,44 @@
 
 .creds {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .cred {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-family: var(--font-mono);
   font-size: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 4px 2px 8px;
 }
 
-.cred .arrow {
+.credRemove {
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  background: transparent;
   color: var(--text-muted);
-  margin: 0 6px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.credRemove:hover {
+  color: var(--danger);
+}
+
+.addKey {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.addKey .input {
+  flex: 1;
 }
 
 .priceTable {
@@ -181,23 +225,8 @@
   text-align: right;
 }
 
-.hint {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 11px 14px;
-  margin-bottom: 16px;
-  border-radius: var(--radius-control);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  font-size: 12.5px;
-  color: var(--text-muted);
-}
-
-.hint code {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  padding: 0 4px;
-  border-radius: 4px;
-  font-size: 11.5px;
+.confirmText {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
 }

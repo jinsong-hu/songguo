@@ -1,6 +1,9 @@
-# Songguo configuration — vendors are file-based and hot-reloaded.
-# Tokens (consumer API keys + budgets) are NOT here; they live in SQLite and are managed via the dashboard.
-# The admin key for the dashboard/admin API comes from the SONGGUO_ADMIN_KEY env var, never this file.
+# Songguo configuration — ONE-TIME IMPORT SEED.
+# Vendors/services now live in SQLite and are managed from the dashboard (Services + Catalog).
+# This file is imported into the DB only on first boot, when no services exist yet; after that
+# it is ignored. Use it to migrate an existing file-based deployment. Each vendor below becomes
+# a configured service. Tokens (consumer API keys + budgets) live in SQLite and are managed via
+# the dashboard. The admin key for the dashboard/admin API comes from SONGGUO_ADMIN_KEY.
 #
 # Two routing modes share one transparent proxy:
 #

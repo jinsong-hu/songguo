@@ -23,7 +23,8 @@ import (
 type Deps struct {
 	Store      *store.Store
 	Snapshot   func() *config.Snapshot
-	AdminKey   string // from SONGGUO_ADMIN_KEY; empty = unprotected (logged once)
+	Reload     func() error // rebuild the live snapshot after a config write
+	AdminKey   string       // from SONGGUO_ADMIN_KEY; empty = unprotected (logged once)
 	Logger     *slog.Logger
 	HTTPClient *http.Client     // for vendor test-connection; default if nil
 	Now        func() time.Time // defaults to time.Now
@@ -36,6 +37,7 @@ type Deps struct {
 type api struct {
 	store      *store.Store
 	snapshot   func() *config.Snapshot
+	reload     func() error
 	adminKey   string
 	logger     *slog.Logger
 	client     *http.Client
@@ -67,10 +69,15 @@ func NewHandler(d Deps) http.Handler {
 	if version == "" {
 		version = "dev"
 	}
+	reload := d.Reload
+	if reload == nil {
+		reload = func() error { return nil }
+	}
 
 	a := &api{
 		store:      d.Store,
 		snapshot:   d.Snapshot,
+		reload:     reload,
 		adminKey:   d.AdminKey,
 		logger:     logger,
 		client:     client,
@@ -92,7 +99,18 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/tokens/{id}/revoke", a.handleRevokeToken)
 	mux.HandleFunc("GET /api/vendors", a.handleListVendors)
 	mux.HandleFunc("POST /api/vendors/{name}/test", a.handleTestVendor)
+	// Services: SQLite-backed vendor/service config, managed from the dashboard.
+	mux.HandleFunc("GET /api/services", a.handleListServices)
+	mux.HandleFunc("POST /api/services", a.handleCreateService)
+	mux.HandleFunc("GET /api/services/{id}", a.handleGetService)
+	mux.HandleFunc("PATCH /api/services/{id}", a.handlePatchService)
+	mux.HandleFunc("DELETE /api/services/{id}", a.handleDeleteService)
+	mux.HandleFunc("POST /api/services/{id}/credentials", a.handleAddCredential)
+	mux.HandleFunc("DELETE /api/services/{id}/credentials/{cid}", a.handleDeleteCredential)
+	mux.HandleFunc("POST /api/services/{id}/test", a.handleTestService)
+	mux.HandleFunc("GET /api/catalog", a.handleCatalog)
 	mux.HandleFunc("GET /api/settings", a.handleSettings)
+	mux.HandleFunc("PATCH /api/settings", a.handlePatchSettings)
 	mux.HandleFunc("GET /api/pricing", a.handlePricing)
 
 	return a.authMiddleware(mux)

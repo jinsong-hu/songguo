@@ -384,7 +384,7 @@ func (h *handler) resolvePassthrough(w http.ResponseWriter, r *http.Request, tok
 // buildUpstreamRequest constructs the upstream request: the given URL, the
 // original method, a fresh body reader over the buffered bytes, all original
 // headers minus hop-by-hop and Content-Length, and the only mutation —
-// Authorization set to the chosen credential.
+// the credential, applied per the vendor's adapter convention.
 func (h *handler) buildUpstreamRequest(r *http.Request, t router.Target, upURL string, body []byte) (*http.Request, error) {
 	upReq, err := http.NewRequestWithContext(r.Context(), r.Method, upURL, bytesReader(body))
 	if err != nil {
@@ -392,8 +392,26 @@ func (h *handler) buildUpstreamRequest(r *http.Request, t router.Target, upURL s
 	}
 	copyHeaders(upReq.Header, r.Header)
 	upReq.ContentLength = int64(len(body))
-	upReq.Header.Set("Authorization", "Bearer "+t.Credential.APIKey)
+	applyUpstreamAuth(upReq, t.Vendor.Adapter, t.Credential.APIKey)
 	return upReq, nil
+}
+
+// applyUpstreamAuth swaps in the upstream credential using the header style the
+// vendor's adapter expects. This is the proxy's only request mutation; the body
+// is never touched. An unknown/empty adapter defaults to OpenAI-style bearer.
+func applyUpstreamAuth(req *http.Request, adapter, key string) {
+	switch adapter {
+	case config.AdapterAnthropic:
+		// Anthropic authenticates with x-api-key and requires an API version
+		// header; strip any inherited bearer so only the upstream key is sent.
+		req.Header.Del("Authorization")
+		req.Header.Set("X-Api-Key", key)
+		if req.Header.Get("Anthropic-Version") == "" {
+			req.Header.Set("Anthropic-Version", "2023-06-01")
+		}
+	default:
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
 }
 
 // joinQuery appends a raw query string to a URL if non-empty.

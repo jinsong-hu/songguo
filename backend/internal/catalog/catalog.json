@@ -1,0 +1,118 @@
+{
+  "vendors": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "homepage": "https://openai.com",
+      "services": [
+        {
+          "id": "openai-chat",
+          "name": "Chat Completions",
+          "kind": "chat",
+          "adapter": "openai-compatible",
+          "base_url": "https://api.openai.com/v1",
+          "docs": "https://platform.openai.com/docs/api-reference/chat",
+          "models": [
+            { "model": "gpt-4o", "input": 2.5, "output": 10.0, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text", "image"] },
+            { "model": "gpt-4o-mini", "input": 0.15, "output": 0.6, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text", "image"] },
+            { "model": "o3-mini", "input": 1.1, "output": 4.4, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] }
+          ]
+        },
+        {
+          "id": "openai-embeddings",
+          "name": "Embeddings",
+          "kind": "embedding",
+          "adapter": "openai-compatible",
+          "base_url": "https://api.openai.com/v1",
+          "docs": "https://platform.openai.com/docs/api-reference/embeddings",
+          "models": [
+            { "model": "text-embedding-3-small", "input": 0.02, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] },
+            { "model": "text-embedding-3-large", "input": 0.13, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "homepage": "https://anthropic.com",
+      "services": [
+        {
+          "id": "anthropic-messages",
+          "name": "Messages",
+          "kind": "chat",
+          "adapter": "anthropic-compatible",
+          "base_url": "https://api.anthropic.com/v1",
+          "docs": "https://docs.anthropic.com/en/api/messages",
+          "note": "Authenticates with x-api-key + anthropic-version. Point the Anthropic SDK's base_url at http://<songguo>; it appends /v1/messages.",
+          "models": [
+            { "model": "claude-opus-4-20250514", "input": 15.0, "output": 75.0, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text", "image"] },
+            { "model": "claude-sonnet-4-20250514", "input": 3.0, "output": 15.0, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text", "image"] },
+            { "model": "claude-3-5-haiku-20241022", "input": 0.8, "output": 4.0, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "homepage": "https://deepseek.com",
+      "services": [
+        {
+          "id": "deepseek-chat",
+          "name": "Chat",
+          "kind": "chat",
+          "adapter": "openai-compatible",
+          "base_url": "https://api.deepseek.com",
+          "docs": "https://api-docs.deepseek.com",
+          "models": [
+            { "model": "deepseek-chat", "input": 0.27, "output": 1.1, "unit": "per_1m_tokens", "context": 64000, "modalities": ["text"] },
+            { "model": "deepseek-reasoner", "input": 0.55, "output": 2.19, "unit": "per_1m_tokens", "context": 64000, "modalities": ["text"] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "volcengine",
+      "name": "Volcengine 火山引擎 (Ark / 方舟)",
+      "homepage": "https://www.volcengine.com/product/ark",
+      "services": [
+        {
+          "id": "ark-chat",
+          "name": "Ark Chat (Doubao)",
+          "kind": "chat",
+          "adapter": "openai-compatible",
+          "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+          "docs": "https://www.volcengine.com/docs/82379",
+          "note": "OpenAI-compatible base is /api/v3, so /v1/chat/completions maps to /api/v3/chat/completions.",
+          "models": [
+            { "model": "doubao-pro-32k", "input": 0.11, "output": 0.28, "unit": "per_1m_tokens", "context": 32000, "modalities": ["text"] },
+            { "model": "doubao-pro-128k", "input": 0.7, "output": 1.3, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] },
+            { "model": "doubao-lite-32k", "input": 0.04, "output": 0.07, "unit": "per_1m_tokens", "context": 32000, "modalities": ["text"] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dashscope",
+      "name": "Alibaba 阿里百炼 (DashScope / Bailian)",
+      "homepage": "https://www.aliyun.com/product/bailian",
+      "services": [
+        {
+          "id": "dashscope-chat",
+          "name": "Qwen Chat",
+          "kind": "chat",
+          "adapter": "openai-compatible",
+          "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          "docs": "https://help.aliyun.com/zh/model-studio/developer-reference/compatibility-of-openai-with-dashscope",
+          "note": "OpenAI-compatible base is /compatible-mode/v1. Use /x/<vendor>/... for native + async endpoints.",
+          "models": [
+            { "model": "qwen-plus", "input": 0.4, "output": 1.2, "unit": "per_1m_tokens", "context": 131072, "modalities": ["text"] },
+            { "model": "qwen-turbo", "input": 0.05, "output": 0.2, "unit": "per_1m_tokens", "context": 131072, "modalities": ["text"] },
+            { "model": "qwen-max", "input": 1.6, "output": 6.4, "unit": "per_1m_tokens", "context": 32768, "modalities": ["text"] }
+          ]
+        }
+      ]
+    }
+  ]
+}

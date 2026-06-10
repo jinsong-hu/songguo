@@ -114,6 +114,50 @@ func (s *Store) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_calls_model ON calls(model)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_vendor ON calls(vendor)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status)`,
+
+		// Vendor/service config lives in SQLite (managed from the dashboard),
+		// replacing the file-based config.yaml as the source of truth. A service
+		// is one configured upstream: an adapter + base_url + a credential pool
+		// (号池) + the models it serves with their per-model prices.
+		`CREATE TABLE IF NOT EXISTS services (
+			id          TEXT PRIMARY KEY,
+			name        TEXT NOT NULL UNIQUE,
+			vendor      TEXT NOT NULL DEFAULT '',
+			adapter     TEXT NOT NULL DEFAULT 'openai-compatible',
+			base_url    TEXT NOT NULL,
+			priority    INTEGER NOT NULL DEFAULT 0,
+			weight      INTEGER NOT NULL DEFAULT 1,
+			enabled     INTEGER NOT NULL DEFAULT 1,
+			catalog_id  TEXT NOT NULL DEFAULT '',
+			created_at  INTEGER NOT NULL,
+			updated_at  INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS service_credentials (
+			id          TEXT PRIMARY KEY,
+			service_id  TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+			api_key     TEXT NOT NULL,
+			created_at  INTEGER NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS service_models (
+			service_id  TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+			model       TEXT NOT NULL,
+			input       REAL NOT NULL DEFAULT 0,
+			output      REAL NOT NULL DEFAULT 0,
+			unit        TEXT NOT NULL DEFAULT 'per_1m_tokens',
+			PRIMARY KEY (service_id, model)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_service_credentials_service ON service_credentials(service_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_service_models_service ON service_models(service_id)`,
+
+		// Gateway-wide settings as a singleton row, hot-applied via the config
+		// manager when changed from the dashboard.
+		`CREATE TABLE IF NOT EXISTS app_settings (
+			id                INTEGER PRIMARY KEY CHECK (id = 1),
+			capture           INTEGER NOT NULL DEFAULT 0,
+			capture_max_bytes INTEGER NOT NULL DEFAULT 32768,
+			capture_retain    INTEGER NOT NULL DEFAULT 10000
+		)`,
+		`INSERT OR IGNORE INTO app_settings (id, capture, capture_max_bytes, capture_retain) VALUES (1, 0, 32768, 10000)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
