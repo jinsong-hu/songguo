@@ -522,8 +522,7 @@ func (a *api) handleSettings(w http.ResponseWriter, r *http.Request) {
 		settings = snap.Settings()
 	}
 	writeJSON(w, http.StatusOK, settingsView{
-		Listen:          settings.Listen,
-		ConfigPath:      a.configPath,
+		Listen:          a.listenAddr,
 		DBPath:          a.dbPath,
 		AdminProtected:  a.adminKey != "",
 		Version:         a.version,

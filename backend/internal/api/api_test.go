@@ -804,7 +804,7 @@ func TestVendorTestConnectionUnknownVendor(t *testing.T) {
 // --- settings + pricing ---
 
 func TestSettings(t *testing.T) {
-	h := testHandler(t, Deps{AdminKey: "secret", ConfigPath: "/etc/songguo.yaml", DBPath: "/var/songguo.db", Version: "1.2.3"})
+	h := testHandler(t, Deps{AdminKey: "secret", ListenAddr: ":9090", DBPath: "/var/songguo.db", Version: "1.2.3"})
 	rec := do(h, "GET", "/api/settings", "secret", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("settings: code = %d", rec.Code)
@@ -814,14 +814,14 @@ func TestSettings(t *testing.T) {
 	if !sv.AdminProtected {
 		t.Error("admin_protected should be true")
 	}
-	if sv.ConfigPath != "/etc/songguo.yaml" || sv.DBPath != "/var/songguo.db" {
-		t.Errorf("paths = %q / %q", sv.ConfigPath, sv.DBPath)
+	if sv.DBPath != "/var/songguo.db" {
+		t.Errorf("db_path = %q, want /var/songguo.db", sv.DBPath)
 	}
 	if sv.Version != "1.2.3" {
 		t.Errorf("version = %q, want 1.2.3", sv.Version)
 	}
-	if sv.Listen != ":8080" {
-		t.Errorf("listen = %q, want :8080", sv.Listen)
+	if sv.Listen != ":9090" {
+		t.Errorf("listen = %q, want :9090", sv.Listen)
 	}
 	// The admin key must never appear in settings output.
 	if strings.Contains(rec.Body.String(), "secret") {

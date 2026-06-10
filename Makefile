@@ -9,12 +9,12 @@ dev:
 	@echo "backend  -> http://localhost:8080"
 	@echo "frontend -> http://localhost:5173   (open this)"
 	@trap 'kill 0' INT TERM EXIT; \
-		( cd backend && SONGGUO_CONFIG=$(CURDIR)/config.yaml SONGGUO_DB=$(CURDIR)/songguo.db SONGGUO_LISTEN=:8080 go run ./cmd/songguo ) & \
+		( cd backend && SONGGUO_DB=$(CURDIR)/songguo.db SONGGUO_LISTEN=:8080 go run ./cmd/songguo ) & \
 		( cd frontend && npm run dev ) & \
 		wait
 
 backend:
-	cd backend && SONGGUO_CONFIG=$(CURDIR)/config.yaml SONGGUO_DB=$(CURDIR)/songguo.db SONGGUO_LISTEN=:8080 go run ./cmd/songguo
+	cd backend && SONGGUO_DB=$(CURDIR)/songguo.db SONGGUO_LISTEN=:8080 go run ./cmd/songguo
 
 frontend:
 	cd frontend && npm run dev

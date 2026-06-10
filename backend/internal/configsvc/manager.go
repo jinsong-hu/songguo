@@ -9,8 +9,7 @@
 //
 // Robustness: a single incomplete service (no credentials, no models, or
 // disabled) is skipped rather than allowed to fail the whole snapshot build, so
-// a half-configured service can never take routing down. config.yaml survives
-// only as a one-time seed (SeedFromConfig) and is no longer watched.
+// a half-configured service can never take routing down.
 package configsvc
 
 import (
@@ -22,6 +21,16 @@ import (
 	"github.com/songguo/songguo/internal/store"
 	"github.com/songguo/songguo/internal/wire"
 )
+
+// DefaultWires is the wire allowlist granted to a service when none is given
+// explicitly, keyed by the service's adapter (auth scheme). Catalog presets
+// override this with precise per-service lists.
+func DefaultWires(adapter string) []string {
+	if adapter == config.AdapterAnthropic {
+		return []string{"anthropic/messages", "anthropic/models"}
+	}
+	return []string{"openai/chat", "openai/completions", "openai/embeddings", "openai/models"}
+}
 
 // Manager owns the live snapshot derived from the store.
 type Manager struct {

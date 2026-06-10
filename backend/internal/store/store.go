@@ -131,7 +131,8 @@ func (s *Store) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status)`,
 
 		// Vendor/service config lives in SQLite (managed from the dashboard),
-		// replacing the file-based config.yaml as the source of truth. A service
+		// Vendor/service config lives in SQLite (managed from the dashboard),
+		// the source of truth for routing. A service
 		// is one configured upstream: an adapter + base_url + a single API key +
 		// the models it serves with their per-model prices.
 		`CREATE TABLE IF NOT EXISTS services (

@@ -25,7 +25,7 @@ Songguo is **single-tenant, multi-token**: one owner, many scoped keys. No accou
 - **WebSocket passthrough** — realtime APIs (OpenAI Realtime, streaming ASR/TTS) proxied over `/x/<vendor>/`: the handshake is replayed with the credential swapped, frames are piped untouched, and the session is metered by bytes + duration.
 - **Opt-in request/response capture** — store the raw request + response bodies (headers redacted, size-capped, retained) and inspect them by expanding a call in the dashboard. Off by default; per-token override.
 - **Dashboard** (light + dark, pine-green) — Overview (spend, runway, by-modality, latency percentiles, recent calls with filters + CSV/JSON export, expand a row to view its captured request/response), **Services** (manage upstreams: keys, models, prices, health/connectivity test), **Catalog** (browse known providers and add one in a click), Tokens (CRUD with budget bars), Settings.
-- **Vendor config in SQLite, managed from the dashboard** — add/edit services, rotate keys, and set prices on the **Services**/**Catalog** pages; changes apply immediately with no restart. A legacy `config.yaml` is imported once on first boot (if the DB has no services yet) and is otherwise ignored.
+- **Vendor config in SQLite, managed from the dashboard** — add/edit services, rotate keys, and set prices on the **Services**/**Catalog** pages; changes apply immediately with no restart.
 - **One binary.** Pure-Go SQLite (no cgo), the dashboard embedded via `go:embed`.
 
 ## Quickstart
@@ -41,8 +41,6 @@ export SONGGUO_ADMIN_KEY="$(openssl rand -hex 16)"   # gates the dashboard + adm
 
 # 3. Add a service in the dashboard
 #    Open http://localhost:8080/, go to Catalog, pick a provider, paste your API key.
-#    (Or migrate an existing setup: `cp config.example.yaml config.yaml` before first
-#     boot and Songguo imports its vendors into SQLite once.)
 ```
 
 The dashboard is also pre-built and committed (in `backend/web/dist`), so if you already have it built you can compile the binary with Go alone: `cd backend && go build -o ../songguo ./cmd/songguo`.
@@ -61,21 +59,7 @@ The call is forwarded to whichever vendor serves `gpt-4o`, metered into the call
 
 ## Configuration
 
-Services (an upstream's adapter, base URL, credential pool, and per-model prices) and tokens both live in **SQLite** and are managed from the dashboard — the **Services** page to add/edit them by hand, the **Catalog** page to add a known provider in one click. A new service speaks one of two adapters: `openai-compatible` (bearer auth) or `anthropic-compatible` (`x-api-key` + `anthropic-version`).
-
-A legacy `config.yaml` is supported only as a **one-time import**: on first boot, if the database has no services yet and the file parses, its vendors/keys/prices are imported into SQLite (then the file is ignored). See [config.example.yaml](config.example.yaml) for that import schema — the same shape projected into a service:
-
-```yaml
-vendors:
-  - name: openai-main
-    base_url: https://api.openai.com/v1   # vendor's OpenAI-compatible base, INCLUDING any version/path prefix
-    served_models: [gpt-4o, text-embedding-3-small]
-    priority: 1                            # lower = preferred
-    weight: 1                              # weighted round-robin within a priority
-    credential: { id: openai-key-1, api_key: sk-... }   # one key per service
-    prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
-```
+Services (an upstream's adapter, base URL, credential, and per-model prices) and tokens both live in **SQLite** and are managed from the dashboard — the **Services** page to add/edit them by hand, the **Catalog** page to add a known provider in one click. A new service speaks one of two adapters: `openai-compatible` (bearer auth) or `anthropic-compatible` (`x-api-key` + `anthropic-version`).
 
 ### Routing modes
 
@@ -88,14 +72,13 @@ Songguo's transparent proxy serves two shapes from one handler, chosen by the re
 
 ### Request/response capture (optional)
 
-Off by default. Toggle capture from the dashboard **Settings** page (or seed it via `settings.capture: true` in an imported `config.yaml`) to record the raw request + response bodies for each call — view them by expanding a call row in the dashboard. Bodies are size-capped (`capture_max_bytes`, default 32 KB) and pruned to the newest `capture_retain` rows (default 10000); captured headers are redacted (no `Authorization`). A token can override the global setting (`capture: true|false`). WebSocket sessions record metadata only (bytes/duration), not frames.
+Off by default. Toggle capture from the dashboard **Settings** page to record the raw request + response bodies for each call — view them by expanding a call row in the dashboard. Bodies are size-capped (`capture_max_bytes`, default 32 KB) and pruned to the newest `capture_retain` rows (default 10000); captured headers are redacted (no `Authorization`). A token can override the global setting (`capture: true|false`). WebSocket sessions record metadata only (bytes/duration), not frames.
 
 ### Environment variables
 
 | Var | Default | Purpose |
 |-----|---------|---------|
 | `SONGGUO_LISTEN` | `:8080` | Listen address |
-| `SONGGUO_CONFIG` | `./config.yaml` | One-time vendor import seed (used only if the DB has no services on first boot) |
 | `SONGGUO_DB` | `./songguo.db` | SQLite path (auto-migrated); source of truth for services + tokens |
 | `SONGGUO_ADMIN_KEY` | _(empty)_ | Admin/dashboard key. **If empty, the admin API is unprotected** (a warning is logged). |
 
@@ -123,7 +106,7 @@ backend/
   cmd/songguo   main entrypoint
   internal/
     config/    config types + validation, projected into the routing snapshot
-    configsvc/  builds the live snapshot from SQLite service rows (+ one-time YAML seed)
+    configsvc/  builds the live snapshot from SQLite service rows
     catalog/    embedded read-only preset directory (providers/services/models)
     store/      SQLite: services + credentials + prices, call log, tokens, aggregations
     calls/      call-log domain types

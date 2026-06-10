@@ -243,11 +243,9 @@ type testVendorView struct {
 // key.
 type settingsView struct {
 	Listen          string `json:"listen"`
-	ConfigPath      string `json:"config_path"`
 	DBPath          string `json:"db_path"`
 	AdminProtected  bool   `json:"admin_protected"`
 	Version         string `json:"version"`
-	WatchMode       string `json:"watch_mode,omitempty"`
 	Capture         bool   `json:"capture"`
 	CaptureMaxBytes int    `json:"capture_max_bytes"`
 	CaptureRetain   int    `json:"capture_retain"`

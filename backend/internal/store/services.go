@@ -88,8 +88,7 @@ type AppSettings struct {
 	CaptureRetain   int
 }
 
-// CountServices returns the number of configured services. Used to decide
-// whether to seed from a legacy config.yaml on first boot.
+// CountServices returns the number of configured services.
 func (s *Store) CountServices() (int, error) {
 	var n int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM services`).Scan(&n); err != nil {

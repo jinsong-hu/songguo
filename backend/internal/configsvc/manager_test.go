@@ -3,7 +3,6 @@ package configsvc
 import (
 	"io"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -86,55 +85,5 @@ func TestManagerSkipsIncompleteServices(t *testing.T) {
 	}
 	if got := len(m.Current().Vendors()); got != 2 {
 		t.Fatalf("after completing draft, vendors = %d, want 2", got)
-	}
-}
-
-func TestSeedFromConfig(t *testing.T) {
-	st := openTestStore(t)
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	const yaml = `
-settings:
-  capture: true
-vendors:
-  - name: openai
-    base_url: https://api.openai.com/v1
-    served_models: [gpt-4o, text-embedding-3-small]
-    credential: {id: k1, api_key: sk-aaa}
-    prices:
-      gpt-4o: { input: 2.5, output: 10, unit: per_1m_tokens }
-`
-	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	n, err := SeedFromConfig(st, path, quietLogger())
-	if err != nil {
-		t.Fatalf("SeedFromConfig: %v", err)
-	}
-	if n != 1 {
-		t.Fatalf("imported = %d, want 1", n)
-	}
-
-	svcs, _ := st.ListServices()
-	if len(svcs) != 1 {
-		t.Fatalf("services = %d, want 1", len(svcs))
-	}
-	if len(svcs[0].Models) != 2 {
-		t.Errorf("models = %d, want 2 (served_models become models)", len(svcs[0].Models))
-	}
-	as, _ := st.GetAppSettings()
-	if !as.Capture {
-		t.Error("expected capture setting carried over from yaml")
-	}
-
-	// Second seed is a no-op (store already has services).
-	n2, err := SeedFromConfig(st, path, quietLogger())
-	if err != nil {
-		t.Fatalf("second SeedFromConfig: %v", err)
-	}
-	if n2 != 0 {
-		t.Errorf("second seed imported = %d, want 0", n2)
 	}
 }

@@ -1,19 +1,14 @@
-// Package config loads, validates, and watches the file-based vendor config.
-//
-// Vendors (upstream AI providers) are configured in a YAML file and
-// hot-reloaded via fsnotify, so adding a vendor, key, model, or price takes
-// effect with no server restart. Consumer tokens are NOT stored here; they
-// live in SQLite.
+// Package config defines the gateway's vendor and settings types, validates
+// them, and builds an immutable routing Snapshot. The SQLite-backed config
+// manager assembles a Config from stored service rows and calls Build; no file
+// parsing happens in this package.
 package config
 
 import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"strconv"
-
-	"gopkg.in/yaml.v3"
 )
 
 // Default capture tuning, applied during normalization when a value is unset
@@ -25,14 +20,9 @@ const (
 
 // Settings holds gateway-wide options.
 type Settings struct {
-	Listen string `yaml:"listen"`
-
-	// Capture toggles opt-in request/response body capture. Off by default.
-	Capture bool `yaml:"capture"`
-	// CaptureMaxBytes caps each stored body (per side). Defaults to 32768.
-	CaptureMaxBytes int `yaml:"capture_max_bytes"`
-	// CaptureRetain keeps this many most-recent payload rows. Defaults to 10000.
-	CaptureRetain int `yaml:"capture_retain"`
+	Capture         bool   `yaml:"capture"`
+	CaptureMaxBytes int    `yaml:"capture_max_bytes"`
+	CaptureRetain   int    `yaml:"capture_retain"`
 }
 
 // Credential is a vendor's upstream API key. A vendor holds exactly one; to
@@ -54,9 +44,7 @@ type Price struct {
 }
 
 // Adapter names the auth scheme a vendor expects (header style applied when
-// the proxy swaps in the credential). It says nothing about usage extraction,
-// which is resolved per-request via the vendor's enabled wires (see
-// internal/wire). An empty adapter normalizes to AdapterOpenAI.
+// the proxy swaps in the credential).
 const (
 	AdapterOpenAI    = "openai-compatible"
 	AdapterAnthropic = "anthropic-compatible"
@@ -81,26 +69,15 @@ type Vendor struct {
 	Quirks         map[string]string `yaml:"quirks"`
 }
 
-// Config is the root of the YAML document.
+// Config is the root configuration assembled from stored service rows.
 type Config struct {
 	Settings Settings `yaml:"settings"`
 	Vendors  []Vendor `yaml:"vendors"`
 }
 
-// Parse unmarshals YAML, normalizes defaults, validates, and builds an
-// immutable Snapshot with a precomputed model->vendors index.
-func Parse(data []byte) (*Snapshot, error) {
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
-	}
-	return Build(cfg)
-}
-
 // Build normalizes, validates, and indexes an in-memory Config into an
-// immutable Snapshot. It is the source-agnostic core shared by the YAML path
-// (Parse) and the SQLite-backed config manager, which assembles a Config from
-// stored service rows. Build takes ownership of cfg's slices/maps.
+// immutable Snapshot. It is the core used by the SQLite-backed config manager,
+// which assembles a Config from stored service rows.
 func Build(cfg Config) (*Snapshot, error) {
 	normalize(&cfg)
 
@@ -111,29 +88,8 @@ func Build(cfg Config) (*Snapshot, error) {
 	return newSnapshot(cfg), nil
 }
 
-// LoadFile reads the file at path and parses it.
-func LoadFile(path string) (*Snapshot, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read config %q: %w", path, err)
-	}
-	snap, err := Parse(data)
-	if err != nil {
-		return nil, fmt.Errorf("load config %q: %w", path, err)
-	}
-	return snap, nil
-}
-
-// isNotExist reports whether err (possibly wrapped) is a "file not found"
-// error, distinguishing a missing config from a malformed one.
-func isNotExist(err error) bool {
-	return errors.Is(err, os.ErrNotExist)
-}
-
 // normalize applies defaults that should hold regardless of validity.
 func normalize(cfg *Config) {
-	// Capture caps fall back to sane defaults when unset or non-positive, so a
-	// 0/negative value never disables a body to zero length.
 	if cfg.Settings.CaptureMaxBytes <= 0 {
 		cfg.Settings.CaptureMaxBytes = defaultCaptureMaxBytes
 	}

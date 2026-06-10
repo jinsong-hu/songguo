@@ -35,7 +35,7 @@ PY
 MOCK_PID=$!
 
 # 2. Gateway.
-SONGGUO_DB=/tmp/songguo-e2e.db SONGGUO_CONFIG=/tmp/nonexistent.yaml SONGGUO_LISTEN=127.0.0.1:18080 ./songguo-e2e-bin >/tmp/songguo-e2e.log 2>&1 &
+SONGGUO_DB=/tmp/songguo-e2e.db SONGGUO_LISTEN=127.0.0.1:18080 ./songguo-e2e-bin >/tmp/songguo-e2e.log 2>&1 &
 GW_PID=$!
 
 for i in $(seq 1 50); do

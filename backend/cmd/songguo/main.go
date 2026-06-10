@@ -29,7 +29,6 @@ func main() {
 	slog.SetDefault(logger)
 
 	listen := getenv("SONGGUO_LISTEN", ":8080")
-	configPath := getenv("SONGGUO_CONFIG", "./config.yaml")
 	dbPath := getenv("SONGGUO_DB", "./songguo.db")
 	adminKey := os.Getenv("SONGGUO_ADMIN_KEY")
 
@@ -43,13 +42,6 @@ func main() {
 		os.Exit(1)
 	}
 	defer st.Close()
-
-	// Vendor/service config lives in SQLite and is managed from the dashboard.
-	// On first boot (no services yet) import a legacy config.yaml if present, so
-	// existing file-based deployments carry over. The file is not watched.
-	if _, err := configsvc.SeedFromConfig(st, configPath, logger); err != nil {
-		logger.Error("config seed failed", "err", err)
-	}
 
 	manager, err := configsvc.NewManager(st, logger)
 	if err != nil {
@@ -72,7 +64,7 @@ func main() {
 		AdminKey:   adminKey,
 		Logger:     logger,
 		Version:    "dev",
-		ConfigPath: configPath,
+		ListenAddr: listen,
 		DBPath:     dbPath,
 	})
 

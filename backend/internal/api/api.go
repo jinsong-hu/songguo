@@ -29,7 +29,7 @@ type Deps struct {
 	HTTPClient *http.Client     // for vendor test-connection; default if nil
 	Now        func() time.Time // defaults to time.Now
 	Version    string           // build version string, default "dev"
-	ConfigPath string
+	ListenAddr string           // from SONGGUO_LISTEN; shown in settings
 	DBPath     string
 }
 
@@ -43,7 +43,7 @@ type api struct {
 	client     *http.Client
 	now        func() time.Time
 	version    string
-	configPath string
+	listenAddr string
 	dbPath     string
 
 	warnOnce sync.Once
@@ -83,7 +83,7 @@ func NewHandler(d Deps) http.Handler {
 		client:     client,
 		now:        now,
 		version:    version,
-		configPath: d.ConfigPath,
+		listenAddr: d.ListenAddr,
 		dbPath:     d.DBPath,
 	}
 
