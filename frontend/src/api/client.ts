@@ -4,15 +4,15 @@ import type {
   CallTrace,
   Catalog,
   CreateProviderBody,
-  CreateTokenBody,
+  CreateUserBody,
   Overview,
   PatchProviderBody,
-  PatchTokenBody,
+  PatchUserBody,
   PricingRow,
   Provider,
   Service,
   Settings,
-  Token,
+  User,
   UsageSeries,
   Vendor,
   VendorTestResult,
@@ -121,7 +121,7 @@ function callsQuery(f: CallsFilters): string {
   return qs({
     since: f.since,
     until: f.until,
-    token_id: f.token_id,
+    user_id: f.user_id,
     model: f.model,
     vendor: f.vendor,
     status: f.status && f.status !== 'all' ? f.status : undefined,
@@ -144,19 +144,19 @@ export const api = {
   /** Fetch the captured request/response trace for a call. 404 if none. */
   trace: (id: number) => request<CallTrace>(`/calls/${id}/trace`),
 
-  tokens: () => request<Token[]>('/tokens'),
+  users: () => request<User[]>('/users'),
 
-  createToken: (body: CreateTokenBody) =>
-    request<Token>('/tokens', { method: 'POST', body: JSON.stringify(body) }),
+  createUser: (body: CreateUserBody) =>
+    request<User>('/users', { method: 'POST', body: JSON.stringify(body) }),
 
-  patchToken: (id: string, body: PatchTokenBody) =>
-    request<Token>(`/tokens/${encodeURIComponent(id)}`, {
+  patchUser: (id: string, body: PatchUserBody) =>
+    request<User>(`/users/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
 
-  revokeToken: (id: string) =>
-    request<Token>(`/tokens/${encodeURIComponent(id)}/revoke`, { method: 'POST' }),
+  revokeUser: (id: string) =>
+    request<User>(`/users/${encodeURIComponent(id)}/revoke`, { method: 'POST' }),
 
   vendors: () => request<Vendor[]>('/vendors'),
 

@@ -13,7 +13,7 @@ import (
 // tests have valid foreign keys to attach to.
 func appendBareCall(t *testing.T, s *Store) int64 {
 	t.Helper()
-	id, err := s.AppendCall(calls.Entry{TokenID: "tok", Model: "m", Status: 200})
+	id, err := s.AppendCall(calls.Entry{UserID: "tok", Model: "m", Status: 200})
 	if err != nil {
 		t.Fatalf("AppendCall: %v", err)
 	}
@@ -173,37 +173,37 @@ func TestHasPayloads(t *testing.T) {
 	}
 }
 
-func TestTokenCaptureOverride(t *testing.T) {
+func TestUserCaptureOverride(t *testing.T) {
 	s := openTestStore(t)
 
 	// Default: capture is nil (inherit global).
-	inherit, _, err := s.CreateToken(NewToken{Name: "inherit"})
+	inherit, _, err := s.CreateUser(NewUser{Name: "inherit"})
 	if err != nil {
-		t.Fatalf("CreateToken(inherit): %v", err)
+		t.Fatalf("CreateUser(inherit): %v", err)
 	}
 	if inherit.Capture != nil {
 		t.Errorf("default Capture = %v, want nil (inherit)", *inherit.Capture)
 	}
-	got, err := s.GetToken(inherit.ID)
+	got, err := s.GetUser(inherit.ID)
 	if err != nil {
-		t.Fatalf("GetToken: %v", err)
+		t.Fatalf("GetUser: %v", err)
 	}
 	if got.Capture != nil {
-		t.Errorf("GetToken Capture = %v, want nil", *got.Capture)
+		t.Errorf("GetUser Capture = %v, want nil", *got.Capture)
 	}
 
 	// Create with explicit capture=true.
 	on := true
-	created, _, err := s.CreateToken(NewToken{Name: "on", Capture: &on})
+	created, _, err := s.CreateUser(NewUser{Name: "on", Capture: &on})
 	if err != nil {
-		t.Fatalf("CreateToken(on): %v", err)
+		t.Fatalf("CreateUser(on): %v", err)
 	}
 	if created.Capture == nil || !*created.Capture {
 		t.Errorf("created Capture = %v, want true", created.Capture)
 	}
-	reloaded, err := s.GetToken(created.ID)
+	reloaded, err := s.GetUser(created.ID)
 	if err != nil {
-		t.Fatalf("GetToken(on): %v", err)
+		t.Fatalf("GetUser(on): %v", err)
 	}
 	if reloaded.Capture == nil || !*reloaded.Capture {
 		t.Errorf("reloaded Capture = %v, want true", reloaded.Capture)
@@ -211,18 +211,18 @@ func TestTokenCaptureOverride(t *testing.T) {
 
 	// Update to capture=false on the inherit token.
 	off := false
-	upd, err := s.UpdateToken(inherit.ID, TokenUpdate{Capture: &off})
+	upd, err := s.UpdateUser(inherit.ID, UserUpdate{Capture: &off})
 	if err != nil {
-		t.Fatalf("UpdateToken: %v", err)
+		t.Fatalf("UpdateUser: %v", err)
 	}
 	if upd.Capture == nil || *upd.Capture {
 		t.Errorf("after update Capture = %v, want false", upd.Capture)
 	}
 
 	// Updating a different field must leave capture unchanged.
-	upd2, err := s.UpdateToken(created.ID, TokenUpdate{Name: ptrS("renamed")})
+	upd2, err := s.UpdateUser(created.ID, UserUpdate{Name: ptrS("renamed")})
 	if err != nil {
-		t.Fatalf("UpdateToken(name only): %v", err)
+		t.Fatalf("UpdateUser(name only): %v", err)
 	}
 	if upd2.Capture == nil || !*upd2.Capture {
 		t.Errorf("capture changed by unrelated update: %v", upd2.Capture)

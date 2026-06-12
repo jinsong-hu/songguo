@@ -62,7 +62,7 @@ func (a *api) handleCallsExport(w http.ResponseWriter, r *http.Request) {
 		for _, e := range entries {
 			_ = cw.Write([]string{
 				e.TS.UTC().Format(time.RFC3339),
-				e.TokenID,
+				e.UserID,
 				e.Model,
 				string(e.Modality),
 				e.Vendor,

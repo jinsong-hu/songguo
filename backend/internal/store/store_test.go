@@ -33,8 +33,8 @@ func TestMigrationsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Open: %v", err)
 	}
-	if _, _, err := s1.CreateToken(NewToken{Name: "a"}); err != nil {
-		t.Fatalf("CreateToken: %v", err)
+	if _, _, err := s1.CreateUser(NewUser{Name: "a"}); err != nil {
+		t.Fatalf("CreateUser: %v", err)
 	}
 	if err := s1.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -46,27 +46,27 @@ func TestMigrationsIdempotent(t *testing.T) {
 	}
 	defer s2.Close()
 
-	toks, err := s2.ListTokens()
+	toks, err := s2.ListUsers()
 	if err != nil {
-		t.Fatalf("ListTokens: %v", err)
+		t.Fatalf("ListUsers: %v", err)
 	}
 	if len(toks) != 1 {
 		t.Fatalf("expected 1 token after reopen, got %d", len(toks))
 	}
 }
 
-func TestTokenLifecycle(t *testing.T) {
+func TestUserLifecycle(t *testing.T) {
 	s := openTestStore(t)
 
 	budget := 12.5
-	tok, plaintext, err := s.CreateToken(NewToken{
+	tok, plaintext, err := s.CreateUser(NewUser{
 		Name:   "primary",
 		Budget: &budget,
 		Scope:  []string{"gpt-4o", "text-embedding-3-small"},
 		RPM:    60,
 	})
 	if err != nil {
-		t.Fatalf("CreateToken: %v", err)
+		t.Fatalf("CreateUser: %v", err)
 	}
 
 	// Plaintext returned once, with expected shape and prefix.
@@ -92,27 +92,27 @@ func TestTokenLifecycle(t *testing.T) {
 		t.Errorf("new token should be active, got RevokedAt=%v", tok.RevokedAt)
 	}
 
-	// GetToken round-trips.
-	got, err := s.GetToken(tok.ID)
+	// GetUser round-trips.
+	got, err := s.GetUser(tok.ID)
 	if err != nil {
-		t.Fatalf("GetToken: %v", err)
+		t.Fatalf("GetUser: %v", err)
 	}
 	if got.ID != tok.ID || got.Name != "primary" {
-		t.Errorf("GetToken = %+v", got)
+		t.Errorf("GetUser = %+v", got)
 	}
 
-	// GetTokenByKey works for the active token.
-	byKey, err := s.GetTokenByKey(plaintext)
+	// GetUserByKey works for the active token.
+	byKey, err := s.GetUserByKey(plaintext)
 	if err != nil {
-		t.Fatalf("GetTokenByKey: %v", err)
+		t.Fatalf("GetUserByKey: %v", err)
 	}
 	if byKey.ID != tok.ID {
-		t.Errorf("GetTokenByKey id = %q, want %q", byKey.ID, tok.ID)
+		t.Errorf("GetUserByKey id = %q, want %q", byKey.ID, tok.ID)
 	}
 
 	// Wrong key -> ErrNotFound.
-	if _, err := s.GetTokenByKey("sg-nonexistent"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("GetTokenByKey(wrong) err = %v, want ErrNotFound", err)
+	if _, err := s.GetUserByKey("sg-nonexistent"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetUserByKey(wrong) err = %v, want ErrNotFound", err)
 	}
 
 	// HashKey is deterministic and stored (not the plaintext).
@@ -121,12 +121,12 @@ func TestTokenLifecycle(t *testing.T) {
 	}
 
 	// Update name/budget/scope/rpm; nil leaves unchanged.
-	upd, err := s.UpdateToken(tok.ID, TokenUpdate{
+	upd, err := s.UpdateUser(tok.ID, UserUpdate{
 		Name:  ptrS("renamed"),
 		Scope: &[]string{"only-model"},
 	})
 	if err != nil {
-		t.Fatalf("UpdateToken: %v", err)
+		t.Fatalf("UpdateUser: %v", err)
 	}
 	if upd.Name != "renamed" {
 		t.Errorf("after update Name = %q, want renamed", upd.Name)
@@ -141,38 +141,38 @@ func TestTokenLifecycle(t *testing.T) {
 		t.Errorf("RPM should be unchanged, got %d", upd.RPM)
 	}
 
-	// Revoke -> active lookup fails, GetToken still works (shows RevokedAt).
-	if err := s.RevokeToken(tok.ID); err != nil {
+	// Revoke -> active lookup fails, GetUser still works (shows RevokedAt).
+	if err := s.RevokeUser(tok.ID); err != nil {
 		t.Fatalf("RevokeToken: %v", err)
 	}
-	if _, err := s.GetTokenByKey(plaintext); !errors.Is(err, ErrNotFound) {
-		t.Errorf("revoked GetTokenByKey err = %v, want ErrNotFound", err)
+	if _, err := s.GetUserByKey(plaintext); !errors.Is(err, ErrNotFound) {
+		t.Errorf("revoked GetUserByKey err = %v, want ErrNotFound", err)
 	}
-	revoked, err := s.GetToken(tok.ID)
+	revoked, err := s.GetUser(tok.ID)
 	if err != nil {
-		t.Fatalf("GetToken after revoke: %v", err)
+		t.Fatalf("GetUser after revoke: %v", err)
 	}
 	if revoked.RevokedAt == nil {
 		t.Error("expected RevokedAt set after revoke")
 	}
 
 	// Unknown ids -> ErrNotFound.
-	if _, err := s.GetToken("missing"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("GetToken(missing) err = %v, want ErrNotFound", err)
+	if _, err := s.GetUser("missing"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetUser(missing) err = %v, want ErrNotFound", err)
 	}
-	if err := s.RevokeToken("missing"); !errors.Is(err, ErrNotFound) {
+	if err := s.RevokeUser("missing"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("RevokeToken(missing) err = %v, want ErrNotFound", err)
 	}
-	if _, err := s.UpdateToken("missing", TokenUpdate{Name: ptrS("x")}); !errors.Is(err, ErrNotFound) {
-		t.Errorf("UpdateToken(missing) err = %v, want ErrNotFound", err)
+	if _, err := s.UpdateUser("missing", UserUpdate{Name: ptrS("x")}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("UpdateUser(missing) err = %v, want ErrNotFound", err)
 	}
 }
 
-func TestCreateTokenNilBudgetAndScope(t *testing.T) {
+func TestCreateUserNilBudgetAndScope(t *testing.T) {
 	s := openTestStore(t)
-	tok, _, err := s.CreateToken(NewToken{Name: "free"})
+	tok, _, err := s.CreateUser(NewUser{Name: "free"})
 	if err != nil {
-		t.Fatalf("CreateToken: %v", err)
+		t.Fatalf("CreateUser: %v", err)
 	}
 	if tok.Budget != nil {
 		t.Errorf("nil budget should stay nil (unlimited), got %v", *tok.Budget)
@@ -182,19 +182,19 @@ func TestCreateTokenNilBudgetAndScope(t *testing.T) {
 	}
 }
 
-func TestListTokens(t *testing.T) {
+func TestListUsers(t *testing.T) {
 	s := openTestStore(t)
 	for _, n := range []string{"one", "two", "three"} {
-		if _, _, err := s.CreateToken(NewToken{Name: n}); err != nil {
-			t.Fatalf("CreateToken(%s): %v", n, err)
+		if _, _, err := s.CreateUser(NewUser{Name: n}); err != nil {
+			t.Fatalf("CreateUser(%s): %v", n, err)
 		}
 	}
-	toks, err := s.ListTokens()
+	toks, err := s.ListUsers()
 	if err != nil {
-		t.Fatalf("ListTokens: %v", err)
+		t.Fatalf("ListUsers: %v", err)
 	}
 	if len(toks) != 3 {
-		t.Fatalf("ListTokens len = %d, want 3", len(toks))
+		t.Fatalf("ListUsers len = %d, want 3", len(toks))
 	}
 }
 
@@ -205,24 +205,24 @@ func TestCallsAppendQueryAndAggregations(t *testing.T) {
 	st200 := 200
 	entries := []calls.Entry{
 		{
-			TS: base, TokenID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat,
+			TS: base, UserID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat,
 			Vendor: "openai", CredentialID: "c1", Attempt: 1, Status: 200,
 			Usage: map[string]any{"prompt_tokens": float64(10), "completion_tokens": float64(5)},
 			Cost:  0.10, LatencyMS: 120, Stream: true,
 			Tags: map[string]string{"team": "eng"},
 		},
 		{
-			TS: base.Add(1 * time.Minute), TokenID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat,
+			TS: base.Add(1 * time.Minute), UserID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat,
 			Vendor: "openai", CredentialID: "c1", Attempt: 1, Status: 500, Err: "upstream error",
 			Cost: 0.05, LatencyMS: 300,
 		},
 		{
-			TS: base.Add(2 * time.Minute), TokenID: "tokB", Model: "text-embedding-3-small",
+			TS: base.Add(2 * time.Minute), UserID: "tokB", Model: "text-embedding-3-small",
 			Modality: calls.ModalityEmbedding, Vendor: "openai", CredentialID: "c2", Attempt: 1, Status: 200,
 			Usage: map[string]any{"total_tokens": float64(42)}, Cost: 0.02, LatencyMS: 40,
 		},
 		{
-			TS: base.Add(3 * time.Minute), TokenID: "tokB", Model: "dall-e-3",
+			TS: base.Add(3 * time.Minute), UserID: "tokB", Model: "dall-e-3",
 			Modality: calls.ModalityImage, Vendor: "openai", CredentialID: "c2", Attempt: 2, Status: 200,
 			Cost: 0.40, LatencyMS: 900,
 		},
@@ -277,7 +277,7 @@ func TestCallsAppendQueryAndAggregations(t *testing.T) {
 	}
 
 	// Filter by token.
-	tokA, err := s.QueryCalls(CallFilter{TokenID: "tokA"})
+	tokA, err := s.QueryCalls(CallFilter{UserID: "tokA"})
 	if err != nil {
 		t.Fatalf("QueryCalls(tokA): %v", err)
 	}
@@ -338,7 +338,7 @@ func TestCallsAppendQueryAndAggregations(t *testing.T) {
 	if total != 4 {
 		t.Errorf("CountCalls all = %d, want 4", total)
 	}
-	countA, err := s.CountCalls(CallFilter{TokenID: "tokA", Limit: 1})
+	countA, err := s.CountCalls(CallFilter{UserID: "tokA", Limit: 1})
 	if err != nil {
 		t.Fatalf("CountCalls(tokA): %v", err)
 	}
@@ -346,29 +346,29 @@ func TestCallsAppendQueryAndAggregations(t *testing.T) {
 		t.Errorf("CountCalls(tokA) = %d, want 2", countA)
 	}
 
-	// SpendByToken sums all rows of a token (incl. error rows).
-	spendA, err := s.SpendByToken("tokA", nil)
+	// SpendByUser sums all rows of a token (incl. error rows).
+	spendA, err := s.SpendByUser("tokA", nil)
 	if err != nil {
-		t.Fatalf("SpendByToken: %v", err)
+		t.Fatalf("SpendByUser: %v", err)
 	}
 	if !approx(spendA, 0.15) {
-		t.Errorf("SpendByToken(tokA) = %v, want 0.15", spendA)
+		t.Errorf("SpendByUser(tokA) = %v, want 0.15", spendA)
 	}
 	// since filter.
-	spendASince, err := s.SpendByToken("tokA", &since)
+	spendASince, err := s.SpendByUser("tokA", &since)
 	if err != nil {
-		t.Fatalf("SpendByToken(since): %v", err)
+		t.Fatalf("SpendByUser(since): %v", err)
 	}
 	if !approx(spendASince, 0.05) {
-		t.Errorf("SpendByToken(tokA, since) = %v, want 0.05", spendASince)
+		t.Errorf("SpendByUser(tokA, since) = %v, want 0.05", spendASince)
 	}
 	// unknown token -> 0, no error.
-	spendNone, err := s.SpendByToken("nope", nil)
+	spendNone, err := s.SpendByUser("nope", nil)
 	if err != nil {
-		t.Fatalf("SpendByToken(nope): %v", err)
+		t.Fatalf("SpendByUser(nope): %v", err)
 	}
 	if spendNone != 0 {
-		t.Errorf("SpendByToken(nope) = %v, want 0", spendNone)
+		t.Errorf("SpendByUser(nope) = %v, want 0", spendNone)
 	}
 
 	// TotalSpend across all and within a window.
@@ -399,11 +399,11 @@ func TestCallsAppendQueryAndAggregations(t *testing.T) {
 func TestAppendCallDefaults(t *testing.T) {
 	s := openTestStore(t)
 	before := time.Now()
-	id, err := s.AppendCall(calls.Entry{TokenID: "x"}) // zero TS, modality, attempt
+	id, err := s.AppendCall(calls.Entry{UserID: "x"}) // zero TS, modality, attempt
 	if err != nil {
 		t.Fatalf("AppendCall: %v", err)
 	}
-	got, err := s.QueryCalls(CallFilter{TokenID: "x"})
+	got, err := s.QueryCalls(CallFilter{UserID: "x"})
 	if err != nil || len(got) != 1 {
 		t.Fatalf("QueryCalls: %v len=%d", err, len(got))
 	}

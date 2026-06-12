@@ -17,7 +17,7 @@ import (
 func seedTracedCall(t *testing.T, s *store.Store) int64 {
 	t.Helper()
 	id, err := s.AppendCall(calls.Entry{
-		TS: time.Now(), TokenID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat,
+		TS: time.Now(), UserID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat,
 		Vendor: "openai", Status: 200, Cost: 0.10, LatencyMS: 100,
 	})
 	if err != nil {
@@ -90,7 +90,7 @@ func TestCallTraceRoundTrip(t *testing.T) {
 func TestCallTraceNotFound(t *testing.T) {
 	s := newTestStore(t)
 	// A call with no payload.
-	id, err := s.AppendCall(calls.Entry{TokenID: "x", Status: 200})
+	id, err := s.AppendCall(calls.Entry{UserID: "x", Status: 200})
 	if err != nil {
 		t.Fatalf("AppendCall: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestCallsListHasTrace(t *testing.T) {
 	s := newTestStore(t)
 	traced := seedTracedCall(t, s)
 	// A second call WITHOUT a payload.
-	untraced, err := s.AppendCall(calls.Entry{TS: time.Now(), TokenID: "tokA", Model: "m", Vendor: "openai", Status: 200})
+	untraced, err := s.AppendCall(calls.Entry{TS: time.Now(), UserID: "tokA", Model: "m", Vendor: "openai", Status: 200})
 	if err != nil {
 		t.Fatalf("AppendCall: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestTokenCaptureCreatePatch(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create: code = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	var created tokenView
+	var created userView
 	decodeBody(t, rec, &created)
 	if created.Capture == nil || !*created.Capture {
 		t.Errorf("created capture = %v, want true", created.Capture)
@@ -206,7 +206,7 @@ func TestTokenCaptureCreatePatch(t *testing.T) {
 
 	// Create without capture -> null (inherit).
 	rec = do(h, "POST", "/api/tokens", "secret", strings.NewReader(`{"name":"inherit"}`))
-	var inherit tokenView
+	var inherit userView
 	decodeBody(t, rec, &inherit)
 	if inherit.Capture != nil {
 		t.Errorf("created capture = %v, want null (inherit)", *inherit.Capture)
@@ -217,7 +217,7 @@ func TestTokenCaptureCreatePatch(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("patch: code = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	var patched tokenView
+	var patched userView
 	decodeBody(t, rec, &patched)
 	if patched.Capture == nil || *patched.Capture {
 		t.Errorf("patched capture = %v, want false", patched.Capture)

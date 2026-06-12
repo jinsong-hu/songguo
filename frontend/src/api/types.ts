@@ -20,7 +20,7 @@ export interface Overview {
   error_rate: number;
   latency_ms: LatencyMS;
   vendors_active: number;
-  tokens_active: number;
+  users_active: number;
   daily_burn: number;
   runway_days: number | null;
 }
@@ -42,7 +42,7 @@ export interface UsageSeries {
 export interface CallEntry {
   id: number;
   ts: string;
-  token_id: string;
+  user_id: string;
   model: string;
   modality: string;
   vendor: string;
@@ -87,24 +87,24 @@ export interface CallsPage {
   offset: number;
 }
 
-export interface Token {
+export interface User {
   id: string;
   name: string;
   key_prefix: string;
   budget: number | null;
   scope: string[];
   rpm: number;
-  /** Per-token capture override: null = inherit global, true = on, false = off. */
+  /** Per-user capture override: null = inherit global, true = on, false = off. */
   capture: boolean | null;
   created_at: string;
   revoked_at: string | null;
   spent: number;
   active: boolean;
-  /** Plaintext key, present only in the POST /tokens response. */
+  /** Plaintext key, present only in the POST /users response. */
   key?: string;
 }
 
-export interface CreateTokenBody {
+export interface CreateUserBody {
   name: string;
   budget?: number | null;
   scope?: string[];
@@ -113,8 +113,8 @@ export interface CreateTokenBody {
   capture?: boolean | null;
 }
 
-export type PatchTokenBody = Partial<
-  Pick<Token, 'name' | 'budget' | 'scope' | 'rpm' | 'capture'>
+export type PatchUserBody = Partial<
+  Pick<User, 'name' | 'budget' | 'scope' | 'rpm' | 'capture'>
 >;
 
 export interface Credential {
@@ -306,7 +306,7 @@ export type StatusGroup = 'all' | 'ok' | 'error';
 export interface CallsFilters {
   since?: number;
   until?: number;
-  token_id?: string;
+  user_id?: string;
   model?: string;
   vendor?: string;
   status?: StatusGroup;

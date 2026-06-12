@@ -166,7 +166,7 @@ export function CallsTable({ since, until }: CallsTableProps) {
           title="No calls yet"
           hint={
             <>
-              Point an SDK at <code>{origin}/v1</code> using a Songguo token as the API
+              Point an SDK at <code>{origin}/v1</code> using a Songguo user key as the API
               key to start logging usage.
             </>
           }

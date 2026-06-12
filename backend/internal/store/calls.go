@@ -43,9 +43,9 @@ func (s *Store) AppendCall(e calls.Entry) (int64, error) {
 
 	res, err := s.db.Exec(
 		`INSERT INTO calls
-		 (ts, token_id, model, modality, vendor, credential_id, attempt, status, err, usage, cost, latency_ms, stream, tags, wire, confidence)
+		 (ts, user_id, model, modality, vendor, credential_id, attempt, status, err, usage, cost, latency_ms, stream, tags, wire, confidence)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ts.UnixMilli(), e.TokenID, e.Model, string(modality), e.Vendor, e.CredentialID,
+		ts.UnixMilli(), e.UserID, e.Model, string(modality), e.Vendor, e.CredentialID,
 		attempt, e.Status, e.Err, usageJSON, e.Cost, e.LatencyMS, boolToInt(e.Stream), tagsJSON,
 		e.Wire, string(e.Confidence),
 	)
@@ -63,7 +63,7 @@ func (s *Store) AppendCall(e calls.Entry) (int64, error) {
 type CallFilter struct {
 	Since   *time.Time
 	Until   *time.Time
-	TokenID string
+	UserID string
 	Model   string
 	Vendor  string
 	Status  *int
@@ -85,9 +85,9 @@ func (f CallFilter) where() (string, []any) {
 		conds = append(conds, "ts < ?")
 		args = append(args, f.Until.UnixMilli())
 	}
-	if f.TokenID != "" {
-		conds = append(conds, "token_id = ?")
-		args = append(args, f.TokenID)
+	if f.UserID != "" {
+		conds = append(conds, "user_id = ?")
+		args = append(args, f.UserID)
 	}
 	if f.Model != "" {
 		conds = append(conds, "model = ?")
@@ -107,7 +107,7 @@ func (f CallFilter) where() (string, []any) {
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
-const callsSelect = `SELECT id, ts, token_id, model, modality, vendor, credential_id, attempt, status, err, usage, cost, latency_ms, stream, tags, wire, confidence FROM calls`
+const callsSelect = `SELECT id, ts, user_id, model, modality, vendor, credential_id, attempt, status, err, usage, cost, latency_ms, stream, tags, wire, confidence FROM calls`
 
 // QueryCalls returns matching entries ordered by ts DESC. Limit defaults to
 // 100 and is capped at 1000.
@@ -159,18 +159,18 @@ func (s *Store) CountCalls(f CallFilter) (int, error) {
 	return n, nil
 }
 
-// SpendByToken sums cost for all call rows of a token, optionally since a
+// SpendByUser sums cost for all call rows of a user, optionally since a
 // time.
-func (s *Store) SpendByToken(tokenID string, since *time.Time) (float64, error) {
-	query := `SELECT COALESCE(SUM(cost), 0) FROM calls WHERE token_id = ?`
-	args := []any{tokenID}
+func (s *Store) SpendByUser(userID string, since *time.Time) (float64, error) {
+	query := `SELECT COALESCE(SUM(cost), 0) FROM calls WHERE user_id = ?`
+	args := []any{userID}
 	if since != nil {
 		query += " AND ts >= ?"
 		args = append(args, since.UnixMilli())
 	}
 	var total float64
 	if err := s.db.QueryRow(query, args...).Scan(&total); err != nil {
-		return 0, fmt.Errorf("store: spend by token: %w", err)
+		return 0, fmt.Errorf("store: spend by user: %w", err)
 	}
 	return total, nil
 }
@@ -257,7 +257,7 @@ func scanEntry(rows *sql.Rows) (calls.Entry, error) {
 		confidence string
 	)
 	if err := rows.Scan(
-		&e.ID, &tsMillis, &e.TokenID, &e.Model, &modality, &e.Vendor, &e.CredentialID,
+		&e.ID, &tsMillis, &e.UserID, &e.Model, &modality, &e.Vendor, &e.CredentialID,
 		&e.Attempt, &e.Status, &e.Err, &usageJSON, &e.Cost, &e.LatencyMS, &stream, &tagsJSON,
 		&e.Wire, &confidence,
 	); err != nil {

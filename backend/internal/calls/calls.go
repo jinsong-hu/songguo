@@ -1,4 +1,4 @@
-// Package calls records per-token usage and enforces budgets.
+// Package calls records per-user usage and enforces budgets.
 //
 // It holds only pure domain types: an append-only Entry is written for every
 // proxied call attempt (including each failover attempt). Persistence lives in
@@ -43,7 +43,7 @@ const (
 type Entry struct {
 	ID           int64
 	TS           time.Time // when the call completed
-	TokenID      string    // which Songguo token (may be "" for admin/unknown)
+	UserID       string    // which Songguo user (may be "" for admin/unknown)
 	Model        string
 	Modality     Modality
 	Vendor       string         // serving vendor name

@@ -216,7 +216,7 @@ func TestWebSocketHappyPath(t *testing.T) {
 	mock := wsMockServer(t, up)
 
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
 
 	conn, br := dialProxyWS(t, env.server.URL, "/x/rt/realtime?model=realtime-model", key)
@@ -302,7 +302,7 @@ func TestWebSocketUpstreamRefuses(t *testing.T) {
 	mock := wsMockServer(t, up)
 
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
 
 	conn, br := dialProxyWS(t, env.server.URL, "/x/rt/realtime", key)
@@ -332,7 +332,7 @@ func TestWebSocketUnknownVendor(t *testing.T) {
 	mock := wsMockServer(t, up)
 
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
 
 	conn, br := dialProxyWS(t, env.server.URL, "/x/nope/realtime", key)
@@ -353,7 +353,7 @@ func TestWebSocketOnV1Rejected(t *testing.T) {
 	mock := wsMockServer(t, up)
 
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
 
 	conn, br := dialProxyWS(t, env.server.URL, "/v1/realtime", key)
@@ -402,7 +402,7 @@ func TestWebSocketScopeRejected(t *testing.T) {
 	mock := wsMockServer(t, up)
 
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t", Scope: []string{"othervendor"}})
+	_, key := mustUser(t, st, store.NewUser{Name: "t", Scope: []string{"othervendor"}})
 	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
 
 	conn, br := dialProxyWS(t, env.server.URL, "/x/rt/realtime", key)

@@ -70,7 +70,7 @@ func headerContainsToken(value, token string) bool {
 
 // handleWebSocket performs a transparent WebSocket passthrough for a request
 // mounted at /x/<vendor>/<rest>. rest is the path remainder after "/x/".
-func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, token store.Token, rest string) {
+func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user store.User, rest string) {
 	// 1. Resolve the vendor and the upstream WS origin from its base_url.
 	vendorName, restPath, ok := strings.Cut(rest, "/")
 	if !ok || vendorName == "" || restPath == "" {
@@ -99,20 +99,20 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, token 
 
 	// 2. Policy, all BEFORE any hijack so rejections are normal HTTP responses.
 	// Scope: a scoped token restricts which vendors it may address.
-	if len(token.Scope) > 0 && !contains(token.Scope, vendorName) {
-		writeError(w, http.StatusForbidden, "vendor_not_allowed", "vendor not allowed for this token")
+	if len(user.Scope) > 0 && !contains(user.Scope, vendorName) {
+		writeError(w, http.StatusForbidden, "vendor_not_allowed", "vendor not allowed for this user")
 		return
 	}
-	if token.Budget != nil {
-		spent, err := h.store.SpendByToken(token.ID, nil)
+	if user.Budget != nil {
+		spent, err := h.store.SpendByUser(user.ID, nil)
 		if err != nil {
 			h.logger.Error("budget lookup failed", "err", err)
-		} else if spent >= *token.Budget {
+		} else if spent >= *user.Budget {
 			writeError(w, http.StatusPaymentRequired, "budget_exceeded", "budget exceeded")
 			return
 		}
 	}
-	if !h.limiter.allow(token.ID, token.RPM) {
+	if !h.limiter.allow(user.ID, user.RPM) {
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded")
 		return
 	}
@@ -175,12 +175,12 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, token 
 	// 5a. No 101 from any credential: relay the last upstream response verbatim
 	// over the normal ResponseWriter (we have NOT hijacked yet) and record it.
 	if upConn == nil {
-		h.relayFailedHandshake(w, upResp, token.ID, model, vendorName, chosen, attempt, handshake)
+		h.relayFailedHandshake(w, upResp, user.ID, model, vendorName, chosen, attempt, handshake)
 		return
 	}
 
 	// 5b. Got 101: hijack the client conn and pipe raw bytes both directions.
-	h.pipeWebSocket(w, r, upConn, upReader, upResp, token.ID, model, vendorName, chosen, attempt, handshake)
+	h.pipeWebSocket(w, r, upConn, upReader, upResp, user.ID, model, vendorName, chosen, attempt, handshake)
 }
 
 // dialWSUpstream dials the upstream (TLS for wss), writes the replayed
@@ -263,7 +263,7 @@ func buildWSHandshake(host, requestTarget string, r *http.Request, apiKey string
 // client verbatim (status + headers + body) and records a realtime call row
 // with the upstream status and zero bytes.
 func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Response,
-	tokenID, model, vendorName string, t router.Target, attempt int, handshake time.Duration) {
+	userID, model, vendorName string, t router.Target, attempt int, handshake time.Duration) {
 	status := http.StatusBadGateway
 	if resp != nil {
 		defer resp.Body.Close()
@@ -277,7 +277,7 @@ func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Respons
 
 	h.append(calls.Entry{
 		TS:           h.now(),
-		TokenID:      tokenID,
+		UserID:      userID,
 		Model:        model,
 		Modality:     calls.ModalityRealtime,
 		Vendor:       vendorName,
@@ -297,7 +297,7 @@ func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Respons
 // records a single realtime call row at close.
 func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 	upConn net.Conn, upReader *bufio.Reader, upResp *http.Response,
-	tokenID, model, vendorName string, t router.Target, attempt int, handshake time.Duration) {
+	userID, model, vendorName string, t router.Target, attempt int, handshake time.Duration) {
 	defer upConn.Close()
 	defer upResp.Body.Close()
 
@@ -368,7 +368,7 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 	duration := h.now().Sub(sessionStart)
 	h.append(calls.Entry{
 		TS:           h.now(),
-		TokenID:      tokenID,
+		UserID:      userID,
 		Model:        model,
 		Modality:     calls.ModalityRealtime,
 		Vendor:       vendorName,

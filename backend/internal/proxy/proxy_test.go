@@ -205,11 +205,11 @@ func newEnv(t *testing.T, snap func() *config.Snapshot, st *store.Store) *testEn
 	return &testEnv{server: srv, store: st, client: srv.Client()}
 }
 
-func mustToken(t *testing.T, st *store.Store, nt store.NewToken) (store.Token, string) {
+func mustUser(t *testing.T, st *store.Store, nt store.NewUser) (store.User, string) {
 	t.Helper()
-	tok, key, err := st.CreateToken(nt)
+	tok, key, err := st.CreateUser(nt)
 	if err != nil {
-		t.Fatalf("CreateToken: %v", err)
+		t.Fatalf("CreateUser: %v", err)
 	}
 	return tok, key
 }
@@ -234,7 +234,7 @@ vendors:
 `, mock.URL)
 
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
@@ -297,7 +297,7 @@ vendors:
 `, mock.URL)
 
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	resp := env.post(t, "/v1/embeddings", key, `{"model":"text-embedding-3-small","input":"hi"}`)
@@ -321,7 +321,7 @@ vendors:
 
 // --- Test 3: invalid / missing token -> 401, no call row ---
 
-func TestInvalidToken(t *testing.T) {
+func TestInvalidUser(t *testing.T) {
 	up := &mockUpstream{}
 	mock := httptest.NewServer(up.handler())
 	defer mock.Close()
@@ -359,7 +359,7 @@ func TestOutOfScope(t *testing.T) {
 	defer mock.Close()
 	yaml := singleVendorYAML(mock.URL, "vendorA", "credA", "k")
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t", Scope: []string{"some-other-model"}})
+	_, key := mustUser(t, st, store.NewUser{Name: "t", Scope: []string{"some-other-model"}})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o"}`)
@@ -392,7 +392,7 @@ vendors:
 	st := openStore(t)
 	// Budget tiny enough that one call's cost crosses it.
 	budget := 0.0001
-	_, key := mustToken(t, st, store.NewToken{Name: "t", Budget: &budget})
+	_, key := mustUser(t, st, store.NewUser{Name: "t", Budget: &budget})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	body := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
@@ -419,7 +419,7 @@ func TestRateLimit(t *testing.T) {
 	defer mock.Close()
 	yaml := singleVendorYAML(mock.URL, "vendorA", "credA", "k")
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t", RPM: 1})
+	_, key := mustUser(t, st, store.NewUser{Name: "t", RPM: 1})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	body := `{"model":"gpt-4o","messages":[]}`
@@ -467,7 +467,7 @@ vendors:
 `, mockA.URL, mockB.URL)
 
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","messages":[]}`)
@@ -512,7 +512,7 @@ func TestAllFailPassthrough(t *testing.T) {
 	defer mock.Close()
 	yaml := singleVendorYAML(mock.URL, "vendorA", "credA", "k")
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","messages":[]}`)
@@ -542,7 +542,7 @@ func TestNoVendor(t *testing.T) {
 	defer mock.Close()
 	yaml := singleVendorYAML(mock.URL, "vendorA", "credA", "k") // serves gpt-4o only
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"unknown-model"}`)
@@ -573,7 +573,7 @@ vendors:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
 `, mock.URL)
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","stream":true,"messages":[]}`)
@@ -754,7 +754,7 @@ vendors:
 `, mock.URL)
 
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"doubao-pro-32k","messages":[]}`)
@@ -826,7 +826,7 @@ func TestPassthroughNativeUsage(t *testing.T) {
 
 	yaml := passthroughYAML(mock.URL, "bailian")
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	// Native generation endpoint with a model in the body.
@@ -877,7 +877,7 @@ func TestPassthroughModelLessGet(t *testing.T) {
 
 	yaml := passthroughYAML(mock.URL, "bailian")
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	// No body, no model: an async task poll. Must NOT be rejected as missing_model.
@@ -909,7 +909,7 @@ func TestPassthroughUnknownVendor(t *testing.T) {
 
 	yaml := passthroughYAML(mock.URL, "bailian")
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	resp := env.do(t, http.MethodGet, "/x/nope/api/v1/tasks/abc", key, "")
@@ -934,8 +934,8 @@ func TestPassthroughScope(t *testing.T) {
 
 	yaml := passthroughYAML(mock.URL, "bailian")
 	st := openStore(t)
-	// Token scoped to a different vendor: it may not address bailian.
-	_, key := mustToken(t, st, store.NewToken{Name: "t", Scope: []string{"othervendor"}})
+	// User scoped to a different vendor: it may not address bailian.
+	_, key := mustUser(t, st, store.NewUser{Name: "t", Scope: []string{"othervendor"}})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	resp := env.post(t, "/x/bailian/api/v1/services/x/generation", key, `{"model":"qwen-plus"}`)
@@ -979,7 +979,7 @@ vendors:
 `, mock.URL)
 
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	resp := env.post(t, "/x/bailian/api/v1/services/x/generation", key, `{"model":"qwen-plus"}`)
@@ -1016,7 +1016,7 @@ vendors:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
 `, mock.URL)
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","messages":[]}`)
@@ -1062,7 +1062,7 @@ vendors:
       qwen-plus: { input: 0.40, output: 1.20, unit: per_1m_tokens }
 `, mock.URL)
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	resp := env.post(t, "/x/bailian/api/v1/services/aigc/text-generation/generation", key, `{"model":"qwen-plus"}`)
@@ -1147,7 +1147,7 @@ func TestAnthropicStreamingUsageMerged(t *testing.T) {
 	defer mock.Close()
 
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, anthropicYAML(mock.URL)), st)
 
 	resp := env.post(t, "/v1/messages", key, `{"model":"claude-x","stream":true,"messages":[]}`)
@@ -1201,7 +1201,7 @@ vendors:
       deepseek-v4-flash: { input: 0.14, output: 0.28, cached_input: 0.0028, unit: per_1m_tokens }
 `, mock.URL)
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"deepseek-v4-flash","messages":[]}`)
@@ -1241,7 +1241,7 @@ vendors:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
 `, mock.URL)
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	// Streamed request without stream_options: the quirk must add include_usage.

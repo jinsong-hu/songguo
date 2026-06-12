@@ -5,10 +5,10 @@ import (
 	"time"
 )
 
-// rateWindow is the fixed window over which per-token RPM is counted.
+// rateWindow is the fixed window over which per-user RPM is counted.
 const rateWindow = time.Minute
 
-// rateLimiter is a per-token fixed-window request counter. It is safe for
+// rateLimiter is a per-user fixed-window request counter. It is safe for
 // concurrent use.
 type rateLimiter struct {
 	now func() time.Time

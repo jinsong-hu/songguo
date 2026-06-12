@@ -116,7 +116,7 @@ export function OverviewPage() {
           label="Active vendors"
           loading={overview.initialLoading}
           value={ov ? int(ov.vendors_active) : '—'}
-          sub={ov ? `${int(ov.tokens_active)} tokens` : undefined}
+          sub={ov ? `${int(ov.users_active)} users` : undefined}
         />
         <Kpi
           icon={<AlertTriangle size={14} />}

@@ -1,6 +1,6 @@
 // Package proxy transparently forwards AI requests, swapping only credentials.
 //
-// The handler is a gate plus a meter: it authenticates the consumer token,
+// The handler is a gate plus a meter: it authenticates the consumer user,
 // enforces scope, budget and rate limits, routes the request to an upstream
 // vendor (with failover), and records every attempt as a call. It NEVER
 // rewrites the request or response body — the only mutations are the
@@ -150,14 +150,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "missing authorization")
 		return
 	}
-	token, err := h.store.GetTokenByKey(key)
+	user, err := h.store.GetUserByKey(key)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusUnauthorized, "unauthorized", "invalid token")
+			writeError(w, http.StatusUnauthorized, "unauthorized", "invalid user key")
 			return
 		}
-		h.logger.Error("token lookup failed", "err", err)
-		writeError(w, http.StatusInternalServerError, "internal", "token lookup failed")
+		h.logger.Error("user lookup failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal", "user lookup failed")
 		return
 	}
 
@@ -168,7 +168,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// so an upgrade is never read as an HTTP body.
 	if isWebSocketUpgrade(r) {
 		if rest, isX := strings.CutPrefix(r.URL.Path, "/x/"); isX {
-			h.handleWebSocket(w, r, token, rest)
+			h.handleWebSocket(w, r, user, rest)
 			return
 		}
 		writeError(w, http.StatusUpgradeRequired, "upgrade_required",
@@ -187,33 +187,33 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Decide capture once: a per-token override (if set) wins over the global
+	// Decide capture once: a per-user override (if set) wins over the global
 	// snapshot setting. The settings are also resolved here so the cap/retain
 	// used for this request are stable even if config hot-reloads mid-flight.
-	capCfg := h.captureFor(token)
+	capCfg := h.captureFor(user)
 
 	// 3. Resolve the route. Mode is decided by the mount path: explicit-vendor
 	// passthrough under /x/, otherwise model-routed under /v1/. Resolution sets
 	// the model/modality, the candidate targets (with their failover policy),
 	// and the per-target upstream-URL builder.
-	rt, ok := h.resolve(w, r, token, body)
+	rt, ok := h.resolve(w, r, user, body)
 	if !ok {
 		return
 	}
 
 	// 4. Budget (coarse pre-check).
-	if token.Budget != nil {
-		spent, err := h.store.SpendByToken(token.ID, nil)
+	if user.Budget != nil {
+		spent, err := h.store.SpendByUser(user.ID, nil)
 		if err != nil {
 			h.logger.Error("budget lookup failed", "err", err)
-		} else if spent >= *token.Budget {
+		} else if spent >= *user.Budget {
 			writeError(w, http.StatusPaymentRequired, "budget_exceeded", "budget exceeded")
 			return
 		}
 	}
 
 	// 5. Rate limit.
-	if !h.limiter.allow(token.ID, token.RPM) {
+	if !h.limiter.allow(user.ID, user.RPM) {
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded")
 		return
 	}
@@ -238,7 +238,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		upReq, err := h.buildUpstreamRequest(r, t, rt.upstreamURL(t), upBody)
 		if err != nil {
 			h.logger.Error("build upstream request failed", "err", err, "vendor", t.Vendor.Name)
-			h.recordFailure(token.ID, rt.model, modality, t, attempt, 0, err, 0, tags)
+			h.recordFailure(user.ID, rt.model, modality, t, attempt, 0, err, 0, tags)
 			h.router.Report(t.Vendor.Name, t.Credential.ID, 0, err)
 			if last {
 				writeError(w, http.StatusBadGateway, "upstream_error", "failed to build upstream request")
@@ -253,7 +253,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// Transport error: failover-eligible.
 		if err != nil {
-			h.recordFailure(token.ID, rt.model, modality, t, attempt, 0, err, latency, tags)
+			h.recordFailure(user.ID, rt.model, modality, t, attempt, 0, err, latency, tags)
 			h.router.Report(t.Vendor.Name, t.Credential.ID, 0, err)
 			if last {
 				// Transparency: surface the real transport failure verbatim
@@ -266,7 +266,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		failover := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
 		if failover && !last {
-			h.recordFailure(token.ID, rt.model, modality, t, attempt, resp.StatusCode,
+			h.recordFailure(user.ID, rt.model, modality, t, attempt, resp.StatusCode,
 				fmt.Errorf("upstream status %d", resp.StatusCode), latency, tags)
 			h.router.Report(t.Vendor.Name, t.Credential.ID, resp.StatusCode, nil)
 			drainAndClose(resp.Body)
@@ -276,7 +276,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// This is the chosen response (either a non-failover status, or the last
 		// target even if it failed). Report health, then forward verbatim.
 		h.router.Report(t.Vendor.Name, t.Credential.ID, resp.StatusCode, nil)
-		h.forward(w, r, resp, token.ID, rt.model, modality, rw, t, attempt, latency, tags, capCfg, body)
+		h.forward(w, r, resp, user.ID, rt.model, modality, rw, t, attempt, latency, tags, capCfg, body)
 		return
 	}
 }
@@ -340,12 +340,12 @@ func resolveWires(targets []router.Target, method, path string) (kept []router.T
 // denyUnmatched rejects a request whose path matched no enabled wire on any
 // candidate, and records the rejection as a call row so it surfaces on the
 // dashboard (the signal that a wire mapping is missing).
-func (h *handler) denyUnmatched(w http.ResponseWriter, r *http.Request, tokenID, model, path string, vendors []string) {
+func (h *handler) denyUnmatched(w http.ResponseWriter, r *http.Request, userID, model, path string, vendors []string) {
 	detail := fmt.Sprintf("no enabled wire matches %s %s on service %s; add a wire mapping or enable allow_unmatched",
 		r.Method, path, strings.Join(vendors, ", "))
 	h.append(calls.Entry{
 		TS:         h.now(),
-		TokenID:    tokenID,
+		UserID:    userID,
 		Model:      model,
 		Vendor:     strings.Join(vendors, ","),
 		Status:     http.StatusNotFound,
@@ -358,17 +358,17 @@ func (h *handler) denyUnmatched(w http.ResponseWriter, r *http.Request, tokenID,
 // resolve dispatches on the request path to build the route, enforcing
 // per-mode scope and writing any error response itself. It returns ok=false
 // when it has already responded.
-func (h *handler) resolve(w http.ResponseWriter, r *http.Request, token store.Token, body []byte) (route, bool) {
+func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.User, body []byte) (route, bool) {
 	if rest, isX := strings.CutPrefix(r.URL.Path, "/x/"); isX {
-		return h.resolvePassthrough(w, r, token, body, rest)
+		return h.resolvePassthrough(w, r, user, body, rest)
 	}
-	return h.resolveModelRouted(w, r, token, body)
+	return h.resolveModelRouted(w, r, user, body)
 }
 
 // resolveModelRouted handles Mode A: model-routed traffic mounted at /v1/. The
 // upstream path is the request path with the /v1 mount prefix stripped,
 // appended to the vendor's published (version-inclusive) base_url.
-func (h *handler) resolveModelRouted(w http.ResponseWriter, r *http.Request, token store.Token, body []byte) (route, bool) {
+func (h *handler) resolveModelRouted(w http.ResponseWriter, r *http.Request, user store.User, body []byte) (route, bool) {
 	suffix := strings.TrimPrefix(r.URL.Path, "/v1")
 
 	res := meter.Classify(r.Method, r.URL.Path, body)
@@ -377,9 +377,9 @@ func (h *handler) resolveModelRouted(w http.ResponseWriter, r *http.Request, tok
 		return route{}, false
 	}
 
-	// Scope: the model must be allowed when the token is scoped.
-	if len(token.Scope) > 0 && !contains(token.Scope, res.Model) {
-		writeError(w, http.StatusForbidden, "model_not_allowed", "model not allowed for this token")
+	// Scope: the model must be allowed when the user is scoped.
+	if len(user.Scope) > 0 && !contains(user.Scope, res.Model) {
+		writeError(w, http.StatusForbidden, "model_not_allowed", "model not allowed for this user")
 		return route{}, false
 	}
 
@@ -396,7 +396,7 @@ func (h *handler) resolveModelRouted(w http.ResponseWriter, r *http.Request, tok
 
 	kept, wires, denied := resolveWires(targets, r.Method, suffix)
 	if len(kept) == 0 {
-		h.denyUnmatched(w, r, token.ID, res.Model, suffix, denied)
+		h.denyUnmatched(w, r, user.ID, res.Model, suffix, denied)
 		return route{}, false
 	}
 
@@ -417,7 +417,7 @@ func (h *handler) resolveModelRouted(w http.ResponseWriter, r *http.Request, tok
 // appended to the vendor's host origin (base_url's scheme://host, path
 // stripped), so native/async/rerank endpoints are reachable. Failover is across
 // the named vendor's own credentials only.
-func (h *handler) resolvePassthrough(w http.ResponseWriter, r *http.Request, token store.Token, body []byte, rest string) (route, bool) {
+func (h *handler) resolvePassthrough(w http.ResponseWriter, r *http.Request, user store.User, body []byte, rest string) (route, bool) {
 	vendorName, rest, ok := strings.Cut(rest, "/")
 	if !ok || vendorName == "" || rest == "" {
 		writeError(w, http.StatusNotFound, "not_found", "expected /x/<vendor>/<path>")
@@ -436,10 +436,10 @@ func (h *handler) resolvePassthrough(w http.ResponseWriter, r *http.Request, tok
 		return route{}, false
 	}
 
-	// Scope: in passthrough mode a scoped token restricts which VENDORS it may
+	// Scope: in passthrough mode a scoped user restricts which VENDORS it may
 	// address, not which models (model is often absent here).
-	if len(token.Scope) > 0 && !contains(token.Scope, vendorName) {
-		writeError(w, http.StatusForbidden, "vendor_not_allowed", "vendor not allowed for this token")
+	if len(user.Scope) > 0 && !contains(user.Scope, vendorName) {
+		writeError(w, http.StatusForbidden, "vendor_not_allowed", "vendor not allowed for this user")
 		return route{}, false
 	}
 
@@ -461,7 +461,7 @@ func (h *handler) resolvePassthrough(w http.ResponseWriter, r *http.Request, tok
 
 	kept, wires, denied := resolveWires(targets, r.Method, rest)
 	if len(kept) == 0 {
-		h.denyUnmatched(w, r, token.ID, res.Model, rest, denied)
+		h.denyUnmatched(w, r, user.ID, res.Model, rest, denied)
 		return route{}, false
 	}
 
@@ -581,14 +581,14 @@ type captureConfig struct {
 // captureFor resolves whether to capture this request: a non-nil per-token
 // override wins, otherwise the global snapshot setting decides. The caps come
 // from the snapshot regardless.
-func (h *handler) captureFor(token store.Token) captureConfig {
+func (h *handler) captureFor(user store.User) captureConfig {
 	var settings config.Settings
 	if snap := h.snapshot(); snap != nil {
 		settings = snap.Settings()
 	}
 	on := settings.Capture
-	if token.Capture != nil {
-		on = *token.Capture
+	if user.Capture != nil {
+		on = *user.Capture
 	}
 	return captureConfig{on: on, maxBytes: settings.CaptureMaxBytes, retain: settings.CaptureRetain}
 }
@@ -600,7 +600,7 @@ func (h *handler) captureFor(token store.Token) captureConfig {
 // of the response body and persists the redacted request/response payload after
 // the call row is written.
 func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Response,
-	tokenID, model string, modality calls.Modality, rw resolvedWire, t router.Target, attempt int,
+	userID, model string, modality calls.Modality, rw resolvedWire, t router.Target, attempt int,
 	latency int64, tags map[string]string, capCfg captureConfig, reqBody []byte) {
 	defer resp.Body.Close()
 
@@ -651,7 +651,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 
 	id, err := h.store.AppendCall(calls.Entry{
 		TS:           h.now(),
-		TokenID:      tokenID,
+		UserID:      userID,
 		Model:        model,
 		Modality:     modality,
 		Vendor:       t.Vendor.Name,
@@ -762,7 +762,7 @@ func (h *handler) copyBody(w http.ResponseWriter, src io.Reader, capCfg captureC
 }
 
 // recordFailure appends a call row for a failed (failover-eligible) attempt.
-func (h *handler) recordFailure(tokenID, model string, modality calls.Modality,
+func (h *handler) recordFailure(userID, model string, modality calls.Modality,
 	t router.Target, attempt, status int, err error, latency int64, tags map[string]string) {
 	detail := ""
 	if err != nil {
@@ -770,7 +770,7 @@ func (h *handler) recordFailure(tokenID, model string, modality calls.Modality,
 	}
 	h.append(calls.Entry{
 		TS:           h.now(),
-		TokenID:      tokenID,
+		UserID:      userID,
 		Model:        model,
 		Modality:     modality,
 		Vendor:       t.Vendor.Name,

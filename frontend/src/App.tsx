@@ -10,7 +10,7 @@ import { SettingsContext } from './lib/settingsContext';
 import { OverviewPage } from './pages/Overview';
 import { ServicesPage } from './pages/Services';
 import { ServiceAddPage } from './pages/ServiceAdd';
-import { TokensPage } from './pages/Tokens';
+import { UsersPage } from './pages/Users';
 import { SettingsPage } from './pages/SettingsPage';
 
 type Phase =
@@ -108,7 +108,7 @@ export function App() {
               <Route path="services/add" element={<ServiceAddPage />} />
               <Route path="providers" element={<Navigate to="/services/add" replace />} />
               <Route path="providers/new" element={<Navigate to="/services/add" replace />} />
-              <Route path="tokens" element={<TokensPage />} />
+              <Route path="users" element={<UsersPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="*" element={<OverviewPage />} />
             </Route>

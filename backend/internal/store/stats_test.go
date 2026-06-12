@@ -30,7 +30,7 @@ func TestOverviewStats(t *testing.T) {
 	}
 	for i, r := range rows {
 		if _, err := s.AppendCall(calls.Entry{
-			TS: base.Add(time.Duration(i) * time.Minute), TokenID: "t", Model: "m",
+			TS: base.Add(time.Duration(i) * time.Minute), UserID: "t", Model: "m",
 			Vendor: "v", Status: r.status, LatencyMS: r.latency,
 		}); err != nil {
 			t.Fatalf("AppendCall[%d]: %v", i, err)

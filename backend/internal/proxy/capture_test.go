@@ -40,7 +40,7 @@ func TestCaptureNonStreaming(t *testing.T) {
 	defer mock.Close()
 
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, true, 32768, 10000)), st)
 
 	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
@@ -93,7 +93,7 @@ func TestCaptureStreamingTruncates(t *testing.T) {
 	defer mock.Close()
 
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	// Tiny cap so the streamed body is truncated.
 	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, true, 16, 10000)), st)
 
@@ -133,7 +133,7 @@ func TestCaptureOffStoresNothing(t *testing.T) {
 	defer mock.Close()
 
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, false, 32768, 10000)), st)
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","messages":[]}`)
@@ -147,7 +147,7 @@ func TestCaptureOffStoresNothing(t *testing.T) {
 
 // --- per-token override beats the global setting (off->on and on->off) ---
 
-func TestCaptureTokenOverride(t *testing.T) {
+func TestCaptureUserOverride(t *testing.T) {
 	up := &mockUpstream{}
 	mock := httptest.NewServer(up.handler())
 	defer mock.Close()
@@ -155,7 +155,7 @@ func TestCaptureTokenOverride(t *testing.T) {
 	st := openStore(t)
 	// Global capture OFF, but a token opts IN via override.
 	on := true
-	_, key := mustToken(t, st, store.NewToken{Name: "on", Capture: &on})
+	_, key := mustUser(t, st, store.NewUser{Name: "on", Capture: &on})
 	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, false, 32768, 10000)), st)
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","messages":[]}`)
@@ -201,7 +201,7 @@ vendors:
 `, mockA.URL, mockB.URL)
 
 	st := openStore(t)
-	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","messages":[]}`)

@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { AlertTriangle, KeyRound, Pencil, Plus } from 'lucide-react';
 import { api } from '../api/client';
-import type { CreateTokenBody, PatchTokenBody, Token } from '../api/types';
+import type { CreateUserBody, PatchUserBody, User } from '../api/types';
 import { CopyButton } from '../components/CopyButton';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -11,16 +11,16 @@ import { Skeleton } from '../components/Skeleton';
 import { useToast } from '../components/Toast';
 import { useFetch } from '../lib/useFetch';
 import { dateTime, money } from '../lib/format';
-import styles from './Tokens.module.css';
+import styles from './Users.module.css';
 
 type ModalState =
   | { kind: 'none' }
   | { kind: 'create' }
-  | { kind: 'edit'; token: Token }
-  | { kind: 'reveal'; token: Token }
-  | { kind: 'revoke'; token: Token };
+  | { kind: 'edit'; user: User }
+  | { kind: 'reveal'; user: User }
+  | { kind: 'revoke'; user: User };
 
-/** Three-way capture override choice shown in the token form. */
+/** Three-way capture override choice shown in the user form. */
 type CaptureChoice = 'default' | 'on' | 'off';
 
 const CAPTURE_CHOICES: { value: CaptureChoice; label: string }[] = [
@@ -41,8 +41,8 @@ function fromCaptureChoice(choice: CaptureChoice): boolean | null {
   return null;
 }
 
-export function TokensPage() {
-  const tokens = useFetch(() => api.tokens(), []);
+export function UsersPage() {
+  const users = useFetch(() => api.users(), []);
   const pricing = useFetch(() => api.pricing(), []);
   const [modal, setModal] = useState<ModalState>({ kind: 'none' });
   const toast = useToast();
@@ -55,23 +55,23 @@ export function TokensPage() {
 
   const closeModal = () => setModal({ kind: 'none' });
 
-  const onCreated = (token: Token) => {
-    tokens.refetch();
-    setModal({ kind: 'reveal', token });
+  const onCreated = (user: User) => {
+    users.refetch();
+    setModal({ kind: 'reveal', user });
   };
 
   const onSaved = () => {
-    tokens.refetch();
+    users.refetch();
     closeModal();
-    toast.success('Token updated.');
+    toast.success('User updated.');
   };
 
-  const onRevoked = async (token: Token) => {
+  const onRevoked = async (user: User) => {
     try {
-      await api.revokeToken(token.id);
-      tokens.refetch();
+      await api.revokeUser(user.id);
+      users.refetch();
       closeModal();
-      toast.success(`Revoked “${token.name}”.`);
+      toast.success(`Revoked "${user.name}".`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Revoke failed.');
     }
@@ -79,26 +79,26 @@ export function TokensPage() {
 
   return (
     <Page
-      title="Tokens"
+      title="Users"
       actions={
         <button className="btn btn-primary" onClick={() => setModal({ kind: 'create' })}>
-          <Plus size={15} /> New token
+          <Plus size={15} /> New user
         </button>
       }
     >
-      {tokens.error ? (
-        <ErrorBanner message={tokens.error} onRetry={tokens.refetch} />
-      ) : tokens.initialLoading ? (
+      {users.error ? (
+        <ErrorBanner message={users.error} onRetry={users.refetch} />
+      ) : users.initialLoading ? (
         <div className={`card ${styles.panel}`} style={{ padding: 16 }}>
           {Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} height={22} style={{ marginBottom: 10 }} />
           ))}
         </div>
-      ) : !tokens.data || tokens.data.length === 0 ? (
+      ) : !users.data || users.data.length === 0 ? (
         <EmptyState
           icon={KeyRound}
-          title="No tokens yet"
-          hint="Create a token to let an SDK authenticate against the gateway."
+          title="No users yet"
+          hint="Create a user to let an SDK authenticate against the gateway."
         />
       ) : (
         <div className={`card ${styles.panel}`}>
@@ -117,43 +117,43 @@ export function TokensPage() {
                 </tr>
               </thead>
               <tbody>
-                {tokens.data.map((t) => (
-                  <tr key={t.id}>
+                {users.data.map((u) => (
+                  <tr key={u.id}>
                     <td>
                       <span className={styles.nameCell}>
-                        {t.name}
-                        <CaptureBadge capture={t.capture} />
+                        {u.name}
+                        <CaptureBadge capture={u.capture} />
                       </span>
                     </td>
-                    <td className="mono">{t.key_prefix}</td>
+                    <td className="mono">{u.key_prefix}</td>
                     <td>
-                      <UsageCell spent={t.spent} budget={t.budget} />
+                      <UsageCell spent={u.spent} budget={u.budget} />
                     </td>
                     <td>
-                      <ScopeChips scope={t.scope} />
+                      <ScopeChips scope={u.scope} />
                     </td>
-                    <td className="num">{t.rpm > 0 ? t.rpm : '—'}</td>
+                    <td className="num">{u.rpm > 0 ? u.rpm : '—'}</td>
                     <td className="mono" style={{ color: 'var(--text-muted)' }}>
-                      {dateTime(t.created_at)}
+                      {dateTime(u.created_at)}
                     </td>
                     <td>
-                      <span className={t.active ? styles.statusActive : styles.statusRevoked}>
-                        {t.active ? 'Active' : 'Revoked'}
+                      <span className={u.active ? styles.statusActive : styles.statusRevoked}>
+                        {u.active ? 'Active' : 'Revoked'}
                       </span>
                     </td>
                     <td>
                       <div className={styles.rowActions}>
-                        {t.active && (
+                        {u.active && (
                           <>
                             <button
                               className="btn btn-sm"
-                              onClick={() => setModal({ kind: 'edit', token: t })}
+                              onClick={() => setModal({ kind: 'edit', user: u })}
                             >
                               <Pencil size={12} /> Edit
                             </button>
                             <button
                               className="btn btn-sm btn-danger"
-                              onClick={() => setModal({ kind: 'revoke', token: t })}
+                              onClick={() => setModal({ kind: 'revoke', user: u })}
                             >
                               Revoke
                             </button>
@@ -170,8 +170,8 @@ export function TokensPage() {
       )}
 
       {(modal.kind === 'create' || modal.kind === 'edit') && (
-        <TokenForm
-          token={modal.kind === 'edit' ? modal.token : undefined}
+        <UserForm
+          user={modal.kind === 'edit' ? modal.user : undefined}
           modelOptions={modelOptions}
           onClose={closeModal}
           onCreated={onCreated}
@@ -180,14 +180,14 @@ export function TokensPage() {
       )}
 
       {modal.kind === 'reveal' && (
-        <RevealModal token={modal.token} onClose={closeModal} />
+        <RevealModal user={modal.user} onClose={closeModal} />
       )}
 
       {modal.kind === 'revoke' && (
         <RevokeModal
-          token={modal.token}
+          user={modal.user}
           onClose={closeModal}
-          onConfirm={() => onRevoked(modal.token)}
+          onConfirm={() => onRevoked(modal.user)}
         />
       )}
     </Page>
@@ -254,23 +254,23 @@ function ScopeChips({ scope }: { scope: string[] }) {
   );
 }
 
-interface TokenFormProps {
-  token?: Token;
+interface UserFormProps {
+  user?: User;
   modelOptions: string[];
   onClose: () => void;
-  onCreated: (t: Token) => void;
+  onCreated: (u: User) => void;
   onSaved: () => void;
 }
 
-function TokenForm({ token, modelOptions, onClose, onCreated, onSaved }: TokenFormProps) {
-  const editing = !!token;
-  const [name, setName] = useState(token?.name ?? '');
+function UserForm({ user, modelOptions, onClose, onCreated, onSaved }: UserFormProps) {
+  const editing = !!user;
+  const [name, setName] = useState(user?.name ?? '');
   const [budget, setBudget] = useState(
-    token?.budget != null ? String(token.budget) : '',
+    user?.budget != null ? String(user.budget) : '',
   );
-  const [rpm, setRpm] = useState(token?.rpm ? String(token.rpm) : '');
-  const [scope, setScope] = useState<string[]>(token?.scope ?? []);
-  const [capture, setCapture] = useState<CaptureChoice>(toCaptureChoice(token?.capture));
+  const [rpm, setRpm] = useState(user?.rpm ? String(user.rpm) : '');
+  const [scope, setScope] = useState<string[]>(user?.scope ?? []);
+  const [capture, setCapture] = useState<CaptureChoice>(toCaptureChoice(user?.capture));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -303,25 +303,25 @@ function TokenForm({ token, modelOptions, onClose, onCreated, onSaved }: TokenFo
     setBusy(true);
     setErr(null);
     try {
-      if (editing && token) {
-        const body: PatchTokenBody = {
+      if (editing && user) {
+        const body: PatchUserBody = {
           name: trimmed,
           budget: budgetVal,
           scope,
           rpm: rpmVal,
           capture: captureVal,
         };
-        await api.patchToken(token.id, body);
+        await api.patchUser(user.id, body);
         onSaved();
       } else {
-        const body: CreateTokenBody = {
+        const body: CreateUserBody = {
           name: trimmed,
           budget: budgetVal,
           scope,
           rpm: rpmVal,
           capture: captureVal,
         };
-        const created = await api.createToken(body);
+        const created = await api.createUser(body);
         onCreated(created);
       }
     } catch (e2) {
@@ -332,7 +332,7 @@ function TokenForm({ token, modelOptions, onClose, onCreated, onSaved }: TokenFo
 
   return (
     <Modal
-      title={editing ? 'Edit token' : 'New token'}
+      title={editing ? 'Edit user' : 'New user'}
       onClose={onClose}
       footer={
         <>
@@ -341,22 +341,22 @@ function TokenForm({ token, modelOptions, onClose, onCreated, onSaved }: TokenFo
           </button>
           <button
             type="submit"
-            form="token-form"
+            form="user-form"
             className="btn btn-primary"
             disabled={busy}
           >
-            {busy ? 'Saving…' : editing ? 'Save changes' : 'Create token'}
+            {busy ? 'Saving…' : editing ? 'Save changes' : 'Create user'}
           </button>
         </>
       }
     >
-      <form id="token-form" onSubmit={submit}>
+      <form id="user-form" onSubmit={submit}>
         <div className={styles.field}>
-          <label className={styles.fieldLabel} htmlFor="t-name">
+          <label className={styles.fieldLabel} htmlFor="u-name">
             Name
           </label>
           <input
-            id="t-name"
+            id="u-name"
             className="input"
             value={name}
             autoFocus
@@ -366,11 +366,11 @@ function TokenForm({ token, modelOptions, onClose, onCreated, onSaved }: TokenFo
         </div>
 
         <div className={styles.field}>
-          <label className={styles.fieldLabel} htmlFor="t-budget">
+          <label className={styles.fieldLabel} htmlFor="u-budget">
             Budget (USD)
           </label>
           <input
-            id="t-budget"
+            id="u-budget"
             className="input"
             inputMode="decimal"
             value={budget}
@@ -381,11 +381,11 @@ function TokenForm({ token, modelOptions, onClose, onCreated, onSaved }: TokenFo
         </div>
 
         <div className={styles.field}>
-          <label className={styles.fieldLabel} htmlFor="t-rpm">
+          <label className={styles.fieldLabel} htmlFor="u-rpm">
             RPM limit
           </label>
           <input
-            id="t-rpm"
+            id="u-rpm"
             className="input"
             inputMode="numeric"
             value={rpm}
@@ -422,7 +422,7 @@ function TokenForm({ token, modelOptions, onClose, onCreated, onSaved }: TokenFo
         <div className={styles.field}>
           <span className={styles.fieldLabel}>Capture</span>
           <span className={styles.fieldHint}>
-            Capture request/response payloads for this token. Default inherits the global
+            Capture request/response payloads for this user. Default inherits the global
             setting.
           </span>
           <div className={styles.captureSeg} role="group" aria-label="Capture override">
@@ -450,10 +450,10 @@ function TokenForm({ token, modelOptions, onClose, onCreated, onSaved }: TokenFo
   );
 }
 
-function RevealModal({ token, onClose }: { token: Token; onClose: () => void }) {
+function RevealModal({ user, onClose }: { user: User; onClose: () => void }) {
   return (
     <Modal
-      title="Token created"
+      title="User created"
       onClose={onClose}
       footer={
         <button className="btn btn-primary" onClick={onClose}>
@@ -470,11 +470,11 @@ function RevealModal({ token, onClose }: { token: Token; onClose: () => void }) 
         </div>
         <div>
           <div className={styles.fieldLabel} style={{ marginBottom: 6 }}>
-            {token.name}
+            {user.name}
           </div>
           <div className={styles.keyField}>
-            <code className={styles.keyValue}>{token.key}</code>
-            <CopyButton value={token.key ?? ''} label="Copy" />
+            <code className={styles.keyValue}>{user.key}</code>
+            <CopyButton value={user.key ?? ''} label="Copy" />
           </div>
         </div>
       </div>
@@ -483,18 +483,18 @@ function RevealModal({ token, onClose }: { token: Token; onClose: () => void }) 
 }
 
 function RevokeModal({
-  token,
+  user,
   onClose,
   onConfirm,
 }: {
-  token: Token;
+  user: User;
   onClose: () => void;
   onConfirm: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   return (
     <Modal
-      title="Revoke token"
+      title="Revoke user"
       onClose={onClose}
       footer={
         <>
@@ -509,13 +509,13 @@ function RevokeModal({
               onConfirm();
             }}
           >
-            {busy ? 'Revoking…' : 'Revoke token'}
+            {busy ? 'Revoking…' : 'Revoke user'}
           </button>
         </>
       }
     >
       <p className={styles.confirmText}>
-        Revoke <strong>{token.name}</strong> (<strong>{token.key_prefix}</strong>)? Any SDK
+        Revoke <strong>{user.name}</strong> (<strong>{user.key_prefix}</strong>)? Any SDK
         using this key will immediately stop working. This cannot be undone.
       </p>
     </Modal>

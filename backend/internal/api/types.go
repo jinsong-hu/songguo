@@ -10,9 +10,9 @@ import (
 	"github.com/songguo/songguo/internal/store"
 )
 
-// tokenView is the JSON representation of a token, including computed lifetime
+// userView is the JSON representation of a user, including computed lifetime
 // spend and active state. It never exposes the key hash or plaintext key.
-type tokenView struct {
+type userView struct {
 	ID        string   `json:"id"`
 	Name      string   `json:"name"`
 	KeyPrefix string   `json:"key_prefix"`
@@ -28,26 +28,26 @@ type tokenView struct {
 	Key string `json:"key,omitempty"`
 }
 
-// newTokenView converts a store.Token plus its lifetime spend into a view.
-func newTokenView(t store.Token, spent float64) tokenView {
-	scope := t.Scope
+// newUserView converts a store.User plus its lifetime spend into a view.
+func newUserView(u store.User, spent float64) userView {
+	scope := u.Scope
 	if scope == nil {
 		scope = []string{}
 	}
-	v := tokenView{
-		ID:        t.ID,
-		Name:      t.Name,
-		KeyPrefix: t.KeyPrefix,
-		Budget:    t.Budget,
+	v := userView{
+		ID:        u.ID,
+		Name:      u.Name,
+		KeyPrefix: u.KeyPrefix,
+		Budget:    u.Budget,
 		Scope:     scope,
-		RPM:       t.RPM,
-		Capture:   t.Capture,
-		CreatedAt: t.CreatedAt.UTC().Format(time.RFC3339),
+		RPM:       u.RPM,
+		Capture:   u.Capture,
+		CreatedAt: u.CreatedAt.UTC().Format(time.RFC3339),
 		Spent:     spent,
-		Active:    t.RevokedAt == nil,
+		Active:    u.RevokedAt == nil,
 	}
-	if t.RevokedAt != nil {
-		s := t.RevokedAt.UTC().Format(time.RFC3339)
+	if u.RevokedAt != nil {
+		s := u.RevokedAt.UTC().Format(time.RFC3339)
 		v.RevokedAt = &s
 	}
 	return v
@@ -57,7 +57,7 @@ func newTokenView(t store.Token, spent float64) tokenView {
 type entryView struct {
 	ID           int64             `json:"id"`
 	TS           string            `json:"ts"`
-	TokenID      string            `json:"token_id"`
+	UserID       string            `json:"user_id"`
 	Model        string            `json:"model"`
 	Modality     string            `json:"modality"`
 	Vendor       string            `json:"vendor"`
@@ -88,7 +88,7 @@ func newEntryView(e calls.Entry) entryView {
 	return entryView{
 		ID:           e.ID,
 		TS:           e.TS.UTC().Format(time.RFC3339),
-		TokenID:      e.TokenID,
+		UserID:      e.UserID,
 		Model:        e.Model,
 		Modality:     string(e.Modality),
 		Vendor:       e.Vendor,
@@ -129,7 +129,7 @@ type overviewView struct {
 	ErrorRate       float64            `json:"error_rate"`
 	LatencyMS       latencyView        `json:"latency_ms"`
 	VendorsActive   int                `json:"vendors_active"`
-	TokensActive    int                `json:"tokens_active"`
+		UsersActive    int                `json:"users_active"`
 	DailyBurn       float64            `json:"daily_burn"`
 	RunwayDays      *float64           `json:"runway_days"`
 }

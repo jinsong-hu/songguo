@@ -51,7 +51,7 @@ export function SettingsPage() {
         <div className={`card ${styles.panel}`}>
           <div className={styles.panelTitle}>Connection</div>
           <div className={styles.panelDesc}>
-            Point your SDK&apos;s base URL here and use a Songguo token as the API key.
+            Point your SDK&apos;s base URL here and use a Songguo user key as the API key.
           </div>
           <div className={styles.connRow}>
             <span className={styles.connLabel}>Consumer base URL</span>
@@ -62,7 +62,7 @@ export function SettingsPage() {
           </div>
           <div className={styles.connHint}>
             For example, set <code>OPENAI_BASE_URL={consumerUrl}</code> and
-            <code> OPENAI_API_KEY=&lt;your-songguo-token&gt;</code>. Requests are proxied
+            <code> OPENAI_API_KEY=&lt;your-songguo-key&gt;</code>. Requests are proxied
             transparently to the routed vendor.
           </div>
         </div>
@@ -135,7 +135,7 @@ export function SettingsPage() {
           <div className={styles.hint}>
             <Info size={14} />
             Configured in <code>config.yaml</code> (hot-reloaded); can be overridden per
-            token.
+            user.
           </div>
         </div>
 

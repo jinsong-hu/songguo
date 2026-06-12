@@ -57,9 +57,9 @@ func parseIntDefault(r *http.Request, key string, def int) int {
 // applying the given default and cap to the limit.
 func callFilterFromQuery(r *http.Request, defLimit, capLimit int) store.CallFilter {
 	f := store.CallFilter{
-		TokenID: r.URL.Query().Get("token_id"),
-		Model:   r.URL.Query().Get("model"),
-		Vendor:  r.URL.Query().Get("vendor"),
+		UserID: r.URL.Query().Get("user_id"),
+		Model:  r.URL.Query().Get("model"),
+		Vendor: r.URL.Query().Get("vendor"),
 	}
 	if since, ok := parseUnixTime(r, "since"); ok {
 		f.Since = since
@@ -135,27 +135,27 @@ func (a *api) handleOverview(w http.ResponseWriter, r *http.Request) {
 		vendorsActive = len(snap.Vendors())
 	}
 
-	// tokens_active = non-revoked tokens; also compute runway from budgets.
-	tokens, err := a.store.ListTokens()
+	// users_active = non-revoked users; also compute runway from budgets.
+	users, err := a.store.ListUsers()
 	if err != nil {
-		a.serverError(w, "list tokens", err)
+		a.serverError(w, "list users", err)
 		return
 	}
-	tokensActive := 0
+	usersActive := 0
 	var remainingBudget float64
 	anyBudget := false
-	for _, t := range tokens {
-		if t.RevokedAt == nil {
-			tokensActive++
+	for _, u := range users {
+		if u.RevokedAt == nil {
+			usersActive++
 		}
-		if t.Budget != nil {
+		if u.Budget != nil {
 			anyBudget = true
-			spent, err := a.store.SpendByToken(t.ID, nil)
+			spent, err := a.store.SpendByUser(u.ID, nil)
 			if err != nil {
-				a.serverError(w, "spend by token", err)
+				a.serverError(w, "spend by user", err)
 				return
 			}
-			rem := *t.Budget - spent
+			rem := *u.Budget - spent
 			if rem > 0 {
 				remainingBudget += rem
 			}
@@ -190,7 +190,7 @@ func (a *api) handleOverview(w http.ResponseWriter, r *http.Request) {
 		ErrorRate:       errorRate,
 		LatencyMS:       latencyView{P50: stats.P50, P95: stats.P95, P99: stats.P99},
 		VendorsActive:   vendorsActive,
-		TokensActive:    tokensActive,
+		UsersActive:    usersActive,
 		DailyBurn:       dailyBurn,
 		RunwayDays:      runway,
 	})
@@ -317,27 +317,27 @@ func (a *api) handleCallTrace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newTraceView(p))
 }
 
-// handleListTokens returns all tokens with computed lifetime spend.
-func (a *api) handleListTokens(w http.ResponseWriter, r *http.Request) {
-	tokens, err := a.store.ListTokens()
+// handleListUsers returns all users with computed lifetime spend.
+func (a *api) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := a.store.ListUsers()
 	if err != nil {
-		a.serverError(w, "list tokens", err)
+		a.serverError(w, "list users", err)
 		return
 	}
-	views := make([]tokenView, 0, len(tokens))
-	for _, t := range tokens {
-		spent, err := a.store.SpendByToken(t.ID, nil)
+	views := make([]userView, 0, len(users))
+	for _, u := range users {
+		spent, err := a.store.SpendByUser(u.ID, nil)
 		if err != nil {
-			a.serverError(w, "spend by token", err)
+			a.serverError(w, "spend by user", err)
 			return
 		}
-		views = append(views, newTokenView(t, spent))
+		views = append(views, newUserView(u, spent))
 	}
 	writeJSON(w, http.StatusOK, views)
 }
 
-// createTokenReq is the POST /api/tokens body.
-type createTokenReq struct {
+// createUserReq is the POST /api/users body.
+type createUserReq struct {
 	Name    string    `json:"name"`
 	Budget  *float64  `json:"budget"`
 	Scope   *[]string `json:"scope"`
@@ -345,9 +345,9 @@ type createTokenReq struct {
 	Capture *bool     `json:"capture"`
 }
 
-// handleCreateToken creates a token and returns it once with the plaintext key.
-func (a *api) handleCreateToken(w http.ResponseWriter, r *http.Request) {
-	var req createTokenReq
+// handleCreateUser creates a user and returns it once with the plaintext key.
+func (a *api) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	var req createUserReq
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
 		return
@@ -356,29 +356,29 @@ func (a *api) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "name is required")
 		return
 	}
-	nt := store.NewToken{Name: req.Name, Budget: req.Budget, Capture: req.Capture}
+	nu := store.NewUser{Name: req.Name, Budget: req.Budget, Capture: req.Capture}
 	if req.Scope != nil {
-		nt.Scope = *req.Scope
+		nu.Scope = *req.Scope
 	}
 	if req.RPM != nil {
-		nt.RPM = *req.RPM
+		nu.RPM = *req.RPM
 	}
 
-	tok, plaintext, err := a.store.CreateToken(nt)
+	usr, plaintext, err := a.store.CreateUser(nu)
 	if err != nil {
-		a.serverError(w, "create token", err)
+		a.serverError(w, "create user", err)
 		return
 	}
-	v := newTokenView(tok, 0)
+	v := newUserView(usr, 0)
 	v.Key = plaintext
 	writeJSON(w, http.StatusCreated, v)
 }
 
-// patchTokenReq distinguishes "omitted" from "present" for each field via
+// patchUserReq distinguishes "omitted" from "present" for each field via
 // pointers. Note: a null budget cannot be applied because the store's
-// TokenUpdate uses a *float64 set-or-unchanged; PATCH cannot reset budget to
+// UserUpdate uses a *float64 set-or-unchanged; PATCH cannot reset budget to
 // null (documented limitation for v1).
-type patchTokenReq struct {
+type patchUserReq struct {
 	Name    *string   `json:"name"`
 	Budget  *float64  `json:"budget"`
 	Scope   *[]string `json:"scope"`
@@ -386,60 +386,60 @@ type patchTokenReq struct {
 	Capture *bool     `json:"capture"`
 }
 
-// handlePatchToken applies a subset of fields to a token.
-func (a *api) handlePatchToken(w http.ResponseWriter, r *http.Request) {
+// handlePatchUser applies a subset of fields to a user.
+func (a *api) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var req patchTokenReq
+	var req patchUserReq
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
 		return
 	}
-	upd := store.TokenUpdate{
+	upd := store.UserUpdate{
 		Name:    req.Name,
 		Budget:  req.Budget,
 		Scope:   req.Scope,
 		RPM:     req.RPM,
 		Capture: req.Capture,
 	}
-	tok, err := a.store.UpdateToken(id, upd)
+	usr, err := a.store.UpdateUser(id, upd)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "token not found")
+			writeError(w, http.StatusNotFound, "not_found", "user not found")
 			return
 		}
-		a.serverError(w, "update token", err)
+		a.serverError(w, "update user", err)
 		return
 	}
-	spent, err := a.store.SpendByToken(tok.ID, nil)
+	spent, err := a.store.SpendByUser(usr.ID, nil)
 	if err != nil {
-		a.serverError(w, "spend by token", err)
+		a.serverError(w, "spend by user", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, newTokenView(tok, spent))
+	writeJSON(w, http.StatusOK, newUserView(usr, spent))
 }
 
-// handleRevokeToken revokes a token and returns its updated view.
-func (a *api) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
+// handleRevokeUser revokes a user and returns its updated view.
+func (a *api) handleRevokeUser(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := a.store.RevokeToken(id); err != nil {
+	if err := a.store.RevokeUser(id); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "token not found")
+			writeError(w, http.StatusNotFound, "not_found", "user not found")
 			return
 		}
-		a.serverError(w, "revoke token", err)
+		a.serverError(w, "revoke user", err)
 		return
 	}
-	tok, err := a.store.GetToken(id)
+	usr, err := a.store.GetUser(id)
 	if err != nil {
-		a.serverError(w, "get token", err)
+		a.serverError(w, "get user", err)
 		return
 	}
-	spent, err := a.store.SpendByToken(tok.ID, nil)
+	spent, err := a.store.SpendByUser(usr.ID, nil)
 	if err != nil {
-		a.serverError(w, "spend by token", err)
+		a.serverError(w, "spend by user", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, newTokenView(tok, spent))
+	writeJSON(w, http.StatusOK, newUserView(usr, spent))
 }
 
 // handleListVendors returns vendors (without secrets) plus per-vendor stats.

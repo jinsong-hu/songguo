@@ -18,9 +18,9 @@ const keyPrefixLen = 12
 // base62 alphabet for the random portion of a generated key.
 const base62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
-// Token is the public view of a consumer API key. It never exposes key_hash or
+// User is the public view of a consumer API key. It never exposes key_hash or
 // the plaintext key.
-type Token struct {
+type User struct {
 	ID        string
 	Name      string
 	KeyPrefix string
@@ -32,8 +32,8 @@ type Token struct {
 	RevokedAt *time.Time // nil = active
 }
 
-// NewToken describes a token to create.
-type NewToken struct {
+// NewUser describes a user to create.
+type NewUser struct {
 	Name    string
 	Budget  *float64
 	Scope   []string
@@ -41,9 +41,9 @@ type NewToken struct {
 	Capture *bool
 }
 
-// TokenUpdate carries optional field updates; nil pointers leave a field
+// UserUpdate carries optional field updates; nil pointers leave a field
 // unchanged.
-type TokenUpdate struct {
+type UserUpdate struct {
 	Name    *string
 	Budget  *float64
 	Scope   *[]string
@@ -52,7 +52,7 @@ type TokenUpdate struct {
 }
 
 // HashKey returns the lowercase hex sha256 of a plaintext key. The proxy auth
-// path reuses this to look up tokens.
+// path reuses this to look up users.
 func HashKey(plaintext string) string {
 	sum := sha256.Sum256([]byte(plaintext))
 	return hex.EncodeToString(sum[:])
@@ -80,26 +80,26 @@ func genKey() (string, error) {
 	return "sg-" + string(b), nil
 }
 
-// CreateToken generates a fresh key, stores its hash and prefix, and returns
-// the public Token plus the plaintext key, which is shown to the caller only
+// CreateUser generates a fresh key, stores its hash and prefix, and returns
+// the public User plus the plaintext key, which is shown to the caller only
 // once.
-func (s *Store) CreateToken(nt NewToken) (Token, string, error) {
+func (s *Store) CreateUser(nu NewUser) (User, string, error) {
 	id, err := randID()
 	if err != nil {
-		return Token{}, "", err
+		return User{}, "", err
 	}
 	key, err := genKey()
 	if err != nil {
-		return Token{}, "", err
+		return User{}, "", err
 	}
 
-	scope := nt.Scope
+	scope := nu.Scope
 	if scope == nil {
 		scope = []string{}
 	}
 	scopeJSON, err := json.Marshal(scope)
 	if err != nil {
-		return Token{}, "", fmt.Errorf("store: encode scope: %w", err)
+		return User{}, "", fmt.Errorf("store: encode scope: %w", err)
 	}
 
 	prefix := key
@@ -109,116 +109,116 @@ func (s *Store) CreateToken(nt NewToken) (Token, string, error) {
 	createdAt := time.Now()
 
 	_, err = s.db.Exec(
-		`INSERT INTO tokens (id, name, key_hash, key_prefix, budget, scope, rpm, capture, created_at, revoked_at)
+		`INSERT INTO users (id, name, key_hash, key_prefix, budget, scope, rpm, capture, created_at, revoked_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-		id, nt.Name, HashKey(key), prefix, nt.Budget, string(scopeJSON), nt.RPM, boolPtrToNull(nt.Capture), createdAt.Unix(),
+		id, nu.Name, HashKey(key), prefix, nu.Budget, string(scopeJSON), nu.RPM, boolPtrToNull(nu.Capture), createdAt.Unix(),
 	)
 	if err != nil {
-		return Token{}, "", fmt.Errorf("store: create token: %w", err)
+		return User{}, "", fmt.Errorf("store: create user: %w", err)
 	}
 
-	return Token{
+	return User{
 		ID:        id,
-		Name:      nt.Name,
+		Name:      nu.Name,
 		KeyPrefix: prefix,
-		Budget:    nt.Budget,
+		Budget:    nu.Budget,
 		Scope:     scope,
-		RPM:       nt.RPM,
-		Capture:   nt.Capture,
+		RPM:       nu.RPM,
+		Capture:   nu.Capture,
 		CreatedAt: createdAt.Truncate(time.Second),
 	}, key, nil
 }
 
-// tokenSelect is the shared column list for scanning a Token.
-const tokenSelect = `SELECT id, name, key_prefix, budget, scope, rpm, capture, created_at, revoked_at FROM tokens`
+// userSelect is the shared column list for scanning a User.
+const userSelect = `SELECT id, name, key_prefix, budget, scope, rpm, capture, created_at, revoked_at FROM users`
 
-// scanToken reads a single Token row from a *sql.Row or *sql.Rows.
-func scanToken(sc interface{ Scan(...any) error }) (Token, error) {
+// scanUser reads a single User row from a *sql.Row or *sql.Rows.
+func scanUser(sc interface{ Scan(...any) error }) (User, error) {
 	var (
-		t         Token
+		u         User
 		budget    sql.NullFloat64
 		scopeJSON string
 		capture   sql.NullInt64
 		createdAt int64
 		revokedAt sql.NullInt64
 	)
-	if err := sc.Scan(&t.ID, &t.Name, &t.KeyPrefix, &budget, &scopeJSON, &t.RPM, &capture, &createdAt, &revokedAt); err != nil {
-		return Token{}, err
+	if err := sc.Scan(&u.ID, &u.Name, &u.KeyPrefix, &budget, &scopeJSON, &u.RPM, &capture, &createdAt, &revokedAt); err != nil {
+		return User{}, err
 	}
 	if budget.Valid {
 		b := budget.Float64
-		t.Budget = &b
+		u.Budget = &b
 	}
 	if capture.Valid {
 		c := capture.Int64 != 0
-		t.Capture = &c
+		u.Capture = &c
 	}
-	if err := json.Unmarshal([]byte(scopeJSON), &t.Scope); err != nil {
-		return Token{}, fmt.Errorf("store: decode scope: %w", err)
+	if err := json.Unmarshal([]byte(scopeJSON), &u.Scope); err != nil {
+		return User{}, fmt.Errorf("store: decode scope: %w", err)
 	}
-	if t.Scope == nil {
-		t.Scope = []string{}
+	if u.Scope == nil {
+		u.Scope = []string{}
 	}
-	t.CreatedAt = time.Unix(createdAt, 0)
+	u.CreatedAt = time.Unix(createdAt, 0)
 	if revokedAt.Valid {
 		rt := time.Unix(revokedAt.Int64, 0)
-		t.RevokedAt = &rt
+		u.RevokedAt = &rt
 	}
-	return t, nil
+	return u, nil
 }
 
-// GetToken returns the token with the given id.
-func (s *Store) GetToken(id string) (Token, error) {
-	row := s.db.QueryRow(tokenSelect+` WHERE id = ?`, id)
-	t, err := scanToken(row)
+// GetUser returns the user with the given id.
+func (s *Store) GetUser(id string) (User, error) {
+	row := s.db.QueryRow(userSelect+` WHERE id = ?`, id)
+	u, err := scanUser(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Token{}, fmt.Errorf("store: token %q: %w", id, ErrNotFound)
+		return User{}, fmt.Errorf("store: user %q: %w", id, ErrNotFound)
 	}
 	if err != nil {
-		return Token{}, fmt.Errorf("store: get token: %w", err)
+		return User{}, fmt.Errorf("store: get user: %w", err)
 	}
-	return t, nil
+	return u, nil
 }
 
-// GetTokenByKey hashes the plaintext key and returns the matching active
-// token. Missing or revoked tokens yield ErrNotFound.
-func (s *Store) GetTokenByKey(plaintext string) (Token, error) {
-	row := s.db.QueryRow(tokenSelect+` WHERE key_hash = ? AND revoked_at IS NULL`, HashKey(plaintext))
-	t, err := scanToken(row)
+// GetUserByKey hashes the plaintext key and returns the matching active
+// user. Missing or revoked users yield ErrNotFound.
+func (s *Store) GetUserByKey(plaintext string) (User, error) {
+	row := s.db.QueryRow(userSelect+` WHERE key_hash = ? AND revoked_at IS NULL`, HashKey(plaintext))
+	u, err := scanUser(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Token{}, fmt.Errorf("store: token by key: %w", ErrNotFound)
+		return User{}, fmt.Errorf("store: user by key: %w", ErrNotFound)
 	}
 	if err != nil {
-		return Token{}, fmt.Errorf("store: get token by key: %w", err)
+		return User{}, fmt.Errorf("store: get user by key: %w", err)
 	}
-	return t, nil
+	return u, nil
 }
 
-// ListTokens returns all tokens, newest first.
-func (s *Store) ListTokens() ([]Token, error) {
-	rows, err := s.db.Query(tokenSelect + ` ORDER BY created_at DESC, id`)
+// ListUsers returns all users, newest first.
+func (s *Store) ListUsers() ([]User, error) {
+	rows, err := s.db.Query(userSelect + ` ORDER BY created_at DESC, id`)
 	if err != nil {
-		return nil, fmt.Errorf("store: list tokens: %w", err)
+		return nil, fmt.Errorf("store: list users: %w", err)
 	}
 	defer rows.Close()
 
-	var out []Token
+	var out []User
 	for rows.Next() {
-		t, err := scanToken(rows)
+		u, err := scanUser(rows)
 		if err != nil {
-			return nil, fmt.Errorf("store: scan token: %w", err)
+			return nil, fmt.Errorf("store: scan user: %w", err)
 		}
-		out = append(out, t)
+		out = append(out, u)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list tokens: %w", err)
+		return nil, fmt.Errorf("store: list users: %w", err)
 	}
 	return out, nil
 }
 
-// UpdateToken applies the non-nil fields of upd to the token and returns the
+// UpdateUser applies the non-nil fields of upd to the user and returns the
 // updated row.
-func (s *Store) UpdateToken(id string, upd TokenUpdate) (Token, error) {
+func (s *Store) UpdateUser(id string, upd UserUpdate) (User, error) {
 	var (
 		sets []string
 		args []any
@@ -238,7 +238,7 @@ func (s *Store) UpdateToken(id string, upd TokenUpdate) (Token, error) {
 		}
 		scopeJSON, err := json.Marshal(scope)
 		if err != nil {
-			return Token{}, fmt.Errorf("store: encode scope: %w", err)
+			return User{}, fmt.Errorf("store: encode scope: %w", err)
 		}
 		sets = append(sets, "scope = ?")
 		args = append(args, string(scopeJSON))
@@ -253,7 +253,7 @@ func (s *Store) UpdateToken(id string, upd TokenUpdate) (Token, error) {
 	}
 
 	if len(sets) > 0 {
-		query := "UPDATE tokens SET " + sets[0]
+		query := "UPDATE users SET " + sets[0]
 		for _, s := range sets[1:] {
 			query += ", " + s
 		}
@@ -262,25 +262,25 @@ func (s *Store) UpdateToken(id string, upd TokenUpdate) (Token, error) {
 
 		res, err := s.db.Exec(query, args...)
 		if err != nil {
-			return Token{}, fmt.Errorf("store: update token: %w", err)
+			return User{}, fmt.Errorf("store: update user: %w", err)
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
-			return Token{}, fmt.Errorf("store: token %q: %w", id, ErrNotFound)
+			return User{}, fmt.Errorf("store: user %q: %w", id, ErrNotFound)
 		}
 	}
 
-	return s.GetToken(id)
+	return s.GetUser(id)
 }
 
-// RevokeToken marks a token revoked as of now. Revoking an already-revoked
-// token refreshes the timestamp.
-func (s *Store) RevokeToken(id string) error {
-	res, err := s.db.Exec(`UPDATE tokens SET revoked_at = ? WHERE id = ?`, time.Now().Unix(), id)
+// RevokeUser marks a user revoked as of now. Revoking an already-revoked
+// user refreshes the timestamp.
+func (s *Store) RevokeUser(id string) error {
+	res, err := s.db.Exec(`UPDATE users SET revoked_at = ? WHERE id = ?`, time.Now().Unix(), id)
 	if err != nil {
-		return fmt.Errorf("store: revoke token: %w", err)
+		return fmt.Errorf("store: revoke user: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("store: token %q: %w", id, ErrNotFound)
+		return fmt.Errorf("store: user %q: %w", id, ErrNotFound)
 	}
 	return nil
 }

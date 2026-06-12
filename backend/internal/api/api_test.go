@@ -111,10 +111,10 @@ func TestAuthRequiredOnAllEndpoints(t *testing.T) {
 		{"GET", "/api/usage/series"},
 		{"GET", "/api/calls"},
 		{"GET", "/api/calls/export?format=csv"},
-		{"GET", "/api/tokens"},
-		{"POST", "/api/tokens"},
-		{"PATCH", "/api/tokens/x"},
-		{"POST", "/api/tokens/x/revoke"},
+		{"GET", "/api/users"},
+		{"POST", "/api/users"},
+		{"PATCH", "/api/users/x"},
+		{"POST", "/api/users/x/revoke"},
 		{"GET", "/api/vendors"},
 		{"POST", "/api/vendors/openai/test"},
 		{"GET", "/api/settings"},
@@ -156,17 +156,17 @@ func TestUnprotectedModeAllowsAll(t *testing.T) {
 
 // --- (b) tokens ---
 
-func TestTokenCreateListPatchRevoke(t *testing.T) {
+func TestUserCreateListPatchRevoke(t *testing.T) {
 	s := newTestStore(t)
 	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
 
 	// Create.
 	body := `{"name":"app1","budget":10.0,"scope":["gpt-4o"],"rpm":60}`
-	rec := do(h, "POST", "/api/tokens", "secret", strings.NewReader(body))
+	rec := do(h, "POST", "/api/users", "secret", strings.NewReader(body))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create: code = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	var created tokenView
+	var created userView
 	decodeBody(t, rec, &created)
 	if created.Key == "" {
 		t.Fatal("create: plaintext key missing")
@@ -180,23 +180,23 @@ func TestTokenCreateListPatchRevoke(t *testing.T) {
 	if !created.Active {
 		t.Error("create: token should be active")
 	}
-	tokenID := created.ID
+	userID := created.ID
 	plaintext := created.Key
 
 	// Seed calls so list shows computed spend.
 	if _, err := s.AppendCall(calls.Entry{
-		TS: time.Now(), TokenID: tokenID, Model: "gpt-4o", Modality: calls.ModalityChat,
+		TS: time.Now(), UserID: userID, Model: "gpt-4o", Modality: calls.ModalityChat,
 		Vendor: "openai", Status: 200, Cost: 3.25,
 	}); err != nil {
 		t.Fatalf("AppendCall: %v", err)
 	}
 
 	// List shows it with spent computed.
-	rec = do(h, "GET", "/api/tokens", "secret", nil)
+	rec = do(h, "GET", "/api/users", "secret", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list: code = %d", rec.Code)
 	}
-	var list []tokenView
+	var list []userView
 	decodeBody(t, rec, &list)
 	if len(list) != 1 {
 		t.Fatalf("list len = %d, want 1", len(list))
@@ -210,11 +210,11 @@ func TestTokenCreateListPatchRevoke(t *testing.T) {
 	}
 
 	// Patch name + rpm; budget unchanged.
-	rec = do(h, "PATCH", "/api/tokens/"+tokenID, "secret", strings.NewReader(`{"name":"renamed","rpm":120}`))
+	rec = do(h, "PATCH", "/api/users/"+userID, "secret", strings.NewReader(`{"name":"renamed","rpm":120}`))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("patch: code = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	var patched tokenView
+	var patched userView
 	decodeBody(t, rec, &patched)
 	if patched.Name != "renamed" {
 		t.Errorf("patch name = %q, want renamed", patched.Name)
@@ -227,17 +227,17 @@ func TestTokenCreateListPatchRevoke(t *testing.T) {
 	}
 
 	// Patch unknown id -> 404.
-	rec = do(h, "PATCH", "/api/tokens/nope", "secret", strings.NewReader(`{"name":"x"}`))
+	rec = do(h, "PATCH", "/api/users/nope", "secret", strings.NewReader(`{"name":"x"}`))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("patch unknown: code = %d, want 404", rec.Code)
 	}
 
 	// Revoke flips active.
-	rec = do(h, "POST", "/api/tokens/"+tokenID+"/revoke", "secret", nil)
+	rec = do(h, "POST", "/api/users/"+userID+"/revoke", "secret", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("revoke: code = %d", rec.Code)
 	}
-	var revoked tokenView
+	var revoked userView
 	decodeBody(t, rec, &revoked)
 	if revoked.Active {
 		t.Error("revoke: token should be inactive")
@@ -247,33 +247,33 @@ func TestTokenCreateListPatchRevoke(t *testing.T) {
 	}
 
 	// Revoke unknown -> 404.
-	rec = do(h, "POST", "/api/tokens/nope/revoke", "secret", nil)
+	rec = do(h, "POST", "/api/users/nope/revoke", "secret", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("revoke unknown: code = %d, want 404", rec.Code)
 	}
 }
 
-func TestCreateTokenValidation(t *testing.T) {
+func TestCreateUserValidation(t *testing.T) {
 	h := testHandler(t, Deps{AdminKey: "secret"})
 	// Missing name.
-	rec := do(h, "POST", "/api/tokens", "secret", strings.NewReader(`{}`))
+	rec := do(h, "POST", "/api/users", "secret", strings.NewReader(`{}`))
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("missing name: code = %d, want 400", rec.Code)
 	}
 	// Bad JSON.
-	rec = do(h, "POST", "/api/tokens", "secret", strings.NewReader(`{not json`))
+	rec = do(h, "POST", "/api/users", "secret", strings.NewReader(`{not json`))
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("bad json: code = %d, want 400", rec.Code)
 	}
 }
 
-func TestCreateTokenNullBudget(t *testing.T) {
+func TestCreateUserNullBudget(t *testing.T) {
 	h := testHandler(t, Deps{AdminKey: "secret"})
-	rec := do(h, "POST", "/api/tokens", "secret", strings.NewReader(`{"name":"free"}`))
+	rec := do(h, "POST", "/api/users", "secret", strings.NewReader(`{"name":"free"}`))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create: code = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	var v tokenView
+	var v userView
 	decodeBody(t, rec, &v)
 	if v.Budget != nil {
 		t.Errorf("budget = %v, want null", v.Budget)
@@ -289,10 +289,10 @@ func seedCalls(t *testing.T, s *store.Store) time.Time {
 	t.Helper()
 	base := time.Date(2026, 6, 9, 10, 0, 0, 0, time.UTC)
 	entries := []calls.Entry{
-		{TS: base, TokenID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat, Vendor: "openai", Status: 200, Cost: 0.10, LatencyMS: 100},
-		{TS: base.Add(1 * time.Minute), TokenID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat, Vendor: "openai", Status: 500, Err: "boom", Cost: 0, LatencyMS: 200},
-		{TS: base.Add(2 * time.Minute), TokenID: "tokB", Model: "text-embedding-3-small", Modality: calls.ModalityEmbedding, Vendor: "openai", Status: 200, Cost: 0.02, LatencyMS: 50},
-		{TS: base.Add(3 * time.Minute), TokenID: "tokB", Model: "deepseek-chat", Modality: calls.ModalityChat, Vendor: "deepseek", Status: 200, Cost: 0.30, LatencyMS: 300},
+		{TS: base, UserID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat, Vendor: "openai", Status: 200, Cost: 0.10, LatencyMS: 100},
+		{TS: base.Add(1 * time.Minute), UserID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat, Vendor: "openai", Status: 500, Err: "boom", Cost: 0, LatencyMS: 200},
+		{TS: base.Add(2 * time.Minute), UserID: "tokB", Model: "text-embedding-3-small", Modality: calls.ModalityEmbedding, Vendor: "openai", Status: 200, Cost: 0.02, LatencyMS: 50},
+		{TS: base.Add(3 * time.Minute), UserID: "tokB", Model: "deepseek-chat", Modality: calls.ModalityChat, Vendor: "deepseek", Status: 200, Cost: 0.30, LatencyMS: 300},
 	}
 	for i, e := range entries {
 		if _, err := s.AppendCall(e); err != nil {
@@ -319,11 +319,11 @@ func TestCallsFiltersAndPagination(t *testing.T) {
 	}
 
 	// Filter by token.
-	rec = do(h, "GET", "/api/calls?token_id=tokA", "secret", nil)
+	rec = do(h, "GET", "/api/calls?user_id=tokA", "secret", nil)
 	var byTok callsView
 	decodeBody(t, rec, &byTok)
 	if byTok.Total != 2 {
-		t.Errorf("token_id=tokA total = %d, want 2", byTok.Total)
+		t.Errorf("user_id=tokA total = %d, want 2", byTok.Total)
 	}
 
 	// Filter by model.
@@ -433,17 +433,17 @@ func TestOverviewMath(t *testing.T) {
 
 	// Create a budgeted token; seed its calls so runway math is exercised.
 	budget := 100.0
-	tok, _, err := s.CreateToken(store.NewToken{Name: "budgeted", Budget: &budget})
+	tok, _, err := s.CreateUser(store.NewUser{Name: "budgeted", Budget: &budget})
 	if err != nil {
-		t.Fatalf("CreateToken: %v", err)
+		t.Fatalf("CreateUser: %v", err)
 	}
 
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
 	// Spend within the last 7 days for daily_burn. Put 14.0 total over the week.
 	weekEntries := []calls.Entry{
-		{TS: now.Add(-24 * time.Hour), TokenID: tok.ID, Model: "gpt-4o", Modality: calls.ModalityChat, Vendor: "openai", Status: 200, Cost: 6.0, LatencyMS: 100},
-		{TS: now.Add(-48 * time.Hour), TokenID: tok.ID, Model: "dall-e-3", Modality: calls.ModalityImage, Vendor: "openai", Status: 500, Cost: 1.0, LatencyMS: 300},
-		{TS: now.Add(-72 * time.Hour), TokenID: tok.ID, Model: "tts-1", Modality: calls.ModalityTTS, Vendor: "openai", Status: 0, Cost: 7.0, LatencyMS: 200},
+		{TS: now.Add(-24 * time.Hour), UserID: tok.ID, Model: "gpt-4o", Modality: calls.ModalityChat, Vendor: "openai", Status: 200, Cost: 6.0, LatencyMS: 100},
+		{TS: now.Add(-48 * time.Hour), UserID: tok.ID, Model: "dall-e-3", Modality: calls.ModalityImage, Vendor: "openai", Status: 500, Cost: 1.0, LatencyMS: 300},
+		{TS: now.Add(-72 * time.Hour), UserID: tok.ID, Model: "tts-1", Modality: calls.ModalityTTS, Vendor: "openai", Status: 0, Cost: 7.0, LatencyMS: 200},
 	}
 	for i, e := range weekEntries {
 		if _, err := s.AppendCall(e); err != nil {
@@ -487,8 +487,8 @@ func TestOverviewMath(t *testing.T) {
 	if ov.VendorsActive != 2 {
 		t.Errorf("vendors_active = %d, want 2", ov.VendorsActive)
 	}
-	if ov.TokensActive != 1 {
-		t.Errorf("tokens_active = %d, want 1", ov.TokensActive)
+	if ov.UsersActive != 1 {
+		t.Errorf("users_active = %d, want 1", ov.UsersActive)
 	}
 	// daily_burn = 14 / 7 = 2.0.
 	if !approxF(ov.DailyBurn, 2.0) {
@@ -505,8 +505,8 @@ func TestOverviewMath(t *testing.T) {
 
 func TestOverviewNullRunwayNoBudget(t *testing.T) {
 	s := newTestStore(t)
-	if _, _, err := s.CreateToken(store.NewToken{Name: "free"}); err != nil {
-		t.Fatalf("CreateToken: %v", err)
+	if _, _, err := s.CreateUser(store.NewUser{Name: "free"}); err != nil {
+		t.Fatalf("CreateUser: %v", err)
 	}
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
 	if _, err := s.AppendCall(calls.Entry{TS: now.Add(-time.Hour), Vendor: "openai", Status: 200, Cost: 5, LatencyMS: 10}); err != nil {

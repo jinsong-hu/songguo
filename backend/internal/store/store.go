@@ -1,4 +1,4 @@
-// Package store persists tokens, budgets, and usage in SQLite.
+// Package store persists users, budgets, and usage in SQLite.
 //
 // It uses the pure-Go (cgo-free) modernc.org/sqlite driver via database/sql so
 // the gateway ships as a single static binary. A single *sql.DB is shared and
@@ -19,7 +19,7 @@ import (
 // where an active row was required).
 var ErrNotFound = errors.New("store: not found")
 
-// Store is a handle to the SQLite-backed calls and token tables.
+// Store is a handle to the SQLite-backed calls and user tables.
 type Store struct {
 	db *sql.DB
 }
@@ -74,18 +74,21 @@ func (s *Store) migrate() error {
 	// (either from a previous run with new names, or via rename from service_wires).
 	hadProviderWires, _ := s.tableExists("provider_wires")
 
-	// Step 1: Rename legacy tables services → providers, etc.
+	// Step 1: Rename legacy tables services → providers, tokens → users, etc.
 	// Must run before CREATE TABLE so old tables are gone when new ones are
 	// created. Each statement is guarded by the current schema state so an
 	// interrupted earlier migration is repaired rather than skipped.
 	if err := s.renameServicesToProviders(); err != nil {
 		return err
 	}
+	if err := s.renameTokensToUsers(); err != nil {
+		return err
+	}
 
 	// Step 2: Create tables (new names). IF NOT EXISTS means this is safe for
 	// fresh databases and for databases that just went through the rename.
 	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS tokens (
+		`CREATE TABLE IF NOT EXISTS users (
 			id         TEXT PRIMARY KEY,
 			name       TEXT NOT NULL,
 			key_hash   TEXT NOT NULL UNIQUE,
@@ -100,7 +103,7 @@ func (s *Store) migrate() error {
 		`CREATE TABLE IF NOT EXISTS calls (
 			id            INTEGER PRIMARY KEY AUTOINCREMENT,
 			ts            INTEGER NOT NULL,
-			token_id      TEXT NOT NULL DEFAULT '',
+			user_id       TEXT NOT NULL DEFAULT '',
 			model         TEXT NOT NULL DEFAULT '',
 			modality      TEXT NOT NULL DEFAULT 'unknown',
 			vendor        TEXT NOT NULL DEFAULT '',
@@ -127,7 +130,7 @@ func (s *Store) migrate() error {
 			created_at       INTEGER NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_ts ON calls(ts)`,
-		`CREATE INDEX IF NOT EXISTS idx_calls_token_id ON calls(token_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_calls_user_id ON calls(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_model ON calls(model)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_vendor ON calls(vendor)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status)`,
@@ -278,6 +281,45 @@ func (s *Store) renameServicesToProviders() error {
 		return err
 	}
 	return exec(`DROP INDEX IF EXISTS idx_service_wires_service`)
+}
+
+// renameTokensToUsers migrates the tokens-era schema to the users naming.
+// Every step checks the live schema first, so it is idempotent and also
+// repairs databases left half-migrated by an interrupted run.
+func (s *Store) renameTokensToUsers() error {
+	s.db.Exec(`PRAGMA legacy_alter_table=ON`)
+	defer s.db.Exec(`PRAGMA legacy_alter_table=OFF`)
+
+	exec := func(stmt string) error {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("store: rename tokens→users: %w", err)
+		}
+		return nil
+	}
+
+	if has, _ := s.tableExists("tokens"); has {
+		if hasNew, _ := s.tableExists("users"); hasNew {
+			// An interrupted migration already created the new (empty) table;
+			// fold the old rows in instead of renaming over it.
+			if err := exec(`INSERT OR IGNORE INTO users (id, name, key_hash, key_prefix, budget, scope, rpm, capture, created_at, revoked_at)
+				SELECT id, name, key_hash, key_prefix, budget, scope, rpm, capture, created_at, revoked_at FROM tokens`); err != nil {
+				return err
+			}
+			if err := exec(`DROP TABLE tokens`); err != nil {
+				return err
+			}
+		} else {
+			if err := exec(`ALTER TABLE tokens RENAME TO users`); err != nil {
+				return err
+			}
+		}
+	}
+	if has, _ := s.hasColumn("calls", "token_id"); has {
+		if err := exec(`ALTER TABLE calls RENAME COLUMN token_id TO user_id`); err != nil {
+			return err
+		}
+	}
+	return exec(`DROP INDEX IF EXISTS idx_calls_token_id`)
 }
 
 // foldCredentialPool migrates from the multi-key pool era: each provider keeps
