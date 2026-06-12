@@ -1,0 +1,101 @@
+.formCard {
+  max-width: 560px;
+  padding: 20px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.fieldLabel {
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.fieldHint {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.scopeBox {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.scopeOpt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+}
+
+.scopeOpt:hover {
+  background: var(--surface-2);
+}
+
+.scopeOpt input {
+  accent-color: var(--accent);
+}
+
+.captureSeg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+  background: var(--surface);
+  align-self: flex-start;
+}
+
+.captureBtn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  height: 32px;
+  padding: 0 16px;
+  font-size: 12.5px;
+  font-weight: 500;
+  border-right: 1px solid var(--border);
+}
+
+.captureBtn:last-child {
+  border-right: none;
+}
+
+.captureBtn:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.captureBtnActive,
+.captureBtnActive:hover {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+.error {
+  color: var(--danger);
+  font-size: 12.5px;
+  margin-top: 4px;
+}
+
+.footerRow {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}

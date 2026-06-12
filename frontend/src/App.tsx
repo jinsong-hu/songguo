@@ -11,7 +11,11 @@ import { OverviewPage } from './pages/Overview';
 import { ServicesPage } from './pages/Services';
 import { ServiceAddPage } from './pages/ServiceAdd';
 import { ServiceDetailPage } from './pages/ServiceDetail';
+import { ProviderNewPage } from './pages/ProviderNew';
+import { ProviderEditPage } from './pages/ProviderEdit';
 import { UsersPage } from './pages/Users';
+import { UserNewPage } from './pages/UserNew';
+import { UserEditPage } from './pages/UserEdit';
 import { SettingsPage } from './pages/SettingsPage';
 
 type Phase =
@@ -104,8 +108,11 @@ export function App() {
               <Route path="services/add" element={<ServiceAddPage />} />
               <Route path="services/:model" element={<ServiceDetailPage />} />
               <Route path="providers" element={<Navigate to="/services/add" replace />} />
-              <Route path="providers/new" element={<Navigate to="/services/add" replace />} />
+              <Route path="providers/new" element={<ProviderNewPage />} />
+              <Route path="providers/:id/edit" element={<ProviderEditPage />} />
               <Route path="users" element={<UsersPage />} />
+              <Route path="users/new" element={<UserNewPage />} />
+              <Route path="users/:id/edit" element={<UserEditPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="*" element={<OverviewPage />} />
             </Route>

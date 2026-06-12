@@ -1,3 +1,17 @@
+.formCard {
+  max-width: 760px;
+  padding: 20px;
+}
+
+.footerRow {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
 .field {
   display: flex;
   flex-direction: column;

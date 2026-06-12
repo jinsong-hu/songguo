@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
-import { Link } from 'react-router-dom';
-import { Layers, Plus } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { FlaskConical, Layers, Plus } from 'lucide-react';
 import { api } from '../api/client';
 import type { Service } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
@@ -55,6 +55,7 @@ export function ServicesPage() {
 
 function ModelCard({ service }: { service: Service }) {
   const meta = modelMeta(service.model);
+  const navigate = useNavigate();
 
   return (
     <Link
@@ -67,6 +68,17 @@ function ModelCard({ service }: { service: Service }) {
           <ModelIcon model={service.model} size={22} />
         </span>
         <span className={styles.cardName}>{meta.name}</span>
+        <button
+          type="button"
+          className={styles.testBtn}
+          aria-label={`Test ${meta.name}`}
+          onClick={(e) => {
+            e.preventDefault();
+            navigate(`/services/${encodeURIComponent(service.model)}#test`);
+          }}
+        >
+          <FlaskConical size={12} /> Test
+        </button>
       </div>
       <div className={styles.cardTagline}>{meta.tagline}</div>
     </Link>

@@ -121,11 +121,18 @@ export async function runTest(key: string, req: TestRequest): Promise<TestResult
   return { ok: true, status: res.status, latencyMs, text, usage, raw };
 }
 
-/** Extract the gateway/vendor error message from an error envelope. */
+/**
+ * Extract the error message from an error body. The gateway uses the OpenAI
+ * envelope ({error: {message}}); responses forwarded verbatim from vendors
+ * may use top-level "message" or "msg" instead.
+ */
 function errorMessageOf(json: unknown): string | null {
   if (typeof json !== 'object' || json === null) return null;
-  const err = (json as { error?: { message?: unknown } }).error;
-  return typeof err?.message === 'string' ? err.message : null;
+  const obj = json as { error?: { message?: unknown }; message?: unknown; msg?: unknown };
+  for (const candidate of [obj.error?.message, obj.message, obj.msg]) {
+    if (typeof candidate === 'string' && candidate !== '') return candidate;
+  }
+  return null;
 }
 
 /**

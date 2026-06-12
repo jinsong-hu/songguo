@@ -2,7 +2,6 @@ import { useState, type FormEvent } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
 import type { CreateProviderBody, PatchProviderBody, Provider, ProviderModel } from '../api/types';
-import { Modal } from './Modal';
 import { useFetch } from '../lib/useFetch';
 import styles from './ProviderForm.module.css';
 
@@ -43,7 +42,7 @@ export interface ProviderPrefill {
 interface ProviderFormProps {
   editing?: Provider;
   prefill?: ProviderPrefill;
-  onClose: () => void;
+  onCancel: () => void;
   onSaved: (provider: Provider, created: boolean) => void;
 }
 
@@ -67,7 +66,7 @@ function toRows(models: ProviderModel[] | undefined): ModelRow[] {
   }));
 }
 
-export function ProviderForm({ editing, prefill, onClose, onSaved }: ProviderFormProps) {
+export function ProviderForm({ editing, prefill, onCancel, onSaved }: ProviderFormProps) {
   const seed = editing ?? prefill;
   const [name, setName] = useState(seed?.name ?? '');
   const [vendor] = useState(seed?.vendor ?? '');
@@ -209,262 +208,256 @@ export function ProviderForm({ editing, prefill, onClose, onSaved }: ProviderFor
   };
 
   return (
-    <Modal
-      title={isEdit ? `Edit ${editing!.name}` : 'Add provider'}
-      onClose={onClose}
-      footer={
-        <>
-          <button className="btn" onClick={onClose} disabled={busy}>
-            Cancel
-          </button>
-          <button type="submit" form="provider-form" className="btn btn-primary" disabled={busy}>
-            {busy ? 'Saving…' : isEdit ? 'Save changes' : 'Add provider'}
-          </button>
-        </>
-      }
-    >
-      <form id="provider-form" onSubmit={submit}>
-        <div className={styles.grid2}>
-          <div className={styles.field}>
-            <label className={styles.label} htmlFor="s-name">
-              Name
-            </label>
-            <input
-              id="s-name"
-              className="input"
-              value={name}
-              autoFocus
-              placeholder="e.g. openai-main"
-              onChange={(e) => setName(e.target.value)}
-            />
-            <span className={styles.hint}>Unique handle; also addressable at /x/&lt;name&gt;/…</span>
-          </div>
-          <div className={styles.field}>
-            <label className={styles.label} htmlFor="s-adapter">
-              Adapter
-            </label>
-            <select
-              id="s-adapter"
-              className="select"
-              value={adapter}
-              onChange={(e) => setAdapter(e.target.value)}
-            >
-              {ADAPTERS.map((a) => (
-                <option key={a.value} value={a.value}>
-                  {a.label}
-                </option>
-              ))}
-            </select>
-            <span className={styles.hint}>Wire protocol used to authenticate + meter.</span>
-          </div>
-        </div>
-
+    <form className={`card ${styles.formCard}`} onSubmit={submit}>
+      <div className={styles.grid2}>
         <div className={styles.field}>
-          <label className={styles.label} htmlFor="s-url">
-            Base URL
+          <label className={styles.label} htmlFor="s-name">
+            Name
           </label>
           <input
-            id="s-url"
+            id="s-name"
             className="input"
-            value={baseUrl}
-            placeholder="https://api.openai.com/v1"
-            onChange={(e) => setBaseUrl(e.target.value)}
+            value={name}
+            autoFocus
+            placeholder="e.g. openai-main"
+            onChange={(e) => setName(e.target.value)}
           />
-          <span className={styles.hint}>
-            The vendor&apos;s published base, including any version prefix (e.g. /v1, /api/v3).
-          </span>
+          <span className={styles.hint}>Unique handle; also addressable at /x/&lt;name&gt;/…</span>
         </div>
-
         <div className={styles.field}>
-          <label className={styles.label} htmlFor="s-key">
-            API key
+          <label className={styles.label} htmlFor="s-adapter">
+            Adapter
+          </label>
+          <select
+            id="s-adapter"
+            className="select"
+            value={adapter}
+            onChange={(e) => setAdapter(e.target.value)}
+          >
+            {ADAPTERS.map((a) => (
+              <option key={a.value} value={a.value}>
+                {a.label}
+              </option>
+            ))}
+          </select>
+          <span className={styles.hint}>Wire protocol used to authenticate + meter.</span>
+        </div>
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.label} htmlFor="s-url">
+          Base URL
+        </label>
+        <input
+          id="s-url"
+          className="input"
+          value={baseUrl}
+          placeholder="https://api.openai.com/v1"
+          onChange={(e) => setBaseUrl(e.target.value)}
+        />
+        <span className={styles.hint}>
+          The vendor&apos;s published base, including any version prefix (e.g. /v1, /api/v3).
+        </span>
+      </div>
+
+      <div className={styles.field}>
+        <label className={styles.label} htmlFor="s-key">
+          API key
+        </label>
+        <input
+          id="s-key"
+          className="input mono"
+          type="password"
+          value={apiKey}
+          placeholder={
+            isEdit
+              ? editing?.masked_key
+                ? `${editing.masked_key} — leave blank to keep`
+                : 'No key set — paste one to start routing'
+              : 'sk-…'
+          }
+          onChange={(e) => setApiKey(e.target.value)}
+        />
+        <span className={styles.hint}>
+          One key per provider. Stored as-is; shown masked afterwards.
+        </span>
+      </div>
+
+      <div className={styles.grid3}>
+        <div className={styles.field}>
+          <label className={styles.label} htmlFor="s-prio">
+            Priority
           </label>
           <input
-            id="s-key"
-            className="input mono"
-            type="password"
-            value={apiKey}
-            placeholder={
-              isEdit
-                ? editing?.masked_key
-                  ? `${editing.masked_key} — leave blank to keep`
-                  : 'No key set — paste one to start routing'
-                : 'sk-…'
-            }
-            onChange={(e) => setApiKey(e.target.value)}
+            id="s-prio"
+            className="input"
+            inputMode="numeric"
+            value={priority}
+            onChange={(e) => setPriority(e.target.value)}
           />
-          <span className={styles.hint}>
-            One key per provider. Stored as-is; shown masked afterwards.
-          </span>
+          <span className={styles.hint}>Lower = preferred.</span>
         </div>
-
-        <div className={styles.grid3}>
-          <div className={styles.field}>
-            <label className={styles.label} htmlFor="s-prio">
-              Priority
-            </label>
-            <input
-              id="s-prio"
-              className="input"
-              inputMode="numeric"
-              value={priority}
-              onChange={(e) => setPriority(e.target.value)}
-            />
-            <span className={styles.hint}>Lower = preferred.</span>
-          </div>
-          <div className={styles.field}>
-            <label className={styles.label} htmlFor="s-weight">
-              Weight
-            </label>
-            <input
-              id="s-weight"
-              className="input"
-              inputMode="numeric"
-              value={weight}
-              onChange={(e) => setWeight(e.target.value)}
-            />
-            <span className={styles.hint}>Within a priority.</span>
-          </div>
-          <div className={styles.field}>
-            <span className={styles.label}>Enabled</span>
-            <label className={styles.toggleRow}>
-              <input
-                type="checkbox"
-                checked={enabled}
-                onChange={(e) => setEnabled(e.target.checked)}
-              />
-              <span>{enabled ? 'Routing' : 'Disabled'}</span>
-            </label>
-          </div>
-        </div>
-
         <div className={styles.field}>
-          <span className={styles.label}>Wires</span>
+          <label className={styles.label} htmlFor="s-weight">
+            Weight
+          </label>
+          <input
+            id="s-weight"
+            className="input"
+            inputMode="numeric"
+            value={weight}
+            onChange={(e) => setWeight(e.target.value)}
+          />
+          <span className={styles.hint}>Within a priority.</span>
+        </div>
+        <div className={styles.field}>
+          <span className={styles.label}>Enabled</span>
+          <label className={styles.toggleRow}>
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => setEnabled(e.target.checked)}
+            />
+            <span>{enabled ? 'Routing' : 'Disabled'}</span>
+          </label>
+        </div>
+      </div>
+
+      <div className={styles.field}>
+        <span className={styles.label}>Wires</span>
+        <span className={styles.hint}>
+          Endpoints the proxy may serve for this service. Requests matching no enabled
+          wire are denied (so every forwarded call has a pricing rule).
+        </span>
+        <div className={styles.wireGrid}>
+          {wireOptions.map((w) => (
+            <label key={w} className={styles.wireItem}>
+              <input type="checkbox" checked={wires.includes(w)} onChange={() => toggleWire(w)} />
+              <span className="mono">{w}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className={styles.grid2}>
+        <div className={styles.field}>
+          <span className={styles.label}>Unmatched paths</span>
+          <label className={styles.toggleRow}>
+            <input
+              type="checkbox"
+              checked={allowUnmatched}
+              onChange={(e) => setAllowUnmatched(e.target.checked)}
+            />
+            <span>{allowUnmatched ? 'Forward (metered zero)' : 'Deny (recommended)'}</span>
+          </label>
           <span className={styles.hint}>
-            Endpoints the proxy may serve for this service. Requests matching no enabled
-            wire are denied (so every forwarded call has a pricing rule).
+            Opt-in passthrough for endpoints without a wire — spend on them is not metered.
           </span>
-          <div className={styles.wireGrid}>
-            {wireOptions.map((w) => (
-              <label key={w} className={styles.wireItem}>
-                <input type="checkbox" checked={wires.includes(w)} onChange={() => toggleWire(w)} />
-                <span className="mono">{w}</span>
-              </label>
+        </div>
+        <div className={styles.field}>
+          <span className={styles.label}>Stream usage injection</span>
+          <label className={styles.toggleRow}>
+            <input
+              type="checkbox"
+              checked={injectStreamUsage}
+              onChange={(e) => setInjectStreamUsage(e.target.checked)}
+            />
+            <span>{injectStreamUsage ? 'Inject include_usage' : 'Off (bodies untouched)'}</span>
+          </label>
+          <span className={styles.hint}>
+            Some vendors omit usage from streams unless asked; this sets
+            stream_options.include_usage on streamed requests.
+          </span>
+        </div>
+      </div>
+
+      <div className={styles.field}>
+        <div className={styles.modelsHead}>
+          <span className={styles.label}>Models &amp; prices</span>
+          <button type="button" className="btn btn-sm" onClick={addModel}>
+            <Plus size={13} /> Add model
+          </button>
+        </div>
+        <span className={styles.hint}>
+          Each row is a served model with its true per-unit price (used for metering).
+          &quot;Cached in&quot; is the rate for cache-hit input tokens; 0 = full input rate.
+        </span>
+        {models.length === 0 ? (
+          <span className="muted" style={{ fontSize: 12.5 }}>
+            No models yet — a service with no models is saved as a draft and won&apos;t route
+            until you add one.
+          </span>
+        ) : (
+          <div className={styles.modelRows}>
+            <div className={`${styles.modelRow} ${styles.modelHeader}`}>
+              <span>Model</span>
+              <span>Input</span>
+              <span>Output</span>
+              <span>Cached in</span>
+              <span>Unit</span>
+              <span />
+            </div>
+            {models.map((row, i) => (
+              <div key={i} className={styles.modelRow}>
+                <input
+                  className="input mono"
+                  value={row.model}
+                  placeholder="gpt-4o"
+                  onChange={(e) => setModel(i, { model: e.target.value })}
+                />
+                <input
+                  className="input"
+                  inputMode="decimal"
+                  value={row.input}
+                  onChange={(e) => setModel(i, { input: e.target.value })}
+                />
+                <input
+                  className="input"
+                  inputMode="decimal"
+                  value={row.output}
+                  onChange={(e) => setModel(i, { output: e.target.value })}
+                />
+                <input
+                  className="input"
+                  inputMode="decimal"
+                  value={row.cachedInput}
+                  onChange={(e) => setModel(i, { cachedInput: e.target.value })}
+                />
+                <select
+                  className="select"
+                  value={row.unit}
+                  onChange={(e) => setModel(i, { unit: e.target.value })}
+                >
+                  {UNITS.map((u) => (
+                    <option key={u} value={u}>
+                      {u}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className={styles.iconBtn}
+                  aria-label="Remove model"
+                  onClick={() => removeModel(i)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             ))}
           </div>
-        </div>
+        )}
+      </div>
 
-        <div className={styles.grid2}>
-          <div className={styles.field}>
-            <span className={styles.label}>Unmatched paths</span>
-            <label className={styles.toggleRow}>
-              <input
-                type="checkbox"
-                checked={allowUnmatched}
-                onChange={(e) => setAllowUnmatched(e.target.checked)}
-              />
-              <span>{allowUnmatched ? 'Forward (metered zero)' : 'Deny (recommended)'}</span>
-            </label>
-            <span className={styles.hint}>
-              Opt-in passthrough for endpoints without a wire — spend on them is not metered.
-            </span>
-          </div>
-          <div className={styles.field}>
-            <span className={styles.label}>Stream usage injection</span>
-            <label className={styles.toggleRow}>
-              <input
-                type="checkbox"
-                checked={injectStreamUsage}
-                onChange={(e) => setInjectStreamUsage(e.target.checked)}
-              />
-              <span>{injectStreamUsage ? 'Inject include_usage' : 'Off (bodies untouched)'}</span>
-            </label>
-            <span className={styles.hint}>
-              Some vendors omit usage from streams unless asked; this sets
-              stream_options.include_usage on streamed requests.
-            </span>
-          </div>
-        </div>
+      {err && <div className={styles.error}>{err}</div>}
 
-        <div className={styles.field}>
-          <div className={styles.modelsHead}>
-            <span className={styles.label}>Models &amp; prices</span>
-            <button type="button" className="btn btn-sm" onClick={addModel}>
-              <Plus size={13} /> Add model
-            </button>
-          </div>
-          <span className={styles.hint}>
-            Each row is a served model with its true per-unit price (used for metering).
-            &quot;Cached in&quot; is the rate for cache-hit input tokens; 0 = full input rate.
-          </span>
-          {models.length === 0 ? (
-            <span className="muted" style={{ fontSize: 12.5 }}>
-              No models yet — a service with no models is saved as a draft and won&apos;t route
-              until you add one.
-            </span>
-          ) : (
-            <div className={styles.modelRows}>
-              <div className={`${styles.modelRow} ${styles.modelHeader}`}>
-                <span>Model</span>
-                <span>Input</span>
-                <span>Output</span>
-                <span>Cached in</span>
-                <span>Unit</span>
-                <span />
-              </div>
-              {models.map((row, i) => (
-                <div key={i} className={styles.modelRow}>
-                  <input
-                    className="input mono"
-                    value={row.model}
-                    placeholder="gpt-4o"
-                    onChange={(e) => setModel(i, { model: e.target.value })}
-                  />
-                  <input
-                    className="input"
-                    inputMode="decimal"
-                    value={row.input}
-                    onChange={(e) => setModel(i, { input: e.target.value })}
-                  />
-                  <input
-                    className="input"
-                    inputMode="decimal"
-                    value={row.output}
-                    onChange={(e) => setModel(i, { output: e.target.value })}
-                  />
-                  <input
-                    className="input"
-                    inputMode="decimal"
-                    value={row.cachedInput}
-                    onChange={(e) => setModel(i, { cachedInput: e.target.value })}
-                  />
-                  <select
-                    className="select"
-                    value={row.unit}
-                    onChange={(e) => setModel(i, { unit: e.target.value })}
-                  >
-                    {UNITS.map((u) => (
-                      <option key={u} value={u}>
-                        {u}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    className={styles.iconBtn}
-                    aria-label="Remove model"
-                    onClick={() => removeModel(i)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {err && <div className={styles.error}>{err}</div>}
-      </form>
-    </Modal>
+      <div className={styles.footerRow}>
+        <button type="button" className="btn" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+        <button type="submit" className="btn btn-primary" disabled={busy}>
+          {busy ? 'Saving…' : isEdit ? 'Save changes' : 'Add provider'}
+        </button>
+      </div>
+    </form>
   );
 }

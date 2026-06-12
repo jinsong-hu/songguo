@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
   Check,
@@ -17,8 +17,6 @@ import type { CatalogService, CatalogVendor, Provider, VendorTestResult } from '
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
-import { Modal } from '../components/Modal';
-import { ProviderForm, type ProviderPrefill } from '../components/ProviderForm';
 import { Skeleton } from '../components/Skeleton';
 import { useToast } from '../components/Toast';
 import { useFetch } from '../lib/useFetch';
@@ -30,30 +28,18 @@ interface FlatEntry {
   service: CatalogService;
 }
 
-/** Marker for "open the form without a preset". */
-const CUSTOM: ProviderPrefill = {};
-
-type ModalState =
-  | { kind: 'none' }
-  | { kind: 'edit'; provider: Provider }
-  | { kind: 'delete'; provider: Provider };
-
 export function ServiceAddPage() {
   const catalog = useFetch(() => api.catalog(), []);
   const providers = useFetch(() => api.providers(), []);
   const [query, setQuery] = useState('');
   const [vendorFilter, setVendorFilter] = useState<string>('all');
-  const [prefill, setPrefill] = useState<ProviderPrefill | null>(null);
-  const [modal, setModal] = useState<ModalState>({ kind: 'none' });
+  const navigate = useNavigate();
   const toast = useToast();
-
-  const close = () => setModal({ kind: 'none' });
 
   const onDelete = async (provider: Provider) => {
     try {
       await api.deleteProvider(provider.id);
       providers.refetch();
-      close();
       toast.success(`Removed "${provider.name}".`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Delete failed.');
@@ -86,23 +72,8 @@ export function ServiceAddPage() {
     });
   }, [entries, query, vendorFilter]);
 
-  const openAdd = (vendor: CatalogVendor, service: CatalogService) => {
-    setPrefill({
-      name: service.id,
-      vendor: vendor.name,
-      adapter: service.adapter,
-      base_url: service.base_url,
-      catalog_id: service.id,
-      wires: service.wires,
-      quirks: service.quirks,
-      models: service.models.map((m) => ({
-        model: m.model,
-        input: m.input,
-        output: m.output,
-        cached_input: m.cached_input ?? 0,
-        unit: m.unit,
-      })),
-    });
+  const openAdd = (service: CatalogService) => {
+    navigate(`/providers/new?preset=${encodeURIComponent(service.id)}`);
   };
 
   const hasProviders = (providers.data?.length ?? 0) > 0;
@@ -139,8 +110,8 @@ export function ServiceAddPage() {
                 key={p.id}
                 provider={p}
                 onChanged={providers.refetch}
-                onEdit={() => setModal({ kind: 'edit', provider: p })}
-                onDelete={() => setModal({ kind: 'delete', provider: p })}
+                onEdit={() => navigate(`/providers/${p.id}/edit`)}
+                onDelete={() => onDelete(p)}
               />
             ))}
           </div>
@@ -199,7 +170,10 @@ export function ServiceAddPage() {
             <EmptyState icon={Search} title="No matches" hint="Try a different search or facet." />
           ) : (
             <div className={styles.grid}>
-              <button className={`card ${styles.entry} ${styles.custom}`} onClick={() => setPrefill(CUSTOM)}>
+              <button
+                className={`card ${styles.entry} ${styles.custom}`}
+                onClick={() => navigate('/providers/new')}
+              >
                 <div className={styles.customIcon}>
                   <Wrench size={18} />
                 </div>
@@ -215,7 +189,7 @@ export function ServiceAddPage() {
                   vendor={vendor}
                   service={service}
                   added={addedCatalogIds.has(service.id)}
-                  onAdd={() => openAdd(vendor, service)}
+                  onAdd={() => openAdd(service)}
                 />
               ))}
             </div>
@@ -223,51 +197,6 @@ export function ServiceAddPage() {
         </>
       )}
 
-      {prefill && (
-        <ProviderForm
-          prefill={prefill}
-          onClose={() => setPrefill(null)}
-          onSaved={() => {
-            setPrefill(null);
-            providers.refetch();
-            toast.success('Provider added.');
-          }}
-        />
-      )}
-
-      {modal.kind === 'edit' && (
-        <ProviderForm
-          editing={modal.provider}
-          onClose={close}
-          onSaved={() => {
-            providers.refetch();
-            close();
-            toast.success('Provider updated.');
-          }}
-        />
-      )}
-
-      {modal.kind === 'delete' && (
-        <Modal
-          title="Remove provider"
-          onClose={close}
-          footer={
-            <>
-              <button className="btn" onClick={close}>
-                Cancel
-              </button>
-              <button className="btn btn-danger" onClick={() => onDelete(modal.provider)}>
-                Remove provider
-              </button>
-            </>
-          }
-        >
-          <p className={styles.confirmText}>
-            Remove <strong>{modal.provider.name}</strong>? Its key and prices are deleted and it
-            will stop routing immediately. This cannot be undone.
-          </p>
-        </Modal>
-      )}
     </Page>
   );
 }
@@ -334,14 +263,26 @@ interface ProviderCardProps {
   provider: Provider;
   onChanged: () => void;
   onEdit: () => void;
-  onDelete: () => void;
+  onDelete: () => Promise<void>;
 }
 
 function ProviderCard({ provider, onChanged, onEdit, onDelete }: ProviderCardProps) {
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<VendorTestResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const toast = useToast();
+
+  const confirmDelete = async () => {
+    setDeleting(true);
+    try {
+      await onDelete();
+    } finally {
+      setDeleting(false);
+      setConfirmingDelete(false);
+    }
+  };
 
   const { stats } = provider;
   const complete = provider.masked_key !== '' && provider.models.length > 0;
@@ -397,19 +338,45 @@ function ProviderCard({ provider, onChanged, onEdit, onDelete }: ProviderCardPro
           <div className={styles.providerBaseUrl}>{provider.base_url}</div>
         </div>
         <div className={styles.headRight}>
-          <button className="btn btn-sm" onClick={runTest} disabled={testing}>
-            {testing ? <span className="spinner" style={{ width: 13, height: 13 }} /> : null}
-            {testing ? 'Testing…' : 'Test'}
-          </button>
-          <button className="btn btn-sm" onClick={toggleEnabled} disabled={busy}>
-            {provider.enabled ? 'Disable' : 'Enable'}
-          </button>
-          <button className="btn btn-sm" onClick={onEdit}>
-            <Pencil size={12} /> Edit
-          </button>
-          <button className="btn btn-sm btn-danger" onClick={onDelete}>
-            <Trash2 size={12} />
-          </button>
+          {confirmingDelete ? (
+            <>
+              <button
+                className="btn btn-sm btn-danger"
+                disabled={deleting}
+                title="Its key and prices are deleted and it stops routing immediately. This cannot be undone."
+                onClick={confirmDelete}
+              >
+                {deleting ? 'Removing…' : 'Confirm remove'}
+              </button>
+              <button
+                className="btn btn-sm"
+                disabled={deleting}
+                onClick={() => setConfirmingDelete(false)}
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="btn btn-sm" onClick={runTest} disabled={testing}>
+                {testing ? <span className="spinner" style={{ width: 13, height: 13 }} /> : null}
+                {testing ? 'Testing…' : 'Test'}
+              </button>
+              <button className="btn btn-sm" onClick={toggleEnabled} disabled={busy}>
+                {provider.enabled ? 'Disable' : 'Enable'}
+              </button>
+              <button className="btn btn-sm" onClick={onEdit}>
+                <Pencil size={12} /> Edit
+              </button>
+              <button
+                className="btn btn-sm btn-danger"
+                aria-label="Remove provider"
+                onClick={() => setConfirmingDelete(true)}
+              >
+                <Trash2 size={12} />
+              </button>
+            </>
+          )}
         </div>
       </div>
 

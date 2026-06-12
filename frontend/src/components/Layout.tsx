@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { Activity, KeyRound, Layers, Settings, Users } from 'lucide-react';
+import { Activity, Layers, Settings, Users } from 'lucide-react';
 import styles from './Layout.module.css';
 
 const NAV = [

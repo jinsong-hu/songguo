@@ -1,11 +1,13 @@
-import type { CSSProperties } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useEffect, useRef, type CSSProperties } from 'react';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { ArrowLeft, Layers } from 'lucide-react';
 import { api } from '../api/client';
+import type { Provider, Service } from '../api/types';
 import { CopyButton } from '../components/CopyButton';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
+import { Playground } from '../components/Playground';
 import { Skeleton } from '../components/Skeleton';
 import { useFetch } from '../lib/useFetch';
 import { contextLabel, indexCatalog, MODALITY_LABEL, type CatalogInfo } from '../lib/catalogIndex';
@@ -17,10 +19,12 @@ export function ServiceDetailPage() {
   const { model = '' } = useParams();
   const { data, error, initialLoading, refetch } = useFetch(() => api.services(), []);
   const { data: catalog } = useFetch(() => api.catalog(), []);
+  const { data: providers } = useFetch(() => api.providers(), []);
 
   const service = data?.find((s) => s.model === model);
   const info = indexCatalog(catalog).get(model);
   const meta = modelMeta(model);
+  const wires = wiresFor(service, providers);
 
   return (
     <Page
@@ -53,6 +57,7 @@ export function ServiceDetailPage() {
       ) : (
         <div className={styles.stack}>
           <Hero model={model} info={info} />
+          <TestSection model={model} kind={info?.kind ?? 'chat'} wires={wires} />
           <QuickStart model={model} kind={info?.kind ?? 'chat'} />
           <Usage
             requests={service.stats.requests}
@@ -62,6 +67,39 @@ export function ServiceDetailPage() {
         </div>
       )}
     </Page>
+  );
+}
+
+/**
+ * Union of wires enabled on the providers serving this model, so the
+ * playground picks a request shape the route can actually serve. Providers
+ * are matched by ID (a service provider's ID is the provider's credential ID,
+ * which equals the provider ID).
+ */
+function wiresFor(service: Service | undefined, providers: Provider[] | null): string[] {
+  if (!service || !providers) return [];
+  const ids = new Set(service.providers.map((p) => p.id));
+  const wires = new Set<string>();
+  for (const p of providers) {
+    if (!ids.has(p.id)) continue;
+    for (const w of p.wires) wires.add(w);
+  }
+  return [...wires];
+}
+
+/** The playground card, scrolled into view when the URL is /services/:model#test. */
+function TestSection({ model, kind, wires }: { model: string; kind: string; wires: string[] }) {
+  const { hash } = useLocation();
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (hash === '#test') ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [hash]);
+
+  return (
+    <div id="test" ref={ref}>
+      <Playground model={model} kind={kind} wires={wires} />
+    </div>
   );
 }
 
