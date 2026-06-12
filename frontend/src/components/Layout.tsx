@@ -1,11 +1,12 @@
 import type { ReactNode } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { Activity, Layers, Settings, Users } from 'lucide-react';
+import { Activity, Layers, Plug, Settings, Users } from 'lucide-react';
 import styles from './Layout.module.css';
 
 const NAV = [
   { to: '/', label: 'Overview', icon: Activity, end: true },
   { to: '/services', label: 'Services', icon: Layers, end: false },
+  { to: '/providers', label: 'Providers', icon: Plug, end: false },
   { to: '/users', label: 'Users', icon: Users, end: false },
   { to: '/settings', label: 'Settings', icon: Settings, end: false },
 ] as const;

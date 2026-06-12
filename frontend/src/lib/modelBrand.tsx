@@ -22,7 +22,7 @@ import wenxinSvg from '@lobehub/icons-static-svg/icons/wenxin-color.svg?raw';
 import yiSvg from '@lobehub/icons-static-svg/icons/yi-color.svg?raw';
 import zhipuSvg from '@lobehub/icons-static-svg/icons/zhipu-color.svg?raw';
 
-interface Brand {
+export interface Brand {
   /** Model creator, e.g. "Anthropic" — used for accessibility labels only. */
   vendor: string;
   /** Raw inline SVG markup (sized 1em, so font-size controls it). */
@@ -53,6 +53,33 @@ const BRANDS: Brand[] = [
 export function brandOf(model: string): Brand | null {
   const id = model.toLowerCase();
   return BRANDS.find((b) => b.match.test(id)) ?? null;
+}
+
+// Resellers whose vendor label doesn't name the model creator they front for.
+const VENDOR_ALIASES: Array<[RegExp, string]> = [
+  [/volcengine|ark|方舟|火山/i, 'Doubao'],
+  [/dashscope|bailian|百炼|alibaba|阿里/i, 'Qwen'],
+  [/google/i, 'Google'],
+];
+
+/**
+ * Brand for a configured provider: match its catalog vendor label first
+ * ("OpenAI", "Volcengine 火山引擎 (Ark / 方舟)"), then fall back to the first
+ * model whose family we recognize.
+ */
+export function providerBrand(vendor: string, models: string[]): Brand | null {
+  if (vendor) {
+    const label = vendor.toLowerCase();
+    const direct = BRANDS.find((b) => label.includes(b.vendor.toLowerCase()));
+    if (direct) return direct;
+    const alias = VENDOR_ALIASES.find(([re]) => re.test(vendor));
+    if (alias) return BRANDS.find((b) => b.vendor === alias[1]) ?? null;
+  }
+  for (const m of models) {
+    const brand = brandOf(m);
+    if (brand) return brand;
+  }
+  return null;
 }
 
 // Tokens that need casing other than simple capitalization.
@@ -180,15 +207,16 @@ export function modelMeta(model: string): ModelMeta {
   };
 }
 
-interface ModelIconProps {
-  model: string;
+interface BrandIconProps {
+  brand: Brand | null;
+  /** Accessibility label used when there is no brand to name. */
+  label: string;
   size?: number;
   className?: string;
 }
 
-/** The creator's brand mark for a model; falls back to a generic spark. */
-export function ModelIcon({ model, size = 20, className }: ModelIconProps) {
-  const brand = brandOf(model);
+/** A brand mark; falls back to a generic spark when the brand is unknown. */
+export function BrandIcon({ brand, label, size = 20, className }: BrandIconProps) {
   const style: CSSProperties = {
     display: 'inline-flex',
     alignItems: 'center',
@@ -201,7 +229,7 @@ export function ModelIcon({ model, size = 20, className }: ModelIconProps) {
   };
   if (!brand) {
     return (
-      <span className={className} style={style} role="img" aria-label={model}>
+      <span className={className} style={style} role="img" aria-label={label}>
         <Sparkles size={size} />
       </span>
     );
@@ -215,4 +243,15 @@ export function ModelIcon({ model, size = 20, className }: ModelIconProps) {
       dangerouslySetInnerHTML={{ __html: brand.svg }}
     />
   );
+}
+
+interface ModelIconProps {
+  model: string;
+  size?: number;
+  className?: string;
+}
+
+/** The creator's brand mark for a model; falls back to a generic spark. */
+export function ModelIcon({ model, size = 20, className }: ModelIconProps) {
+  return <BrandIcon brand={brandOf(model)} label={model} size={size} className={className} />;
 }

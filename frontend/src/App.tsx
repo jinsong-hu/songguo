@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { api, clearAdminKey, onUnauthorized } from './api/client';
 import type { Settings } from './api/types';
 import { ApiError } from './api/client';
@@ -11,6 +11,7 @@ import { OverviewPage } from './pages/Overview';
 import { ServicesPage } from './pages/Services';
 import { ServiceAddPage } from './pages/ServiceAdd';
 import { ServiceDetailPage } from './pages/ServiceDetail';
+import { ProvidersPage } from './pages/Providers';
 import { ProviderNewPage } from './pages/ProviderNew';
 import { ProviderEditPage } from './pages/ProviderEdit';
 import { UsersPage } from './pages/Users';
@@ -107,7 +108,7 @@ export function App() {
               <Route path="services" element={<ServicesPage />} />
               <Route path="services/add" element={<ServiceAddPage />} />
               <Route path="services/:model" element={<ServiceDetailPage />} />
-              <Route path="providers" element={<Navigate to="/services/add" replace />} />
+              <Route path="providers" element={<ProvidersPage />} />
               <Route path="providers/new" element={<ProviderNewPage />} />
               <Route path="providers/:id/edit" element={<ProviderEditPage />} />
               <Route path="users" element={<UsersPage />} />
