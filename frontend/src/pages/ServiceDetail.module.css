@@ -1,0 +1,139 @@
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 860px;
+}
+
+/* ---- Hero ---- */
+
+.hero {
+  padding: 20px;
+  background:
+    linear-gradient(
+      140deg,
+      color-mix(in srgb, var(--brand) 8%, var(--surface)),
+      var(--surface) 60%
+    );
+}
+
+.heroMain {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.iconTile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--brand) 11%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--brand) 22%, var(--border));
+  color: var(--text);
+  flex: none;
+}
+
+.heroText {
+  min-width: 0;
+}
+
+.heroName {
+  font-size: 20px;
+  margin-bottom: 2px;
+}
+
+.heroTagline {
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: 13.5px;
+}
+
+.heroId {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.heroId code {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 3px 8px;
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 32px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.factLabel {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.factValue {
+  font-size: 13.5px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Sections ---- */
+
+.section {
+  padding: 16px 20px 20px;
+}
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.sectionTitle {
+  font-size: 14px;
+}
+
+.sectionHint {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.snippet {
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.usageRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 40px;
+  margin-top: 8px;
+}

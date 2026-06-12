@@ -1,67 +1,61 @@
-.skeletons {
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
+  gap: 14px;
+}
+
+.modelCard {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  padding: 16px;
+  color: var(--text);
+  background:
+    linear-gradient(
+      140deg,
+      color-mix(in srgb, var(--brand) 7%, var(--surface)),
+      var(--surface) 55%
+    );
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-.service {
-  cursor: pointer;
-  padding: 0;
+.modelCard:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--brand) 40%, var(--border));
+  transform: translateY(-2px);
+  box-shadow:
+    0 6px 18px -8px color-mix(in srgb, var(--brand) 35%, transparent),
+    var(--shadow);
 }
 
-.head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 16px;
-  gap: 12px;
-}
-
-.headLeft {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.headRight {
+.cardHead {
   display: flex;
   align-items: center;
   gap: 12px;
-  color: var(--text-muted);
+  margin-bottom: 10px;
 }
 
-.modelName {
-  font-family: var(--font-mono);
-  font-size: 14px;
+.iconTile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--brand) 11%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--brand) 22%, var(--border));
+  color: var(--text);
+  flex: none;
+}
+
+.cardName {
+  font-size: 15px;
   font-weight: 600;
+  letter-spacing: -0.01em;
+  min-width: 0;
 }
 
-.stats {
-  display: flex;
-  gap: 12px;
-  font-size: 12px;
-  font-family: var(--font-mono);
-}
-
-.providers {
-  border-top: 1px solid var(--border);
-  padding: 12px 16px;
-}
-
-.providers table {
-  width: 100%;
-  font-size: 13px;
-  border-collapse: collapse;
-}
-
-.providers th {
-  text-align: left;
-  font-weight: 500;
+.cardTagline {
+  font-size: 12.5px;
+  line-height: 1.45;
   color: var(--text-muted);
-  padding: 4px 8px 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.providers td {
-  padding: 6px 8px;
 }

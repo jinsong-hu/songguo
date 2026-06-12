@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import type { CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, ChevronRight, Layers, Plus } from 'lucide-react';
+import { Layers, Plus } from 'lucide-react';
 import { api } from '../api/client';
 import type { Service } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
@@ -8,7 +8,7 @@ import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
 import { Skeleton } from '../components/Skeleton';
 import { useFetch } from '../lib/useFetch';
-import { ms, percent } from '../lib/format';
+import { ModelIcon, modelMeta } from '../lib/modelBrand';
 import styles from './Services.module.css';
 
 export function ServicesPage() {
@@ -26,10 +26,11 @@ export function ServicesPage() {
       {error ? (
         <ErrorBanner message={error} onRetry={refetch} />
       ) : initialLoading ? (
-        <div className={styles.skeletons}>
-          <Skeleton height={72} />
-          <Skeleton height={72} />
-          <Skeleton height={72} />
+        <div className={styles.grid}>
+          <Skeleton height={110} />
+          <Skeleton height={110} />
+          <Skeleton height={110} />
+          <Skeleton height={110} />
         </div>
       ) : !data || data.length === 0 ? (
         <EmptyState
@@ -42,9 +43,9 @@ export function ServicesPage() {
           }
         />
       ) : (
-        <div className={styles.list}>
+        <div className={styles.grid}>
           {data.map((s) => (
-            <ServiceCard key={s.model} service={s} />
+            <ModelCard key={s.model} service={s} />
           ))}
         </div>
       )}
@@ -52,53 +53,22 @@ export function ServicesPage() {
   );
 }
 
-function ServiceCard({ service }: { service: Service }) {
-  const [expanded, setExpanded] = useState(false);
+function ModelCard({ service }: { service: Service }) {
+  const meta = modelMeta(service.model);
 
   return (
-    <div className={`card ${styles.service}`}>
-      <div className={styles.head} onClick={() => setExpanded(!expanded)}>
-        <div className={styles.headLeft}>
-          <span className={styles.modelName}>{service.model}</span>
-          <span className="chip">
-            {service.providers.length} provider{service.providers.length !== 1 ? 's' : ''}
-          </span>
-        </div>
-        <div className={styles.headRight}>
-          <div className={styles.stats}>
-            <span>{service.stats.requests} req</span>
-            {service.stats.requests > 0 && (
-              <>
-                <span>{percent(service.stats.errors / service.stats.requests)} err</span>
-                <span>{ms(service.stats.avg_latency_ms)}</span>
-              </>
-            )}
-          </div>
-          {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-        </div>
+    <Link
+      to={`/services/${encodeURIComponent(service.model)}`}
+      className={`card ${styles.modelCard}`}
+      style={{ '--brand': meta.color } as CSSProperties}
+    >
+      <div className={styles.cardHead}>
+        <span className={styles.iconTile}>
+          <ModelIcon model={service.model} size={22} />
+        </span>
+        <span className={styles.cardName}>{meta.name}</span>
       </div>
-      {expanded && (
-        <div className={styles.providers}>
-          <table>
-            <thead>
-              <tr>
-                <th>Provider</th>
-                <th>Priority</th>
-                <th>Weight</th>
-              </tr>
-            </thead>
-            <tbody>
-              {service.providers.map((p) => (
-                <tr key={p.id}>
-                  <td className="mono">{p.name}</td>
-                  <td>{p.priority}</td>
-                  <td>{p.weight}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+      <div className={styles.cardTagline}>{meta.tagline}</div>
+    </Link>
   );
 }

@@ -10,6 +10,7 @@ import { SettingsContext } from './lib/settingsContext';
 import { OverviewPage } from './pages/Overview';
 import { ServicesPage } from './pages/Services';
 import { ServiceAddPage } from './pages/ServiceAdd';
+import { ServiceDetailPage } from './pages/ServiceDetail';
 import { UsersPage } from './pages/Users';
 import { SettingsPage } from './pages/SettingsPage';
 
@@ -106,6 +107,7 @@ export function App() {
               <Route index element={<OverviewPage />} />
               <Route path="services" element={<ServicesPage />} />
               <Route path="services/add" element={<ServiceAddPage />} />
+              <Route path="services/:model" element={<ServiceDetailPage />} />
               <Route path="providers" element={<Navigate to="/services/add" replace />} />
               <Route path="providers/new" element={<Navigate to="/services/add" replace />} />
               <Route path="users" element={<UsersPage />} />
