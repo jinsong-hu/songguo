@@ -59,17 +59,9 @@
   flex-direction: column;
   gap: 8px;
   padding: 16px;
-  text-align: left;
   color: var(--text);
   background: var(--surface);
-  cursor: pointer;
-  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
-}
-
-.apiCard:hover {
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-  transform: translateY(-2px);
-  box-shadow: var(--shadow);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .apiCardOn {
@@ -81,6 +73,12 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  padding: 0;
+  background: none;
+  border: none;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
 }
 
 .apiName {
@@ -91,17 +89,27 @@
   flex: 1;
 }
 
-.apiCheck {
+.apiCheck,
+.modelCheck {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--surface);
   color: #fff;
   flex: none;
+}
+
+.apiCheck {
+  width: 20px;
+  height: 20px;
+}
+
+.modelCheck {
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
 }
 
 .apiCheckOn {
@@ -116,9 +124,41 @@
   word-break: break-all;
 }
 
-.apiModels {
-  font-size: 11.5px;
-  color: var(--text-muted);
+.modelList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.modelRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.modelName {
+  font-family: var(--font-mono);
+  min-width: 0;
+  flex: 1;
+  word-break: break-all;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .error {

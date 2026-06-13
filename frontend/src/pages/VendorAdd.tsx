@@ -1,8 +1,14 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Check, Layers } from 'lucide-react';
+import { ArrowLeft, Check, Layers, Minus } from 'lucide-react';
 import { api } from '../api/client';
-import type { CatalogVendor, CreateProviderBody, ProviderEndpoint, ProviderModel } from '../api/types';
+import type {
+  CatalogEndpoint,
+  CatalogVendor,
+  CreateProviderBody,
+  ProviderEndpoint,
+  ProviderModel,
+} from '../api/types';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
@@ -21,26 +27,54 @@ export function VendorAddPage() {
   const providers = useFetch(() => api.providers(), []);
 
   const vendor = catalog.data?.vendors.find((v) => v.id === vendorId);
-  const alreadyAdded = (providers.data ?? []).some((p) => p.catalog_id === vendorId);
+  const sameVendorCount = (providers.data ?? []).filter((p) => p.catalog_id === vendorId).length;
+  // The first provider of a vendor takes the vendor name automatically; once one
+  // exists, the name would collide, so we ask for a distinct one.
+  const needsName = sameVendorCount > 0;
+  const suggestedName = vendor ? `${vendor.name} ${sameVendorCount + 1}` : '';
 
-  // Capability wires (the checkboxes); companion wires ride along on submit.
-  const capWires = useMemo(
-    () => (vendor ? vendor.endpoints.filter((ep) => wireServesModels(ep.wire)).map((ep) => ep.wire) : []),
+  // Model-bearing wires (the cards). Companion wires (model listings) ride
+  // along on submit when they share a base URL with a selected wire.
+  const modelWires = useMemo(
+    () =>
+      vendor
+        ? vendor.endpoints.filter((ep) => wireServesModels(ep.wire) && (ep.models ?? []).length > 0)
+        : [],
     [vendor],
   );
 
+  // Selection is per (wire, model) pair, since the same model can be served by
+  // more than one wire and we want each card's checkboxes independent.
+  const allKeys = useMemo(
+    () => new Set(modelWires.flatMap((ep) => (ep.models ?? []).map((m) => mkey(ep.wire, m)))),
+    [modelWires],
+  );
+
   const [selected, setSelected] = useState<Set<string> | null>(null);
+  const [name, setName] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // Default every capability wire on, once the catalog has loaded.
-  const checked = selected ?? new Set(capWires);
-  const toggle = (w: string) =>
+  // Default every model on, once the catalog has loaded.
+  const checked = selected ?? allKeys;
+  const toggleModel = (wire: string, model: string) =>
     setSelected(() => {
       const next = new Set(checked);
-      if (next.has(w)) next.delete(w);
-      else next.add(w);
+      const k = mkey(wire, model);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  const toggleWire = (ep: CatalogEndpoint) =>
+    setSelected(() => {
+      const next = new Set(checked);
+      const keys = (ep.models ?? []).map((m) => mkey(ep.wire, m));
+      const allOn = keys.every((k) => next.has(k));
+      for (const k of keys) {
+        if (allOn) next.delete(k);
+        else next.add(k);
+      }
       return next;
     });
 
@@ -67,18 +101,22 @@ export function VendorAddPage() {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (busy) return;
-    const wires = capWires.filter((w) => checked.has(w));
-    if (wires.length === 0) {
-      setErr('Select at least one API.');
+    const { endpoints, models } = buildProvider(vendor, checked);
+    if (models.length === 0) {
+      setErr('Select at least one model.');
       return;
     }
-    const { endpoints, models } = buildProvider(vendor, wires);
+    const providerName = needsName ? name.trim() : vendor.name;
+    if (needsName && !providerName) {
+      setErr('Enter a name for this provider.');
+      return;
+    }
 
     setBusy(true);
     setErr(null);
     try {
       const body: CreateProviderBody = {
-        name: vendor.id,
+        name: providerName,
         vendor: vendor.name,
         catalog_id: vendor.id,
         quirks: vendor.quirks,
@@ -87,7 +125,7 @@ export function VendorAddPage() {
         endpoints,
       };
       await api.createProvider(body);
-      toast.success(`Added ${vendor.name}.`);
+      toast.success(`Added ${providerName}.`);
       navigate('/providers');
     } catch (e2) {
       setErr(e2 instanceof Error ? e2.message : 'Request failed.');
@@ -110,10 +148,20 @@ export function VendorAddPage() {
           <span className={styles.vendorName}>{vendor.name}</span>
         </div>
 
-        {alreadyAdded && (
-          <div className={styles.notice}>
-            This vendor already has a provider. Adding again will fail on the duplicate name —{' '}
-            <Link to="/providers">edit the existing one</Link> instead.
+        {needsName && (
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor="v-name">Name</label>
+            <input
+              id="v-name"
+              className={`input ${styles.keyInput}`}
+              type="text"
+              value={name}
+              placeholder={suggestedName}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <span className={styles.hint}>
+              This vendor already has {sameVendorCount === 1 ? 'a provider' : `${sameVendorCount} providers`}; pick a distinct name.
+            </span>
           </div>
         )}
 
@@ -132,32 +180,51 @@ export function VendorAddPage() {
         <div className={styles.field}>
           <span className={styles.label}>APIs</span>
           <div className={styles.apiGrid}>
-            {vendor.endpoints
-              .filter((ep) => wireServesModels(ep.wire))
-              .map((ep) => {
-                const isOn = checked.has(ep.wire);
-                const count = (ep.models ?? []).length;
-                return (
+            {modelWires.map((ep) => {
+              const models = ep.models ?? [];
+              const keys = models.map((m) => mkey(ep.wire, m));
+              const onCount = keys.filter((k) => checked.has(k)).length;
+              const allOn = onCount === keys.length;
+              const someOn = onCount > 0;
+              return (
+                <div
+                  key={ep.wire}
+                  className={`card ${styles.apiCard} ${someOn ? styles.apiCardOn : ''}`}
+                >
                   <button
-                    key={ep.wire}
                     type="button"
-                    className={`card ${styles.apiCard} ${isOn ? styles.apiCardOn : ''}`}
-                    aria-pressed={isOn}
-                    onClick={() => toggle(ep.wire)}
+                    className={styles.apiCardHead}
+                    aria-pressed={allOn}
+                    onClick={() => toggleWire(ep)}
                   >
-                    <span className={styles.apiCardHead}>
-                      <span className={styles.apiName}>{wireName(ep.wire)}</span>
-                      <span className={`${styles.apiCheck} ${isOn ? styles.apiCheckOn : ''}`}>
-                        {isOn && <Check size={13} strokeWidth={3} />}
-                      </span>
-                    </span>
-                    <span className={styles.apiUrl}>{ep.base_url}</span>
-                    <span className={styles.apiModels}>
-                      {count} {count === 1 ? 'model' : 'models'}
+                    <span className={styles.apiName}>{wireName(ep.wire)}</span>
+                    <span className={`${styles.apiCheck} ${someOn ? styles.apiCheckOn : ''}`}>
+                      {allOn ? <Check size={13} strokeWidth={3} /> : someOn ? <Minus size={13} strokeWidth={3} /> : null}
                     </span>
                   </button>
-                );
-              })}
+                  <span className={styles.apiUrl}>{ep.base_url}</span>
+                  <div className={styles.modelList}>
+                    {models.map((m) => {
+                      const on = checked.has(mkey(ep.wire, m));
+                      return (
+                        <label key={m} className={styles.modelRow}>
+                          <span className={styles.modelName}>{m}</span>
+                          <input
+                            type="checkbox"
+                            className={styles.srOnly}
+                            checked={on}
+                            onChange={() => toggleModel(ep.wire, m)}
+                          />
+                          <span className={`${styles.modelCheck} ${on ? styles.apiCheckOn : ''}`}>
+                            {on && <Check size={11} strokeWidth={3} />}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -176,23 +243,35 @@ export function VendorAddPage() {
   );
 }
 
-// buildProvider turns the selected capability wires into the endpoints + models
-// to POST: it adds each selected wire's endpoint plus any companion (non-model)
-// wires sharing its base URL, and prices the union of referenced models.
-function buildProvider(vendor: CatalogVendor, selectedWires: string[]): {
+// Selection key for one (wire, model) checkbox. NUL can't appear in a wire id
+// or model name, so it's a safe separator.
+const mkey = (wire: string, model: string) => `${wire} ${model}`;
+
+// buildProvider turns the per-(wire, model) selection into the endpoints +
+// models to POST: a wire is included when ≥1 of its models is checked, each
+// included wire pulls in any companion (non-model) wire sharing its base URL,
+// and only the checked models are priced.
+function buildProvider(vendor: CatalogVendor, checked: Set<string>): {
   endpoints: ProviderEndpoint[];
   models: ProviderModel[];
 } {
-  const selectedBases = new Set(
-    vendor.endpoints.filter((ep) => selectedWires.includes(ep.wire)).map((ep) => ep.base_url),
-  );
-  const endpoints: ProviderEndpoint[] = [];
+  const selectedWires = new Set<string>();
   const modelIds = new Set<string>();
   for (const ep of vendor.endpoints) {
-    const include = selectedWires.includes(ep.wire) || (!wireServesModels(ep.wire) && selectedBases.has(ep.base_url));
+    if (!wireServesModels(ep.wire)) continue;
+    const picked = (ep.models ?? []).filter((m) => checked.has(mkey(ep.wire, m)));
+    if (picked.length === 0) continue;
+    selectedWires.add(ep.wire);
+    for (const m of picked) modelIds.add(m);
+  }
+  const selectedBases = new Set(
+    vendor.endpoints.filter((ep) => selectedWires.has(ep.wire)).map((ep) => ep.base_url),
+  );
+  const endpoints: ProviderEndpoint[] = [];
+  for (const ep of vendor.endpoints) {
+    const include = selectedWires.has(ep.wire) || (!wireServesModels(ep.wire) && selectedBases.has(ep.base_url));
     if (!include) continue;
     endpoints.push({ wire: ep.wire, base_url: ep.base_url, adapter: ep.adapter });
-    for (const m of ep.models ?? []) modelIds.add(m);
   }
   const models: ProviderModel[] = [];
   for (const id of modelIds) {
