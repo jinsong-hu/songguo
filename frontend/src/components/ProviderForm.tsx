@@ -1,8 +1,15 @@
 import { useState, type FormEvent } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
-import type { CreateProviderBody, PatchProviderBody, Provider, ProviderModel } from '../api/types';
+import type {
+  CreateProviderBody,
+  PatchProviderBody,
+  Provider,
+  ProviderEndpoint,
+  ProviderModel,
+} from '../api/types';
 import { useFetch } from '../lib/useFetch';
+import { wireAdapter, wireName } from '../lib/wires';
 import styles from './ProviderForm.module.css';
 
 const UNITS = [
@@ -15,35 +22,8 @@ const UNITS = [
   'per_char',
 ];
 
-const ADAPTERS = [
-  { value: 'openai-compatible', label: 'OpenAI-compatible' },
-  { value: 'anthropic-compatible', label: 'Anthropic-compatible' },
-  { value: 'volc-speech', label: 'Volc Speech (X-Api-Key)' },
-  { value: 'mcp', label: 'MCP (listed only)' },
-];
-
-/** Wire allowlist granted when the user picked none, mirroring the backend. */
-function defaultWires(adapter: string): string[] {
-  if (adapter === 'anthropic-compatible') return ['anthropic/messages', 'anthropic/models'];
-  if (adapter === 'volc-speech') return ['volc/tts'];
-  return ['openai/chat', 'openai/completions', 'openai/embeddings', 'openai/models'];
-}
-
-/** Prefill seeds the form when adding from the catalog. */
-export interface ProviderPrefill {
-  name?: string;
-  vendor?: string;
-  adapter?: string;
-  base_url?: string;
-  catalog_id?: string;
-  wires?: string[];
-  quirks?: Record<string, string>;
-  models?: ProviderModel[];
-}
-
 interface ProviderFormProps {
   editing?: Provider;
-  prefill?: ProviderPrefill;
   onCancel: () => void;
   onSaved: (provider: Provider, created: boolean) => void;
 }
@@ -57,6 +37,12 @@ interface ModelRow {
   unit: string;
 }
 
+/** Editable endpoint row: one wire bound to a base URL (adapter derived). */
+interface EndpointRow {
+  wire: string;
+  baseUrl: string;
+}
+
 function toRows(models: ProviderModel[] | undefined): ModelRow[] {
   if (!models || models.length === 0) return [];
   return models.map((m) => ({
@@ -68,22 +54,22 @@ function toRows(models: ProviderModel[] | undefined): ModelRow[] {
   }));
 }
 
-export function ProviderForm({ editing, prefill, onCancel, onSaved }: ProviderFormProps) {
-  const seed = editing ?? prefill;
-  const [name, setName] = useState(seed?.name ?? '');
-  const [vendor] = useState(seed?.vendor ?? '');
-  const [adapter, setAdapter] = useState(seed?.adapter ?? 'openai-compatible');
-  const [baseUrl, setBaseUrl] = useState(seed?.base_url ?? '');
+function toEndpointRows(endpoints: ProviderEndpoint[] | undefined): EndpointRow[] {
+  if (!endpoints || endpoints.length === 0) return [];
+  return endpoints.map((e) => ({ wire: e.wire, baseUrl: e.base_url }));
+}
+
+export function ProviderForm({ editing, onCancel, onSaved }: ProviderFormProps) {
+  const [name, setName] = useState(editing?.name ?? '');
+  const [vendor] = useState(editing?.vendor ?? '');
   const [priority, setPriority] = useState(editing ? String(editing.priority) : '0');
   const [weight, setWeight] = useState(editing ? String(editing.weight) : '1');
   const [enabled, setEnabled] = useState(editing ? editing.enabled : true);
   const [apiKey, setApiKey] = useState('');
-  const [models, setModels] = useState<ModelRow[]>(toRows(seed?.models));
-  const [wires, setWires] = useState<string[]>(
-    seed?.wires?.length ? seed.wires : defaultWires(seed?.adapter ?? 'openai-compatible'),
-  );
+  const [models, setModels] = useState<ModelRow[]>(toRows(editing?.models));
+  const [endpoints, setEndpoints] = useState<EndpointRow[]>(toEndpointRows(editing?.endpoints));
   const [allowUnmatched, setAllowUnmatched] = useState(editing?.allow_unmatched ?? false);
-  const [quirks, setQuirks] = useState<Record<string, string>>(seed?.quirks ?? {});
+  const [quirks, setQuirks] = useState<Record<string, string>>(editing?.quirks ?? {});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -91,10 +77,13 @@ export function ProviderForm({ editing, prefill, onCancel, onSaved }: ProviderFo
   const wireOptions = allWires.data ?? [];
 
   const isEdit = !!editing;
-  const catalogId = editing?.catalog_id ?? prefill?.catalog_id ?? '';
+  const catalogId = editing?.catalog_id ?? '';
 
-  const toggleWire = (w: string) =>
-    setWires((p) => (p.includes(w) ? p.filter((x) => x !== w) : [...p, w].sort()));
+  const addEndpoint = () =>
+    setEndpoints((p) => [...p, { wire: wireOptions[0] ?? 'openai/chat', baseUrl: '' }]);
+  const removeEndpoint = (i: number) => setEndpoints((p) => p.filter((_, idx) => idx !== i));
+  const setEndpoint = (i: number, patch: Partial<EndpointRow>) =>
+    setEndpoints((p) => p.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
 
   const injectStreamUsage = quirks['inject_stream_usage'] === 'true';
   const setInjectStreamUsage = (on: boolean) =>
@@ -123,17 +112,26 @@ export function ProviderForm({ editing, prefill, onCancel, onSaved }: ProviderFo
       setErr('Name is required.');
       return;
     }
-    const trimmedUrl = baseUrl.trim();
-    if (!trimmedUrl) {
-      setErr('Base URL is required.');
-      return;
-    }
-    try {
-      const u = new URL(trimmedUrl);
-      if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('scheme');
-    } catch {
-      setErr('Base URL must be an absolute http(s) URL, e.g. https://api.openai.com/v1');
-      return;
+
+    const parsedEndpoints: ProviderEndpoint[] = [];
+    const seenWires = new Set<string>();
+    for (const row of endpoints) {
+      const w = row.wire.trim();
+      if (!w) continue;
+      if (seenWires.has(w)) {
+        setErr(`Wire "${wireName(w)}" is listed more than once.`);
+        return;
+      }
+      seenWires.add(w);
+      const url = row.baseUrl.trim();
+      try {
+        const u = new URL(url);
+        if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('scheme');
+      } catch {
+        setErr(`Base URL for "${wireName(w)}" must be an absolute http(s) URL.`);
+        return;
+      }
+      parsedEndpoints.push({ wire: w, base_url: url, adapter: wireAdapter(w) });
     }
 
     const parsedModels: ProviderModel[] = [];
@@ -171,15 +169,13 @@ export function ProviderForm({ editing, prefill, onCancel, onSaved }: ProviderFo
         const body: PatchProviderBody = {
           name: trimmedName,
           vendor,
-          adapter,
-          base_url: trimmedUrl,
           priority: prio,
           weight: wt,
           enabled,
           allow_unmatched: allowUnmatched,
           quirks,
           models: parsedModels,
-          wires,
+          endpoints: parsedEndpoints,
         };
         if (apiKey.trim()) body.api_key = apiKey.trim();
         const saved = await api.patchProvider(editing.id, body);
@@ -188,8 +184,6 @@ export function ProviderForm({ editing, prefill, onCancel, onSaved }: ProviderFo
         const body: CreateProviderBody = {
           name: trimmedName,
           vendor,
-          adapter,
-          base_url: trimmedUrl,
           priority: prio,
           weight: wt,
           enabled,
@@ -198,7 +192,7 @@ export function ProviderForm({ editing, prefill, onCancel, onSaved }: ProviderFo
           quirks,
           api_key: apiKey.trim() || undefined,
           models: parsedModels,
-          wires,
+          endpoints: parsedEndpoints,
         };
         const saved = await api.createProvider(body);
         onSaved(saved, true);
@@ -211,55 +205,19 @@ export function ProviderForm({ editing, prefill, onCancel, onSaved }: ProviderFo
 
   return (
     <form className={`card ${styles.formCard}`} onSubmit={submit}>
-      <div className={styles.grid2}>
-        <div className={styles.field}>
-          <label className={styles.label} htmlFor="s-name">
-            Name
-          </label>
-          <input
-            id="s-name"
-            className="input"
-            value={name}
-            autoFocus
-            placeholder="e.g. openai-main"
-            onChange={(e) => setName(e.target.value)}
-          />
-          <span className={styles.hint}>Unique handle; also addressable at /x/&lt;name&gt;/…</span>
-        </div>
-        <div className={styles.field}>
-          <label className={styles.label} htmlFor="s-adapter">
-            Adapter
-          </label>
-          <select
-            id="s-adapter"
-            className="select"
-            value={adapter}
-            onChange={(e) => setAdapter(e.target.value)}
-          >
-            {ADAPTERS.map((a) => (
-              <option key={a.value} value={a.value}>
-                {a.label}
-              </option>
-            ))}
-          </select>
-          <span className={styles.hint}>Wire protocol used to authenticate + meter.</span>
-        </div>
-      </div>
-
       <div className={styles.field}>
-        <label className={styles.label} htmlFor="s-url">
-          Base URL
+        <label className={styles.label} htmlFor="s-name">
+          Name
         </label>
         <input
-          id="s-url"
+          id="s-name"
           className="input"
-          value={baseUrl}
-          placeholder="https://api.openai.com/v1"
-          onChange={(e) => setBaseUrl(e.target.value)}
+          value={name}
+          autoFocus
+          placeholder="e.g. openai-main"
+          onChange={(e) => setName(e.target.value)}
         />
-        <span className={styles.hint}>
-          The vendor&apos;s published base, including any version prefix (e.g. /v1, /api/v3).
-        </span>
+        <span className={styles.hint}>Unique handle; also addressable at /x/&lt;name&gt;/…</span>
       </div>
 
       <div className={styles.field}>
@@ -326,19 +284,63 @@ export function ProviderForm({ editing, prefill, onCancel, onSaved }: ProviderFo
       </div>
 
       <div className={styles.field}>
-        <span className={styles.label}>Wires</span>
-        <span className={styles.hint}>
-          Endpoints the proxy may serve for this service. Requests matching no enabled
-          wire are denied (so every forwarded call has a pricing rule).
-        </span>
-        <div className={styles.wireGrid}>
-          {wireOptions.map((w) => (
-            <label key={w} className={styles.wireItem}>
-              <input type="checkbox" checked={wires.includes(w)} onChange={() => toggleWire(w)} />
-              <span className="mono">{w}</span>
-            </label>
-          ))}
+        <div className={styles.modelsHead}>
+          <span className={styles.label}>Endpoints</span>
+          <button type="button" className="btn btn-sm" onClick={addEndpoint}>
+            <Plus size={13} /> Add endpoint
+          </button>
         </div>
+        <span className={styles.hint}>
+          Each endpoint binds one wire to a base URL; the auth scheme is derived from the
+          wire. Requests matching no endpoint are denied (so every forwarded call has a
+          pricing rule).
+        </span>
+        {endpoints.length === 0 ? (
+          <span className="muted" style={{ fontSize: 12.5 }}>
+            No endpoints yet — add one to start routing.
+          </span>
+        ) : (
+          <div className={styles.modelRows}>
+            <div className={`${styles.modelRow} ${styles.endpointRow} ${styles.modelHeader}`}>
+              <span>Wire</span>
+              <span>Base URL</span>
+              <span>Auth</span>
+              <span />
+            </div>
+            {endpoints.map((row, i) => (
+              <div key={i} className={`${styles.modelRow} ${styles.endpointRow}`}>
+                <select
+                  className="select"
+                  value={row.wire}
+                  onChange={(e) => setEndpoint(i, { wire: e.target.value })}
+                >
+                  {wireOptions.map((w) => (
+                    <option key={w} value={w}>
+                      {wireName(w)} — {w}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className="input mono"
+                  value={row.baseUrl}
+                  placeholder="https://api.openai.com/v1"
+                  onChange={(e) => setEndpoint(i, { baseUrl: e.target.value })}
+                />
+                <span className="muted mono" style={{ fontSize: 11.5, alignSelf: 'center' }}>
+                  {wireAdapter(row.wire)}
+                </span>
+                <button
+                  type="button"
+                  className={styles.iconBtn}
+                  aria-label="Remove endpoint"
+                  onClick={() => removeEndpoint(i)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className={styles.grid2}>

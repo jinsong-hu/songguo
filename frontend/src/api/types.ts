@@ -187,18 +187,23 @@ export interface ProviderModel {
   unit: string;
 }
 
+/** One wire bound to a base URL + adapter (auth scheme); 1:1 with the wire. */
+export interface ProviderEndpoint {
+  wire: string;
+  base_url: string;
+  adapter: string;
+}
+
 export interface Provider {
   id: string;
   name: string;
   vendor: string;
-  adapter: string;
-  base_url: string;
   priority: number;
   weight: number;
   enabled: boolean;
   catalog_id: string;
-  /** Enabled wire allowlist; paths matching none are denied. */
-  wires: string[];
+  /** Configured endpoints; each binds one wire to a base URL + adapter. */
+  endpoints: ProviderEndpoint[];
   /** Forward unmatched paths metered-zero instead of denying them. */
   allow_unmatched: boolean;
   quirks: Record<string, string>;
@@ -213,8 +218,6 @@ export interface Provider {
 export interface CreateProviderBody {
   name: string;
   vendor?: string;
-  adapter: string;
-  base_url: string;
   priority?: number;
   weight?: number;
   enabled?: boolean;
@@ -223,14 +226,12 @@ export interface CreateProviderBody {
   quirks?: Record<string, string>;
   api_key?: string;
   models: ProviderModel[];
-  wires?: string[];
+  endpoints: ProviderEndpoint[];
 }
 
 export type PatchProviderBody = Partial<{
   name: string;
   vendor: string;
-  adapter: string;
-  base_url: string;
   priority: number;
   weight: number;
   enabled: boolean;
@@ -239,13 +240,12 @@ export type PatchProviderBody = Partial<{
   /** Replaces the provider's API key when present and non-empty. */
   api_key: string;
   models: ProviderModel[];
-  wires: string[];
+  endpoints: ProviderEndpoint[];
 }>;
 
 // --- Catalog (read-only preset directory) ---
 
 export interface CatalogModel {
-  model: string;
   input: number;
   output: number;
   cached_input?: number;
@@ -254,24 +254,24 @@ export interface CatalogModel {
   modalities?: string[];
 }
 
-export interface CatalogService {
-  id: string;
-  name: string;
-  kind: string;
-  adapter: string;
+/** A preset wire bound to a base URL + adapter, with the model ids it serves. */
+export interface CatalogEndpoint {
+  wire: string;
   base_url: string;
+  adapter: string;
   docs?: string;
   note?: string;
-  wires?: string[];
-  quirks?: Record<string, string>;
-  models: CatalogModel[];
+  models?: string[];
 }
 
 export interface CatalogVendor {
   id: string;
   name: string;
   homepage?: string;
-  services: CatalogService[];
+  quirks?: Record<string, string>;
+  /** Price list keyed by model id, shared across this vendor's endpoints. */
+  models: Record<string, CatalogModel>;
+  endpoints: CatalogEndpoint[];
 }
 
 export interface Catalog {

@@ -72,20 +72,8 @@
   align-items: center;
 }
 
-.wireGrid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4px 14px;
-  margin-top: 4px;
-}
-
-.wireItem {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12.5px;
-  color: var(--text);
-  cursor: pointer;
+.endpointRow {
+  grid-template-columns: 1.4fr 2fr 1fr 28px;
 }
 
 .modelHeader {

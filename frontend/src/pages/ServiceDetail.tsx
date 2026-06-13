@@ -82,7 +82,7 @@ function wiresFor(service: Service | undefined, providers: Provider[] | null): s
   const wires = new Set<string>();
   for (const p of providers) {
     if (!ids.has(p.id)) continue;
-    for (const w of p.wires) wires.add(w);
+    for (const ep of p.endpoints) wires.add(ep.wire);
   }
   return [...wires];
 }

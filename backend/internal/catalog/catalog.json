@@ -4,334 +4,157 @@
       "id": "openai",
       "name": "OpenAI",
       "homepage": "https://openai.com",
-      "services": [
-        {
-          "id": "openai-chat",
-          "name": "Chat Completions",
-          "kind": "chat",
-          "adapter": "openai-compatible",
-          "base_url": "https://api.openai.com/v1",
-          "docs": "https://platform.openai.com/docs/api-reference/chat",
-          "wires": ["openai/chat", "openai/completions", "openai/models"],
-          "models": [
-            { "model": "gpt-4o", "input": 2.5, "output": 10.0, "cached_input": 1.25, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text", "image"] },
-            { "model": "gpt-4o-mini", "input": 0.15, "output": 0.6, "cached_input": 0.075, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text", "image"] },
-            { "model": "o3-mini", "input": 1.1, "output": 4.4, "cached_input": 0.55, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] }
-          ]
-        },
-        {
-          "id": "openai-responses",
-          "name": "Responses",
-          "kind": "chat",
-          "adapter": "openai-compatible",
-          "base_url": "https://api.openai.com/v1",
-          "docs": "https://platform.openai.com/docs/api-reference/responses",
-          "note": "OpenAI's newer stateful API for agents — the successor to Chat Completions, with built-in tools (web search, file search, computer use).",
-          "wires": ["openai/responses", "openai/models"],
-          "models": [
-            { "model": "gpt-4o", "input": 2.5, "output": 10.0, "cached_input": 1.25, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text", "image"] },
-            { "model": "gpt-4o-mini", "input": 0.15, "output": 0.6, "cached_input": 0.075, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text", "image"] },
-            { "model": "o3-mini", "input": 1.1, "output": 4.4, "cached_input": 0.55, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] }
-          ]
-        },
-        {
-          "id": "openai-embeddings",
-          "name": "Embeddings",
-          "kind": "embedding",
-          "adapter": "openai-compatible",
-          "base_url": "https://api.openai.com/v1",
-          "docs": "https://platform.openai.com/docs/api-reference/embeddings",
-          "wires": ["openai/embeddings", "openai/models"],
-          "models": [
-            { "model": "text-embedding-3-small", "input": 0.02, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] },
-            { "model": "text-embedding-3-large", "input": 0.13, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] }
-          ]
-        }
+      "models": {
+        "gpt-4o": { "input": 2.5, "output": 10.0, "cached_input": 1.25, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text", "image"] },
+        "gpt-4o-mini": { "input": 0.15, "output": 0.6, "cached_input": 0.075, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text", "image"] },
+        "o3-mini": { "input": 1.1, "output": 4.4, "cached_input": 0.55, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
+        "text-embedding-3-small": { "input": 0.02, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] },
+        "text-embedding-3-large": { "input": 0.13, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] }
+      },
+      "endpoints": [
+        { "wire": "openai/chat", "base_url": "https://api.openai.com/v1", "adapter": "openai-compatible", "docs": "https://platform.openai.com/docs/api-reference/chat", "models": ["gpt-4o", "gpt-4o-mini", "o3-mini"] },
+        { "wire": "openai/responses", "base_url": "https://api.openai.com/v1", "adapter": "openai-compatible", "docs": "https://platform.openai.com/docs/api-reference/responses", "note": "OpenAI's newer stateful API for agents — the successor to Chat Completions, with built-in tools (web search, file search, computer use).", "models": ["gpt-4o", "gpt-4o-mini", "o3-mini"] },
+        { "wire": "openai/embeddings", "base_url": "https://api.openai.com/v1", "adapter": "openai-compatible", "docs": "https://platform.openai.com/docs/api-reference/embeddings", "models": ["text-embedding-3-small", "text-embedding-3-large"] },
+        { "wire": "openai/completions", "base_url": "https://api.openai.com/v1", "adapter": "openai-compatible" },
+        { "wire": "openai/models", "base_url": "https://api.openai.com/v1", "adapter": "openai-compatible" }
       ]
     },
     {
       "id": "anthropic",
       "name": "Anthropic",
       "homepage": "https://anthropic.com",
-      "services": [
-        {
-          "id": "anthropic-messages",
-          "name": "Messages",
-          "kind": "chat",
-          "adapter": "anthropic-compatible",
-          "base_url": "https://api.anthropic.com/v1",
-          "docs": "https://docs.anthropic.com/en/api/messages",
-          "note": "Authenticates with x-api-key + anthropic-version. Point the Anthropic SDK's base_url at http://<songguo>; it appends /v1/messages.",
-          "wires": ["anthropic/messages", "anthropic/models"],
-          "models": [
-            { "model": "claude-opus-4-20250514", "input": 15.0, "output": 75.0, "cached_input": 1.5, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text", "image"] },
-            { "model": "claude-sonnet-4-20250514", "input": 3.0, "output": 15.0, "cached_input": 0.3, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text", "image"] },
-            { "model": "claude-3-5-haiku-20241022", "input": 0.8, "output": 4.0, "cached_input": 0.08, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] }
-          ]
-        }
+      "models": {
+        "claude-opus-4-20250514": { "input": 15.0, "output": 75.0, "cached_input": 1.5, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text", "image"] },
+        "claude-sonnet-4-20250514": { "input": 3.0, "output": 15.0, "cached_input": 0.3, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text", "image"] },
+        "claude-3-5-haiku-20241022": { "input": 0.8, "output": 4.0, "cached_input": 0.08, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] }
+      },
+      "endpoints": [
+        { "wire": "anthropic/messages", "base_url": "https://api.anthropic.com/v1", "adapter": "anthropic-compatible", "docs": "https://docs.anthropic.com/en/api/messages", "note": "Authenticates with x-api-key + anthropic-version. Point the Anthropic SDK's base_url at http://<songguo>; it appends /v1/messages.", "models": ["claude-opus-4-20250514", "claude-sonnet-4-20250514", "claude-3-5-haiku-20241022"] },
+        { "wire": "anthropic/models", "base_url": "https://api.anthropic.com/v1", "adapter": "anthropic-compatible" }
       ]
     },
     {
       "id": "deepseek",
       "name": "DeepSeek",
       "homepage": "https://deepseek.com",
-      "services": [
-        {
-          "id": "deepseek-chat",
-          "name": "OpenAI - Chat Completions",
-          "kind": "chat",
-          "adapter": "openai-compatible",
-          "base_url": "https://api.deepseek.com",
-          "docs": "https://api-docs.deepseek.com",
-          "note": "Context caching is automatic; cache hits are billed at the cached_input rate (reported via prompt_cache_hit_tokens).",
-          "wires": ["openai/chat", "openai/completions", "openai/models"],
-          "quirks": { "cache_tokens": "deepseek" },
-          "models": [
-            { "model": "deepseek-v4-flash", "input": 0.14, "output": 0.28, "cached_input": 0.0028, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] },
-            { "model": "deepseek-v4-pro", "input": 0.435, "output": 0.87, "cached_input": 0.003625, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] },
-            { "model": "deepseek-chat", "input": 0.27, "output": 1.1, "cached_input": 0.07, "unit": "per_1m_tokens", "context": 64000, "modalities": ["text"] },
-            { "model": "deepseek-reasoner", "input": 0.55, "output": 2.19, "cached_input": 0.14, "unit": "per_1m_tokens", "context": 64000, "modalities": ["text"] }
-          ]
-        },
-        {
-          "id": "deepseek-anthropic",
-          "name": "Anthropic - Messages",
-          "kind": "chat",
-          "adapter": "anthropic-compatible",
-          "base_url": "https://api.deepseek.com/anthropic",
-          "docs": "https://api-docs.deepseek.com/guides/anthropic_api",
-          "note": "Same models, Anthropic wire format (for Claude Code and Anthropic SDKs). Claude model aliases map server-side to DeepSeek models.",
-          "wires": ["anthropic/messages", "anthropic/models"],
-          "models": [
-            { "model": "deepseek-v4-flash", "input": 0.14, "output": 0.28, "cached_input": 0.0028, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] },
-            { "model": "deepseek-v4-pro", "input": 0.435, "output": 0.87, "cached_input": 0.003625, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] }
-          ]
-        }
+      "quirks": { "cache_tokens": "deepseek" },
+      "models": {
+        "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cached_input": 0.0028, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] },
+        "deepseek-v4-pro": { "input": 0.435, "output": 0.87, "cached_input": 0.003625, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] },
+        "deepseek-chat": { "input": 0.27, "output": 1.1, "cached_input": 0.07, "unit": "per_1m_tokens", "context": 64000, "modalities": ["text"] },
+        "deepseek-reasoner": { "input": 0.55, "output": 2.19, "cached_input": 0.14, "unit": "per_1m_tokens", "context": 64000, "modalities": ["text"] }
+      },
+      "endpoints": [
+        { "wire": "openai/chat", "base_url": "https://api.deepseek.com", "adapter": "openai-compatible", "docs": "https://api-docs.deepseek.com", "note": "Context caching is automatic; cache hits are billed at the cached_input rate (reported via prompt_cache_hit_tokens).", "models": ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"] },
+        { "wire": "openai/completions", "base_url": "https://api.deepseek.com", "adapter": "openai-compatible" },
+        { "wire": "openai/models", "base_url": "https://api.deepseek.com", "adapter": "openai-compatible" },
+        { "wire": "anthropic/messages", "base_url": "https://api.deepseek.com/anthropic", "adapter": "anthropic-compatible", "docs": "https://api-docs.deepseek.com/guides/anthropic_api", "note": "Same models, Anthropic wire format (for Claude Code and Anthropic SDKs). Claude model aliases map server-side to DeepSeek models.", "models": ["deepseek-v4-flash", "deepseek-v4-pro"] },
+        { "wire": "anthropic/models", "base_url": "https://api.deepseek.com/anthropic", "adapter": "anthropic-compatible" }
       ]
     },
     {
-      "id": "volcengine",
+      "id": "volcengine-ark",
       "name": "Volcengine 火山引擎 (Ark / 方舟)",
       "homepage": "https://www.volcengine.com/product/ark",
-      "services": [
-        {
-          "id": "ark-chat",
-          "name": "OpenAI - Chat Completions",
-          "kind": "chat",
-          "adapter": "openai-compatible",
-          "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-          "docs": "https://www.volcengine.com/docs/82379/1302010",
-          "note": "OpenAI-compatible base is /api/v3. Pricing is tiered by input length; defaults below are the ≤32k tier (CNY ÷ 7.2). Cached tokens reported under prompt_tokens_details.",
-          "wires": ["openai/chat", "openai/completions", "openai/models"],
-          "models": [
-            { "model": "doubao-seed-2-0-pro-260215", "input": 0.44, "output": 2.22, "cached_input": 0.089, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] },
-            { "model": "doubao-seed-2-0-lite-260428", "input": 0.083, "output": 0.5, "cached_input": 0.017, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] },
-            { "model": "doubao-seed-2-0-mini-260428", "input": 0.028, "output": 0.28, "cached_input": 0.006, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text"] },
-            { "model": "doubao-seed-1-6-251015", "input": 0.11, "output": 1.11, "cached_input": 0.022, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] }
-          ]
-        },
-        {
-          "id": "ark-responses",
-          "name": "OpenAI - Responses",
-          "kind": "chat",
-          "adapter": "openai-compatible",
-          "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-          "docs": "https://www.volcengine.com/docs/82379/1585135",
-          "note": "Ark's recommended API for doubao-seed-1.6+ — OpenAI Responses format with stateful multi-turn (previous_response_id) and explicit caching. Same prices as Chat Completions.",
-          "wires": ["openai/responses", "openai/models"],
-          "models": [
-            { "model": "doubao-seed-2-0-pro-260215", "input": 0.44, "output": 2.22, "cached_input": 0.089, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] },
-            { "model": "doubao-seed-2-0-lite-260428", "input": 0.083, "output": 0.5, "cached_input": 0.017, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] },
-            { "model": "doubao-seed-1-6-251015", "input": 0.11, "output": 1.11, "cached_input": 0.022, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] }
-          ]
-        },
-        {
-          "id": "volc-tts",
-          "name": "TTS",
-          "kind": "tts",
-          "adapter": "volc-speech",
-          "base_url": "https://openspeech.bytedance.com",
-          "docs": "https://www.volcengine.com/docs/6561/2528925",
-          "note": "豆包语音 streaming speech synthesis. Call via /x/<provider>/api/v3/tts/unidirectional — auth swaps to X-Api-Key; X-Api-Resource-Id picks the model. Billed per text character (¥3/万字符 ÷ 7.2); set X-Control-Require-Usage-Tokens-Return to report usage.",
-          "wires": ["volc/tts"],
-          "models": [
-            { "model": "seed-tts-2.0", "input": 0.0000417, "output": 0.0, "unit": "per_char", "modalities": ["text"] },
-            { "model": "seed-icl-2.0", "input": 0.0000417, "output": 0.0, "unit": "per_char", "modalities": ["text"] }
-          ]
-        }
+      "models": {
+        "doubao-seed-2-0-pro-260215": { "input": 0.44, "output": 2.22, "cached_input": 0.089, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] },
+        "doubao-seed-2-0-lite-260428": { "input": 0.083, "output": 0.5, "cached_input": 0.017, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] },
+        "doubao-seed-2-0-mini-260428": { "input": 0.028, "output": 0.28, "cached_input": 0.006, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text"] },
+        "doubao-seed-1-6-251015": { "input": 0.11, "output": 1.11, "cached_input": 0.022, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] }
+      },
+      "endpoints": [
+        { "wire": "openai/chat", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "adapter": "openai-compatible", "docs": "https://www.volcengine.com/docs/82379/1302010", "note": "OpenAI-compatible base is /api/v3. Pricing is tiered by input length; defaults are the ≤32k tier (CNY ÷ 7.2). Cached tokens reported under prompt_tokens_details.", "models": ["doubao-seed-2-0-pro-260215", "doubao-seed-2-0-lite-260428", "doubao-seed-2-0-mini-260428", "doubao-seed-1-6-251015"] },
+        { "wire": "openai/responses", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "adapter": "openai-compatible", "docs": "https://www.volcengine.com/docs/82379/1585135", "note": "Ark's recommended API for doubao-seed-1.6+ — OpenAI Responses format with stateful multi-turn and explicit caching. Same prices as Chat Completions.", "models": ["doubao-seed-2-0-pro-260215", "doubao-seed-2-0-lite-260428", "doubao-seed-1-6-251015"] },
+        { "wire": "openai/completions", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "adapter": "openai-compatible" },
+        { "wire": "openai/models", "base_url": "https://ark.cn-beijing.volces.com/api/v3", "adapter": "openai-compatible" }
+      ]
+    },
+    {
+      "id": "volcengine-speech",
+      "name": "Volcengine 豆包语音 (Speech)",
+      "homepage": "https://www.volcengine.com/product/voice-tech",
+      "models": {
+        "seed-tts-2.0": { "input": 0.0000417, "output": 0.0, "unit": "per_char", "modalities": ["text"] },
+        "seed-icl-2.0": { "input": 0.0000417, "output": 0.0, "unit": "per_char", "modalities": ["text"] }
+      },
+      "endpoints": [
+        { "wire": "volc/tts", "base_url": "https://openspeech.bytedance.com", "adapter": "volc-speech", "docs": "https://www.volcengine.com/docs/6561/2528925", "note": "豆包语音 synthesis. Auth swaps to X-Api-Key; X-Api-Resource-Id picks the model. HTTP /x/<provider>/api/v3/tts/unidirectional or WebSocket .../api/v3/tts/bidirection, billed per character (¥3/万字符 ÷ 7.2; set X-Control-Require-Usage-Tokens-Return to report usage; WS meters as realtime bytes).", "models": ["seed-tts-2.0", "seed-icl-2.0"] },
+        { "wire": "volc/voice-clone", "base_url": "https://openspeech.bytedance.com", "adapter": "volc-speech", "docs": "https://www.volcengine.com/docs/6561/2227958", "note": "Voice cloning (/api/v3/tts/voice_clone, /api/v3/tts/get_voice). Metered free — the per-voice slot fee is billed by Volcengine on first synthesis." }
       ]
     },
     {
       "id": "dashscope",
       "name": "Alibaba 阿里百炼 (DashScope / Bailian)",
       "homepage": "https://www.aliyun.com/product/bailian",
-      "services": [
-        {
-          "id": "dashscope-chat",
-          "name": "OpenAI - Chat Completions",
-          "kind": "chat",
-          "adapter": "openai-compatible",
-          "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-          "docs": "https://help.aliyun.com/zh/model-studio/developer-reference/compatibility-of-openai-with-dashscope",
-          "note": "OpenAI-compatible base is /compatible-mode/v1. Use /x/<vendor>/... for native + async endpoints.",
-          "wires": ["openai/chat", "openai/completions", "openai/models"],
-          "models": [
-            { "model": "qwen-plus", "input": 0.4, "output": 1.2, "unit": "per_1m_tokens", "context": 131072, "modalities": ["text"] },
-            { "model": "qwen-turbo", "input": 0.05, "output": 0.2, "unit": "per_1m_tokens", "context": 131072, "modalities": ["text"] },
-            { "model": "qwen-max", "input": 1.6, "output": 6.4, "unit": "per_1m_tokens", "context": 32768, "modalities": ["text"] }
-          ]
-        },
-        {
-          "id": "dashscope-embeddings",
-          "name": "OpenAI - Embeddings",
-          "kind": "embedding",
-          "adapter": "openai-compatible",
-          "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-          "docs": "https://help.aliyun.com/zh/model-studio/developer-reference/text-embedding-api",
-          "wires": ["openai/embeddings", "openai/models"],
-          "models": [
-            { "model": "text-embedding-v3", "input": 0.07, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] },
-            { "model": "text-embedding-v4", "input": 0.07, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] }
-          ]
-        },
-        {
-          "id": "dashscope-anthropic",
-          "name": "Anthropic - Messages",
-          "kind": "chat",
-          "adapter": "anthropic-compatible",
-          "base_url": "https://dashscope.aliyuncs.com/apps/anthropic",
-          "docs": "https://help.aliyun.com/zh/model-studio/claude-code",
-          "note": "Same Qwen models, Anthropic wire format (for Claude Code and Anthropic SDKs).",
-          "wires": ["anthropic/messages", "anthropic/models"],
-          "models": [
-            { "model": "qwen3-max", "input": 1.6, "output": 6.4, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text"] },
-            { "model": "qwen3-coder-plus", "input": 1.0, "output": 5.0, "unit": "per_1m_tokens", "context": 1048576, "modalities": ["text"] }
-          ]
-        }
+      "models": {
+        "qwen-plus": { "input": 0.4, "output": 1.2, "unit": "per_1m_tokens", "context": 131072, "modalities": ["text"] },
+        "qwen-turbo": { "input": 0.05, "output": 0.2, "unit": "per_1m_tokens", "context": 131072, "modalities": ["text"] },
+        "qwen-max": { "input": 1.6, "output": 6.4, "unit": "per_1m_tokens", "context": 32768, "modalities": ["text"] },
+        "text-embedding-v3": { "input": 0.07, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] },
+        "text-embedding-v4": { "input": 0.07, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] },
+        "qwen3-max": { "input": 1.6, "output": 6.4, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text"] },
+        "qwen3-coder-plus": { "input": 1.0, "output": 5.0, "unit": "per_1m_tokens", "context": 1048576, "modalities": ["text"] }
+      },
+      "endpoints": [
+        { "wire": "openai/chat", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "adapter": "openai-compatible", "docs": "https://help.aliyun.com/zh/model-studio/developer-reference/compatibility-of-openai-with-dashscope", "note": "OpenAI-compatible base is /compatible-mode/v1. Use /x/<provider>/... for native + async endpoints.", "models": ["qwen-plus", "qwen-turbo", "qwen-max"] },
+        { "wire": "openai/embeddings", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "adapter": "openai-compatible", "docs": "https://help.aliyun.com/zh/model-studio/developer-reference/text-embedding-api", "models": ["text-embedding-v3", "text-embedding-v4"] },
+        { "wire": "openai/completions", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "adapter": "openai-compatible" },
+        { "wire": "openai/models", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "adapter": "openai-compatible" },
+        { "wire": "anthropic/messages", "base_url": "https://dashscope.aliyuncs.com/apps/anthropic", "adapter": "anthropic-compatible", "docs": "https://help.aliyun.com/zh/model-studio/claude-code", "note": "Same Qwen models, Anthropic wire format (for Claude Code and Anthropic SDKs).", "models": ["qwen3-max", "qwen3-coder-plus"] },
+        { "wire": "anthropic/models", "base_url": "https://dashscope.aliyuncs.com/apps/anthropic", "adapter": "anthropic-compatible" }
       ]
     },
     {
       "id": "minimax",
       "name": "MiniMax",
       "homepage": "https://platform.minimaxi.com",
-      "services": [
-        {
-          "id": "minimax-chat",
-          "name": "OpenAI - Chat Completions",
-          "kind": "chat",
-          "adapter": "openai-compatible",
-          "base_url": "https://api.minimaxi.com/v1",
-          "docs": "https://platform.minimaxi.com/docs/api-reference/text-openai-api",
-          "note": "Implicit prompt caching (≥512 input tokens); cached tokens under prompt_tokens_details. Prices are CNY list ÷ 7.2.",
-          "wires": ["openai/chat", "openai/models"],
-          "models": [
-            { "model": "MiniMax-M3", "input": 0.29, "output": 1.17, "cached_input": 0.058, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text", "image"] },
-            { "model": "MiniMax-M2.7", "input": 0.29, "output": 1.17, "cached_input": 0.058, "unit": "per_1m_tokens", "context": 204800, "modalities": ["text"] },
-            { "model": "MiniMax-M2.7-highspeed", "input": 0.58, "output": 2.33, "cached_input": 0.058, "unit": "per_1m_tokens", "context": 204800, "modalities": ["text"] }
-          ]
-        },
-        {
-          "id": "minimax-anthropic",
-          "name": "Anthropic - Messages",
-          "kind": "chat",
-          "adapter": "anthropic-compatible",
-          "base_url": "https://api.minimaxi.com/anthropic",
-          "docs": "https://platform.minimaxi.com/docs/api-reference/text-anthropic-api",
-          "note": "Same models, Anthropic wire format (for Claude Code and Anthropic SDKs). Caching is explicit cache_control, 5-minute TTL.",
-          "wires": ["anthropic/messages", "anthropic/models"],
-          "models": [
-            { "model": "MiniMax-M3", "input": 0.29, "output": 1.17, "cached_input": 0.058, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text", "image"] },
-            { "model": "MiniMax-M2.7", "input": 0.29, "output": 1.17, "cached_input": 0.058, "unit": "per_1m_tokens", "context": 204800, "modalities": ["text"] }
-          ]
-        }
+      "models": {
+        "MiniMax-M3": { "input": 0.29, "output": 1.17, "cached_input": 0.058, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text", "image"] },
+        "MiniMax-M2.7": { "input": 0.29, "output": 1.17, "cached_input": 0.058, "unit": "per_1m_tokens", "context": 204800, "modalities": ["text"] },
+        "MiniMax-M2.7-highspeed": { "input": 0.58, "output": 2.33, "cached_input": 0.058, "unit": "per_1m_tokens", "context": 204800, "modalities": ["text"] }
+      },
+      "endpoints": [
+        { "wire": "openai/chat", "base_url": "https://api.minimaxi.com/v1", "adapter": "openai-compatible", "docs": "https://platform.minimaxi.com/docs/api-reference/text-openai-api", "note": "Implicit prompt caching (≥512 input tokens); cached tokens under prompt_tokens_details. Prices are CNY list ÷ 7.2.", "models": ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"] },
+        { "wire": "openai/models", "base_url": "https://api.minimaxi.com/v1", "adapter": "openai-compatible" },
+        { "wire": "anthropic/messages", "base_url": "https://api.minimaxi.com/anthropic", "adapter": "anthropic-compatible", "docs": "https://platform.minimaxi.com/docs/api-reference/text-anthropic-api", "note": "Same models, Anthropic wire format. Caching is explicit cache_control, 5-minute TTL.", "models": ["MiniMax-M3", "MiniMax-M2.7"] },
+        { "wire": "anthropic/models", "base_url": "https://api.minimaxi.com/anthropic", "adapter": "anthropic-compatible" }
       ]
     },
     {
       "id": "zhipu",
       "name": "Zhipu 智谱 (BigModel / GLM)",
       "homepage": "https://bigmodel.cn",
-      "services": [
-        {
-          "id": "zhipu-chat",
-          "name": "OpenAI - Chat Completions",
-          "kind": "chat",
-          "adapter": "openai-compatible",
-          "base_url": "https://open.bigmodel.cn/api/paas/v4",
-          "docs": "https://docs.bigmodel.cn/cn/api/introduction",
-          "note": "No /models listing endpoint. Implicit caching; cached tokens under prompt_tokens_details. Prices are CNY list ÷ 7.2 — verify at bigmodel.cn/pricing (Zhipu repriced several times in 2026).",
-          "wires": ["openai/chat"],
-          "models": [
-            { "model": "glm-5.1", "input": 0.83, "output": 3.33, "cached_input": 0.18, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
-            { "model": "glm-5", "input": 0.56, "output": 2.5, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
-            { "model": "glm-4.7", "input": 0.28, "output": 1.11, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
-            { "model": "glm-4.7-flash", "input": 0.0, "output": 0.0, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
-            { "model": "glm-4.5-air", "input": 0.056, "output": 0.14, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] }
-          ]
-        },
-        {
-          "id": "zhipu-embeddings",
-          "name": "OpenAI - Embeddings",
-          "kind": "embedding",
-          "adapter": "openai-compatible",
-          "base_url": "https://open.bigmodel.cn/api/paas/v4",
-          "docs": "https://docs.bigmodel.cn/cn/guide/models/embedding/embedding-3.md",
-          "wires": ["openai/embeddings"],
-          "models": [
-            { "model": "embedding-3", "input": 0.07, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] }
-          ]
-        },
-        {
-          "id": "zhipu-anthropic",
-          "name": "Anthropic - Messages",
-          "kind": "chat",
-          "adapter": "anthropic-compatible",
-          "base_url": "https://open.bigmodel.cn/api/anthropic",
-          "docs": "https://docs.bigmodel.cn/cn/guide/develop/claude/introduction.md",
-          "note": "Same GLM models, Anthropic wire format. Claude Code aliases map server-side: Opus → glm-5.1, Sonnet → glm-5-turbo, Haiku → glm-4.5-air.",
-          "wires": ["anthropic/messages", "anthropic/models"],
-          "models": [
-            { "model": "glm-5.1", "input": 0.83, "output": 3.33, "cached_input": 0.18, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
-            { "model": "glm-5-turbo", "input": 0.69, "output": 3.06, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
-            { "model": "glm-4.5-air", "input": 0.056, "output": 0.14, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] }
-          ]
-        }
+      "models": {
+        "glm-5.1": { "input": 0.83, "output": 3.33, "cached_input": 0.18, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
+        "glm-5": { "input": 0.56, "output": 2.5, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
+        "glm-5-turbo": { "input": 0.69, "output": 3.06, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
+        "glm-4.7": { "input": 0.28, "output": 1.11, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
+        "glm-4.7-flash": { "input": 0.0, "output": 0.0, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
+        "glm-4.5-air": { "input": 0.056, "output": 0.14, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] },
+        "embedding-3": { "input": 0.07, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] }
+      },
+      "endpoints": [
+        { "wire": "openai/chat", "base_url": "https://open.bigmodel.cn/api/paas/v4", "adapter": "openai-compatible", "docs": "https://docs.bigmodel.cn/cn/api/introduction", "note": "No /models listing endpoint. Implicit caching; cached tokens under prompt_tokens_details. Prices are CNY list ÷ 7.2 — verify at bigmodel.cn/pricing (Zhipu repriced several times in 2026).", "models": ["glm-5.1", "glm-5", "glm-4.7", "glm-4.7-flash", "glm-4.5-air"] },
+        { "wire": "openai/embeddings", "base_url": "https://open.bigmodel.cn/api/paas/v4", "adapter": "openai-compatible", "docs": "https://docs.bigmodel.cn/cn/guide/models/embedding/embedding-3.md", "models": ["embedding-3"] },
+        { "wire": "anthropic/messages", "base_url": "https://open.bigmodel.cn/api/anthropic", "adapter": "anthropic-compatible", "docs": "https://docs.bigmodel.cn/cn/guide/develop/claude/introduction.md", "note": "Same GLM models, Anthropic wire format. Claude Code aliases map server-side: Opus → glm-5.1, Sonnet → glm-5-turbo, Haiku → glm-4.5-air.", "models": ["glm-5.1", "glm-5-turbo", "glm-4.5-air"] },
+        { "wire": "anthropic/models", "base_url": "https://open.bigmodel.cn/api/anthropic", "adapter": "anthropic-compatible" }
       ]
     },
     {
       "id": "moonshot",
       "name": "Moonshot AI 月之暗面 (Kimi)",
       "homepage": "https://platform.kimi.com",
-      "services": [
-        {
-          "id": "moonshot-chat",
-          "name": "OpenAI - Chat Completions",
-          "kind": "chat",
-          "adapter": "openai-compatible",
-          "base_url": "https://api.moonshot.cn/v1",
-          "docs": "https://platform.kimi.com/docs/api/overview.md",
-          "note": "Automatic context caching on k2.5+; cached tokens reported as top-level usage.cached_tokens. Prices are CNY list ÷ 7.2.",
-          "wires": ["openai/chat", "openai/models"],
-          "quirks": { "cache_tokens": "minimax" },
-          "models": [
-            { "model": "kimi-k2.6", "input": 0.9, "output": 3.75, "cached_input": 0.15, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text", "image"] },
-            { "model": "kimi-k2.5", "input": 0.56, "output": 2.92, "cached_input": 0.1, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text", "image"] }
-          ]
-        },
-        {
-          "id": "moonshot-anthropic",
-          "name": "Anthropic - Messages",
-          "kind": "chat",
-          "adapter": "anthropic-compatible",
-          "base_url": "https://api.moonshot.cn/anthropic",
-          "docs": "https://platform.kimi.com/docs/guide/agent-support.md",
-          "note": "Same models, Anthropic wire format. Moonshot's recommended Claude Code model is kimi-k2.7-code (thinking always on).",
-          "wires": ["anthropic/messages", "anthropic/models"],
-          "models": [
-            { "model": "kimi-k2.7-code", "input": 0.9, "output": 3.75, "cached_input": 0.18, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text"] },
-            { "model": "kimi-k2.6", "input": 0.9, "output": 3.75, "cached_input": 0.15, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text", "image"] },
-            { "model": "kimi-k2.5", "input": 0.56, "output": 2.92, "cached_input": 0.1, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text", "image"] }
-          ]
-        }
+      "quirks": { "cache_tokens": "minimax" },
+      "models": {
+        "kimi-k2.7-code": { "input": 0.9, "output": 3.75, "cached_input": 0.18, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text"] },
+        "kimi-k2.6": { "input": 0.9, "output": 3.75, "cached_input": 0.15, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text", "image"] },
+        "kimi-k2.5": { "input": 0.56, "output": 2.92, "cached_input": 0.1, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text", "image"] }
+      },
+      "endpoints": [
+        { "wire": "openai/chat", "base_url": "https://api.moonshot.cn/v1", "adapter": "openai-compatible", "docs": "https://platform.kimi.com/docs/api/overview.md", "note": "Automatic context caching on k2.5+; cached tokens reported as top-level usage.cached_tokens. Prices are CNY list ÷ 7.2.", "models": ["kimi-k2.6", "kimi-k2.5"] },
+        { "wire": "openai/models", "base_url": "https://api.moonshot.cn/v1", "adapter": "openai-compatible" },
+        { "wire": "anthropic/messages", "base_url": "https://api.moonshot.cn/anthropic", "adapter": "anthropic-compatible", "docs": "https://platform.kimi.com/docs/guide/agent-support.md", "note": "Same models, Anthropic wire format. Moonshot's recommended Claude Code model is kimi-k2.7-code (thinking always on).", "models": ["kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5"] },
+        { "wire": "anthropic/models", "base_url": "https://api.moonshot.cn/anthropic", "adapter": "anthropic-compatible" }
       ]
     }
   ]

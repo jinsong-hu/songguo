@@ -15,25 +15,13 @@ package configsvc
 import (
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync/atomic"
 
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/store"
 	"github.com/songguo/songguo/internal/wire"
 )
-
-// DefaultWires is the wire allowlist granted to a provider when none is given
-// explicitly, keyed by the provider's adapter (auth scheme). Catalog presets
-// override this with precise per-provider lists.
-func DefaultWires(adapter string) []string {
-	if adapter == config.AdapterAnthropic {
-		return []string{"anthropic/messages", "anthropic/models"}
-	}
-	if adapter == config.AdapterVolcSpeech {
-		return []string{"volc/tts"}
-	}
-	return []string{"openai/chat", "openai/completions", "openai/embeddings", "openai/models"}
-}
 
 // Manager owns the live snapshot derived from the store.
 type Manager struct {
@@ -102,16 +90,20 @@ func (m *Manager) build() (*config.Snapshot, error) {
 				"provider", pvd.Name, "has_key", pvd.APIKey != "", "models", len(pvd.Models))
 			continue
 		}
-		cfg.Vendors = append(cfg.Vendors, vendorFromProvider(pvd, m.logger))
+		cfg.Vendors = append(cfg.Vendors, vendorsFromProvider(pvd, m.logger)...)
 	}
 
 	return config.Build(cfg)
 }
 
-// vendorFromProvider projects a stored provider into a config.Vendor for routing.
-// Wire names not present in the registry are dropped with a warning so a typo
-// in the allowlist can never silently match traffic.
-func vendorFromProvider(pvd store.Provider, logger *slog.Logger) config.Vendor {
+// vendorsFromProvider projects a stored provider into one or more config.Vendors
+// for routing: its endpoints are grouped by (base_url, adapter), and each group
+// becomes a vendor carrying that group's wires. Wire names not present in the
+// registry are dropped with a warning so a typo can never silently match. The
+// shared API key, models/prices, and quirks are replicated onto every group.
+// The first group keeps the provider's name (so /x/<name> and stats stay stable
+// for single-endpoint providers); additional groups get an "-<adapter>" suffix.
+func vendorsFromProvider(pvd store.Provider, logger *slog.Logger) []config.Vendor {
 	models := make([]string, 0, len(pvd.Models))
 	prices := make(map[string]config.Price, len(pvd.Models))
 	for _, m := range pvd.Models {
@@ -123,27 +115,89 @@ func vendorFromProvider(pvd store.Provider, logger *slog.Logger) config.Vendor {
 		prices[m.Model] = config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: unit}
 	}
 
-	wires := make([]string, 0, len(pvd.Wires))
-	for _, w := range pvd.Wires {
-		if _, ok := wire.Get(w); !ok {
-			logger.Warn("dropping unknown wire from provider allowlist", "provider", pvd.Name, "wire", w)
+	// Group endpoints by (base_url, adapter).
+	type groupKey struct{ baseURL, adapter string }
+	order := make([]groupKey, 0, len(pvd.Endpoints))
+	groups := make(map[groupKey][]string)
+	for _, ep := range pvd.Endpoints {
+		if _, ok := wire.Get(ep.Wire); !ok {
+			logger.Warn("dropping unknown wire from provider endpoints", "provider", pvd.Name, "wire", ep.Wire)
 			continue
 		}
-		wires = append(wires, w)
+		k := groupKey{ep.BaseURL, ep.Adapter}
+		if _, seen := groups[k]; !seen {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], ep.Wire)
 	}
 
-	return config.Vendor{
-		Name:           pvd.Name,
-		BaseURL:        pvd.BaseURL,
-		Adapter:        pvd.Adapter,
-		ServedModels:   models,
-		Priority:       pvd.Priority,
-		Weight:         pvd.Weight,
-		Credential:     config.Credential{ID: pvd.ID, APIKey: pvd.APIKey},
-		Prices:         prices,
-		Wires:          wires,
-		AllowUnmatched: pvd.AllowUnmatched,
-		Quirks:         pvd.Quirks,
+	// Stable, intuitive primary: openai-compatible groups rank first, then by
+	// base URL. The primary group keeps the provider's plain name (so /x/<name>
+	// and stats stay stable); others get a unique suffix.
+	sort.SliceStable(order, func(i, j int) bool {
+		ri, rj := adapterRank(order[i].adapter), adapterRank(order[j].adapter)
+		if ri != rj {
+			return ri < rj
+		}
+		return order[i].baseURL < order[j].baseURL
+	})
+
+	vendors := make([]config.Vendor, 0, len(order))
+	usedNames := make(map[string]struct{}, len(order))
+	for i, k := range order {
+		name := pvd.Name
+		if i > 0 {
+			name = pvd.Name + "-" + adapterSlug(k.adapter)
+			for n := 2; ; n++ {
+				if _, clash := usedNames[name]; !clash {
+					break
+				}
+				name = fmt.Sprintf("%s-%s-%d", pvd.Name, adapterSlug(k.adapter), n)
+			}
+		}
+		usedNames[name] = struct{}{}
+		vendors = append(vendors, config.Vendor{
+			Name:           name,
+			BaseURL:        k.baseURL,
+			Adapter:        k.adapter,
+			ServedModels:   models,
+			Priority:       pvd.Priority,
+			Weight:         pvd.Weight,
+			Credential:     config.Credential{ID: pvd.ID, APIKey: pvd.APIKey},
+			Prices:         prices,
+			Wires:          groups[k],
+			AllowUnmatched: pvd.AllowUnmatched,
+			Quirks:         pvd.Quirks,
+		})
+	}
+	return vendors
+}
+
+// adapterRank orders endpoint groups so the primary (name-keeping) group is
+// deterministic and intuitive: the OpenAI-compatible surface comes first.
+func adapterRank(adapter string) int {
+	switch adapter {
+	case config.AdapterOpenAI:
+		return 0
+	case config.AdapterAnthropic:
+		return 1
+	case config.AdapterVolcSpeech:
+		return 2
+	default:
+		return 3
+	}
+}
+
+// adapterSlug shortens an adapter name into a vendor-name suffix used to
+// disambiguate a provider's secondary endpoint groups (e.g. "deepseek-anthropic").
+func adapterSlug(adapter string) string {
+	switch adapter {
+	case config.AdapterAnthropic:
+		return "anthropic"
+	case config.AdapterVolcSpeech:
+		return "speech"
+	default:
+		return "openai"
 	}
 }
 

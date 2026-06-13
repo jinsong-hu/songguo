@@ -6,6 +6,25 @@
   margin-top: 4px;
 }
 
+/* Vendor tile (clickable, opens the per-vendor add page). */
+.vendorTile {
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.vendorTile:hover {
+  border-color: var(--accent);
+}
+
+.vendorTitle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
 .vendorHead {
   display: flex;
   align-items: center;

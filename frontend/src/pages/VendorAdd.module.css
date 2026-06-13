@@ -1,0 +1,107 @@
+.card {
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px;
+}
+
+.vendorHead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.vendorName {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.notice {
+  padding: 10px 14px;
+  border-radius: var(--radius-control);
+  background: var(--amber-weak, var(--surface-2));
+  border: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.hint {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.wireList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.wireItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.wireItem:hover {
+  border-color: var(--accent);
+}
+
+.wireMain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.wireLabel {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.wireUrl {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.wireModels {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  flex: none;
+}
+
+.error {
+  padding: 9px 12px;
+  border-radius: var(--radius-control);
+  background: var(--danger-weak);
+  color: var(--danger);
+  font-size: 12.5px;
+}
+
+.footerRow {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}

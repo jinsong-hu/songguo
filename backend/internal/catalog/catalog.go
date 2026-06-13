@@ -20,34 +20,32 @@ type Catalog struct {
 	Vendors []Vendor `json:"vendors"`
 }
 
-// Vendor groups a provider's services for display.
+// Vendor is one upstream provider's preset: its model price list (defined once,
+// keyed by model id) and the endpoints it exposes. Quirks parameterize usage
+// extraction (see internal/wire) and apply to the whole vendor.
 type Vendor struct {
-	ID       string    `json:"id"`
-	Name     string    `json:"name"`
-	Homepage string    `json:"homepage,omitempty"`
-	Services []Service `json:"services"`
+	ID        string            `json:"id"`
+	Name      string            `json:"name"`
+	Homepage  string            `json:"homepage,omitempty"`
+	Quirks    map[string]string `json:"quirks,omitempty"`
+	Models    map[string]Model  `json:"models"`
+	Endpoints []Endpoint        `json:"endpoints"`
 }
 
-// Service is one preset: an adapter + base_url + the models it serves, plus
-// descriptive metadata for the listing/playground. Wires is the wire
-// allowlist instantiated services start with; Quirks parameterize usage
-// extraction (see internal/wire).
-type Service struct {
-	ID      string            `json:"id"`
-	Name    string            `json:"name"`
-	Kind    string            `json:"kind"` // chat, embedding, asr, tts, image, mcp, ...
-	Adapter string            `json:"adapter"`
-	BaseURL string            `json:"base_url"`
-	Docs    string            `json:"docs,omitempty"`
-	Note    string            `json:"note,omitempty"`
-	Wires   []string          `json:"wires,omitempty"`
-	Quirks  map[string]string `json:"quirks,omitempty"`
-	Models  []Model           `json:"models"`
+// Endpoint is one preset wire bound to a base URL + adapter (auth scheme),
+// 1:1 with the wire. Models lists the model ids (keys into Vendor.Models) this
+// endpoint serves; companion wires like a model-listing endpoint carry none.
+type Endpoint struct {
+	Wire    string   `json:"wire"`
+	BaseURL string   `json:"base_url"`
+	Adapter string   `json:"adapter"`
+	Docs    string   `json:"docs,omitempty"`
+	Note    string   `json:"note,omitempty"`
+	Models  []string `json:"models,omitempty"`
 }
 
 // Model is a catalog model with its default price and descriptive metadata.
 type Model struct {
-	Model       string   `json:"model"`
 	Input       float64  `json:"input"`
 	Output      float64  `json:"output"`
 	CachedInput float64  `json:"cached_input,omitempty"`

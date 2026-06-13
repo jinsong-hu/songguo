@@ -10,6 +10,7 @@ import { Skeleton } from '../components/Skeleton';
 import { useFetch } from '../lib/useFetch';
 import { int, ms, percent } from '../lib/format';
 import { BrandIcon, providerBrand } from '../lib/modelBrand';
+import { wireName, wireServesModels } from '../lib/wires';
 import styles from './Providers.module.css';
 
 export function ProvidersPage() {
@@ -57,7 +58,13 @@ function ProviderCard({ provider }: { provider: Provider }) {
     provider.models.map((m) => m.model),
   );
   const { stats } = provider;
-  const complete = provider.masked_key !== '' && provider.models.length > 0;
+  const complete = provider.masked_key !== '' && provider.endpoints.length > 0;
+
+  // Distinct base URLs and the capability wires this provider serves.
+  const baseUrls = Array.from(new Set(provider.endpoints.map((e) => e.base_url)));
+  const capWires = Array.from(
+    new Set(provider.endpoints.filter((e) => wireServesModels(e.wire)).map((e) => e.wire)),
+  );
 
   return (
     <Link
@@ -82,14 +89,17 @@ function ProviderCard({ provider }: { provider: Provider }) {
         )}
       </div>
 
-      <div className={styles.baseUrl}>{provider.base_url}</div>
+      <div className={styles.baseUrl}>{baseUrls.join(' · ') || 'No endpoints'}</div>
 
       <div className={styles.cardMeta}>
-        <span className="chip">{provider.adapter}</span>
+        {capWires.map((w) => (
+          <span key={w} className="chip">
+            {wireName(w)}
+          </span>
+        ))}
         <span className="chip">
           {provider.models.length} {provider.models.length === 1 ? 'model' : 'models'}
         </span>
-        {provider.vendor && <span className="chip">{provider.vendor}</span>}
       </div>
 
       <span className={styles.statsRow}>

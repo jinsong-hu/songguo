@@ -73,6 +73,9 @@ func (s *Store) migrate() error {
 	// Detect whether provider_wires already existed before this migrate run
 	// (either from a previous run with new names, or via rename from service_wires).
 	hadProviderWires, _ := s.tableExists("provider_wires")
+	// Detect whether provider_endpoints already existed, to decide whether to
+	// backfill it from the legacy per-provider base_url/adapter + provider_wires.
+	hadProviderEndpoints, _ := s.tableExists("provider_endpoints")
 
 	// Step 1: Rename legacy tables services → providers, tokens → users, etc.
 	// Must run before CREATE TABLE so old tables are gone when new ones are
@@ -169,8 +172,19 @@ func (s *Store) migrate() error {
 			wire        TEXT NOT NULL,
 			PRIMARY KEY (provider_id, wire)
 		)`,
+		// An endpoint binds one wire to a base URL + adapter (auth scheme). It
+		// supersedes provider_wires: a provider holds several, and the config
+		// manager groups them by (base_url, adapter) into routing vendors.
+		`CREATE TABLE IF NOT EXISTS provider_endpoints (
+			provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+			wire        TEXT NOT NULL,
+			base_url    TEXT NOT NULL DEFAULT '',
+			adapter     TEXT NOT NULL DEFAULT 'openai-compatible',
+			PRIMARY KEY (provider_id, wire)
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(provider_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_provider_wires_provider ON provider_wires(provider_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_provider_endpoints_provider ON provider_endpoints(provider_id)`,
 
 		// Gateway-wide settings as a singleton row, hot-applied via the config
 		// manager when changed from the dashboard.
@@ -220,6 +234,36 @@ func (s *Store) migrate() error {
 		if err := s.backfillWires(); err != nil {
 			return err
 		}
+	}
+
+	// Backfill provider_endpoints from the legacy shape (per-provider base_url +
+	// adapter, one row per provider_wires entry) the first time this table
+	// appears. INSERT OR IGNORE keeps it idempotent if interrupted.
+	if !hadProviderEndpoints {
+		if err := s.backfillEndpoints(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// backfillEndpoints seeds provider_endpoints from each provider's legacy
+// base_url + adapter columns joined with its provider_wires rows, so existing
+// single-base-URL providers become endpoint-backed with unchanged routing.
+func (s *Store) backfillEndpoints() error {
+	hasWires, _ := s.tableExists("provider_wires")
+	if !hasWires {
+		return nil
+	}
+	hasBase, _ := s.hasColumn("providers", "base_url")
+	hasAdapter, _ := s.hasColumn("providers", "adapter")
+	if !hasBase || !hasAdapter {
+		return nil
+	}
+	if _, err := s.db.Exec(`INSERT OR IGNORE INTO provider_endpoints (provider_id, wire, base_url, adapter)
+		SELECT pw.provider_id, pw.wire, p.base_url, p.adapter
+		FROM provider_wires pw JOIN providers p ON p.id = pw.provider_id`); err != nil {
+		return fmt.Errorf("store: backfill endpoints: %w", err)
 	}
 	return nil
 }

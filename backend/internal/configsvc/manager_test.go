@@ -30,24 +30,25 @@ func TestManagerSkipsIncompleteProviders(t *testing.T) {
 
 	// Complete + enabled → routes.
 	if _, err := st.CreateProvider(store.NewProvider{
-		Name: "good", Adapter: "openai-compatible", BaseURL: "https://api.openai.com/v1",
-		Enabled: true, APIKey: "sk-a",
-		Models: []store.ProviderModel{{Model: "gpt-4o", Input: 1, Output: 2, Unit: "per_1m_tokens"}},
+		Name: "good", Enabled: true, APIKey: "sk-a",
+		Models:    []store.ProviderModel{{Model: "gpt-4o", Input: 1, Output: 2, Unit: "per_1m_tokens"}},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", BaseURL: "https://api.openai.com/v1", Adapter: "openai-compatible"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	// No API key → skipped.
 	if _, err := st.CreateProvider(store.NewProvider{
-		Name: "nokeys", BaseURL: "https://x.example.com", Enabled: true,
-		Models: []store.ProviderModel{{Model: "m1", Unit: "per_1m_tokens"}},
+		Name: "nokeys", Enabled: true,
+		Models:    []store.ProviderModel{{Model: "m1", Unit: "per_1m_tokens"}},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", BaseURL: "https://x.example.com", Adapter: "openai-compatible"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	// Disabled → skipped.
 	if _, err := st.CreateProvider(store.NewProvider{
-		Name: "off", BaseURL: "https://y.example.com", Enabled: false,
-		APIKey: "sk-b",
-		Models: []store.ProviderModel{{Model: "m2", Unit: "per_1m_tokens"}},
+		Name: "off", Enabled: false, APIKey: "sk-b",
+		Models:    []store.ProviderModel{{Model: "m2", Unit: "per_1m_tokens"}},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", BaseURL: "https://y.example.com", Adapter: "openai-compatible"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -85,5 +86,51 @@ func TestManagerSkipsIncompleteProviders(t *testing.T) {
 	}
 	if got := len(m.Current().Vendors()); got != 2 {
 		t.Fatalf("after completing draft, vendors = %d, want 2", got)
+	}
+}
+
+// A provider whose endpoints span two base URLs (e.g. DeepSeek's OpenAI and
+// Anthropic surfaces) expands into two routing vendors sharing one key: the
+// primary group keeps the provider name, the second gets an adapter suffix.
+func TestProviderExpandsByBaseURL(t *testing.T) {
+	st := openTestStore(t)
+
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "deepseek", Enabled: true, APIKey: "sk-d",
+		Models: []store.ProviderModel{{Model: "deepseek-v4-pro", Input: 1, Output: 2, Unit: "per_1m_tokens"}},
+		Endpoints: []store.ProviderEndpoint{
+			{Wire: "openai/chat", BaseURL: "https://api.deepseek.com", Adapter: "openai-compatible"},
+			{Wire: "openai/models", BaseURL: "https://api.deepseek.com", Adapter: "openai-compatible"},
+			{Wire: "anthropic/messages", BaseURL: "https://api.deepseek.com/anthropic", Adapter: "anthropic-compatible"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	snap := m.Current()
+	if got := len(snap.Vendors()); got != 2 {
+		t.Fatalf("vendors = %d, want 2 (one per base_url)", got)
+	}
+	openai, ok := snap.Vendor("deepseek")
+	if !ok {
+		t.Fatal("expected primary group named 'deepseek'")
+	}
+	if openai.BaseURL != "https://api.deepseek.com" || openai.Adapter != "openai-compatible" {
+		t.Errorf("primary group = %q/%q", openai.BaseURL, openai.Adapter)
+	}
+	anthro, ok := snap.Vendor("deepseek-anthropic")
+	if !ok {
+		t.Fatal("expected second group named 'deepseek-anthropic'")
+	}
+	if anthro.BaseURL != "https://api.deepseek.com/anthropic" || anthro.Adapter != "anthropic-compatible" {
+		t.Errorf("second group = %q/%q", anthro.BaseURL, anthro.Adapter)
+	}
+	// Both groups carry the shared key and the model.
+	if openai.Credential.APIKey != "sk-d" || anthro.Credential.APIKey != "sk-d" {
+		t.Error("both groups should share the provider key")
 	}
 }

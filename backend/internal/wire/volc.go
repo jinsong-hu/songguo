@@ -14,6 +14,17 @@ func init() {
 		Extract:    volcTTSExtract,
 		NewScanner: newVolcTTSScanner,
 	})
+	// Voice-cloning management: train a custom voice (/tts/voice_clone) and
+	// poll its status (/tts/get_voice). These return no usage object — the
+	// voice-slot fee is billed out-of-band on first synthesis — so they meter
+	// as free, like a model-listing endpoint.
+	register(Wire{
+		Name:     "volc/voice-clone",
+		Suffixes: []string{"/tts/voice_clone", "/tts/get_voice"},
+		Modality: calls.ModalityTTS,
+		Extract:  zeroCostExtract,
+		ZeroCost: true,
+	})
 }
 
 // volcTTSExtract meters a Volcengine speech-synthesis response. Billing is by

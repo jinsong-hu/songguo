@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/songguo/songguo/internal/catalog"
-	"github.com/songguo/songguo/internal/configsvc"
 	"github.com/songguo/songguo/internal/store"
 	"github.com/songguo/songguo/internal/wire"
 )
@@ -23,26 +22,31 @@ type providerModelView struct {
 	Unit        string  `json:"unit"`
 }
 
+// providerEndpointView is one wire bound to a base URL + adapter (auth scheme).
+type providerEndpointView struct {
+	Wire    string `json:"wire"`
+	BaseURL string `json:"base_url"`
+	Adapter string `json:"adapter"`
+}
+
 // providerView is the JSON representation of a configured provider. The API key
 // is never serialized in the clear — only a masked preview.
 type providerView struct {
-	ID             string              `json:"id"`
-	Name           string              `json:"name"`
-	Vendor         string              `json:"vendor"`
-	Adapter        string              `json:"adapter"`
-	BaseURL        string              `json:"base_url"`
-	Priority       int                 `json:"priority"`
-	Weight         int                 `json:"weight"`
-	Enabled        bool                `json:"enabled"`
-	CatalogID      string              `json:"catalog_id"`
-	Wires          []string            `json:"wires"`
-	AllowUnmatched bool                `json:"allow_unmatched"`
-	Quirks         map[string]string   `json:"quirks"`
-	MaskedKey      string              `json:"masked_key"`
-	Models         []providerModelView `json:"models"`
-	CreatedAt      string              `json:"created_at"`
-	UpdatedAt      string              `json:"updated_at"`
-	Stats          vendorStatsView     `json:"stats"`
+	ID             string                 `json:"id"`
+	Name           string                 `json:"name"`
+	Vendor         string                 `json:"vendor"`
+	Priority       int                    `json:"priority"`
+	Weight         int                    `json:"weight"`
+	Enabled        bool                   `json:"enabled"`
+	CatalogID      string                 `json:"catalog_id"`
+	Endpoints      []providerEndpointView `json:"endpoints"`
+	AllowUnmatched bool                   `json:"allow_unmatched"`
+	Quirks         map[string]string      `json:"quirks"`
+	MaskedKey      string                 `json:"masked_key"`
+	Models         []providerModelView    `json:"models"`
+	CreatedAt      string                 `json:"created_at"`
+	UpdatedAt      string                 `json:"updated_at"`
+	Stats          vendorStatsView        `json:"stats"`
 }
 
 func newProviderView(pvd store.Provider, stat store.VendorStat, hasStat bool) providerView {
@@ -53,6 +57,10 @@ func newProviderView(pvd store.Provider, stat store.VendorStat, hasStat bool) pr
 	models := make([]providerModelView, 0, len(pvd.Models))
 	for _, m := range pvd.Models {
 		models = append(models, providerModelView{Model: m.Model, Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: m.Unit})
+	}
+	endpoints := make([]providerEndpointView, 0, len(pvd.Endpoints))
+	for _, ep := range pvd.Endpoints {
+		endpoints = append(endpoints, providerEndpointView{Wire: ep.Wire, BaseURL: ep.BaseURL, Adapter: ep.Adapter})
 	}
 
 	sv := vendorStatsView{Healthy: true}
@@ -71,13 +79,11 @@ func newProviderView(pvd store.Provider, stat store.VendorStat, hasStat bool) pr
 		ID:             pvd.ID,
 		Name:           pvd.Name,
 		Vendor:         pvd.Vendor,
-		Adapter:        pvd.Adapter,
-		BaseURL:        pvd.BaseURL,
 		Priority:       pvd.Priority,
 		Weight:         pvd.Weight,
 		Enabled:        pvd.Enabled,
 		CatalogID:      pvd.CatalogID,
-		Wires:          pvd.Wires,
+		Endpoints:      endpoints,
 		AllowUnmatched: pvd.AllowUnmatched,
 		Quirks:         pvd.Quirks,
 		MaskedKey:      masked,
@@ -98,36 +104,38 @@ type providerModelReq struct {
 	Unit        string  `json:"unit"`
 }
 
+type providerEndpointReq struct {
+	Wire    string `json:"wire"`
+	BaseURL string `json:"base_url"`
+	Adapter string `json:"adapter"`
+}
+
 type createProviderReq struct {
-	Name           string            `json:"name"`
-	Vendor         string            `json:"vendor"`
-	Adapter        string            `json:"adapter"`
-	BaseURL        string            `json:"base_url"`
-	Priority       int               `json:"priority"`
-	Weight         int               `json:"weight"`
-	Enabled        *bool             `json:"enabled"`
-	CatalogID      string            `json:"catalog_id"`
-	AllowUnmatched bool              `json:"allow_unmatched"`
-	Quirks         map[string]string `json:"quirks"`
-	APIKey         string            `json:"api_key"`
-	Models         []providerModelReq `json:"models"`
-	Wires          []string          `json:"wires"`
+	Name           string                `json:"name"`
+	Vendor         string                `json:"vendor"`
+	Priority       int                   `json:"priority"`
+	Weight         int                   `json:"weight"`
+	Enabled        *bool                 `json:"enabled"`
+	CatalogID      string                `json:"catalog_id"`
+	AllowUnmatched bool                  `json:"allow_unmatched"`
+	Quirks         map[string]string     `json:"quirks"`
+	APIKey         string                `json:"api_key"`
+	Models         []providerModelReq    `json:"models"`
+	Endpoints      []providerEndpointReq `json:"endpoints"`
 }
 
 type patchProviderReq struct {
-	Name           *string            `json:"name"`
-	Vendor         *string            `json:"vendor"`
-	Adapter        *string            `json:"adapter"`
-	BaseURL        *string            `json:"base_url"`
-	Priority       *int               `json:"priority"`
-	Weight         *int               `json:"weight"`
-	Enabled        *bool              `json:"enabled"`
-	AllowUnmatched *bool              `json:"allow_unmatched"`
+	Name           *string           `json:"name"`
+	Vendor         *string           `json:"vendor"`
+	Priority       *int              `json:"priority"`
+	Weight         *int              `json:"weight"`
+	Enabled        *bool             `json:"enabled"`
+	AllowUnmatched *bool             `json:"allow_unmatched"`
 	// APIKey replaces the provider's key when present and non-empty.
-	APIKey *string            `json:"api_key"`
-	Quirks *map[string]string `json:"quirks"`
-	Models *[]providerModelReq `json:"models"`
-	Wires  *[]string          `json:"wires"`
+	APIKey    *string                `json:"api_key"`
+	Quirks    *map[string]string     `json:"quirks"`
+	Models    *[]providerModelReq    `json:"models"`
+	Endpoints *[]providerEndpointReq `json:"endpoints"`
 }
 
 // --- handlers ---
@@ -177,7 +185,8 @@ func (a *api) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "name is required")
 		return
 	}
-	if msg := validateBaseURL(req.BaseURL); msg != "" {
+	endpoints, msg := toStoreEndpoints(req.Endpoints)
+	if msg != "" {
 		writeError(w, http.StatusBadRequest, "bad_request", msg)
 		return
 	}
@@ -187,18 +196,9 @@ func (a *api) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 		enabled = *req.Enabled
 	}
 
-	// Wires default by adapter when omitted, so plain creates (old UI, curl)
-	// never produce a provider that denies all traffic.
-	wires := req.Wires
-	if len(wires) == 0 {
-		wires = configsvc.DefaultWires(req.Adapter)
-	}
-
 	pvd, err := a.store.CreateProvider(store.NewProvider{
 		Name:           strings.TrimSpace(req.Name),
 		Vendor:         req.Vendor,
-		Adapter:        req.Adapter,
-		BaseURL:        strings.TrimSpace(req.BaseURL),
 		Priority:       req.Priority,
 		Weight:         req.Weight,
 		Enabled:        enabled,
@@ -207,7 +207,7 @@ func (a *api) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 		Quirks:         req.Quirks,
 		APIKey:         strings.TrimSpace(req.APIKey),
 		Models:         toStoreModels(req.Models),
-		Wires:          wires,
+		Endpoints:      endpoints,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -228,12 +228,6 @@ func (a *api) handlePatchProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
 		return
 	}
-	if req.BaseURL != nil {
-		if msg := validateBaseURL(*req.BaseURL); msg != "" {
-			writeError(w, http.StatusBadRequest, "bad_request", msg)
-			return
-		}
-	}
 	if req.APIKey != nil {
 		trimmed := strings.TrimSpace(*req.APIKey)
 		if trimmed == "" {
@@ -245,8 +239,6 @@ func (a *api) handlePatchProvider(w http.ResponseWriter, r *http.Request) {
 	upd := store.ProviderUpdate{
 		Name:           req.Name,
 		Vendor:         req.Vendor,
-		Adapter:        req.Adapter,
-		BaseURL:        req.BaseURL,
 		Priority:       req.Priority,
 		Weight:         req.Weight,
 		Enabled:        req.Enabled,
@@ -260,10 +252,15 @@ func (a *api) handlePatchProvider(w http.ResponseWriter, r *http.Request) {
 			upd.Models = []store.ProviderModel{} // explicit clear
 		}
 	}
-	if req.Wires != nil {
-		upd.Wires = *req.Wires
-		if upd.Wires == nil {
-			upd.Wires = []string{} // explicit clear
+	if req.Endpoints != nil {
+		eps, msg := toStoreEndpoints(*req.Endpoints)
+		if msg != "" {
+			writeError(w, http.StatusBadRequest, "bad_request", msg)
+			return
+		}
+		upd.Endpoints = eps
+		if upd.Endpoints == nil {
+			upd.Endpoints = []store.ProviderEndpoint{} // explicit clear
 		}
 	}
 
@@ -311,7 +308,12 @@ func (a *api) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	origin, err := originOf(pvd.BaseURL)
+	if len(pvd.Endpoints) == 0 {
+		writeJSON(w, http.StatusOK, testVendorView{Reachable: false, Error: "provider has no endpoints"})
+		return
+	}
+	ep := pvd.Endpoints[0]
+	origin, err := originOf(ep.BaseURL)
 	if err != nil {
 		writeJSON(w, http.StatusOK, testVendorView{Reachable: false, Error: err.Error()})
 		return
@@ -325,7 +327,7 @@ func (a *api) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if pvd.APIKey != "" {
-		applyTestAuth(req, pvd.Adapter, pvd.APIKey)
+		applyTestAuth(req, ep.Adapter, pvd.APIKey)
 	}
 
 	start := a.now()
@@ -419,6 +421,29 @@ func toStoreModels(in []providerModelReq) []store.ProviderModel {
 		out = append(out, store.ProviderModel{Model: m.Model, Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: unit})
 	}
 	return out
+}
+
+// toStoreEndpoints converts request endpoints into store endpoints, validating
+// each base URL. It returns ("", problem) on the first invalid base URL.
+func toStoreEndpoints(in []providerEndpointReq) ([]store.ProviderEndpoint, string) {
+	if in == nil {
+		return nil, ""
+	}
+	out := make([]store.ProviderEndpoint, 0, len(in))
+	for _, ep := range in {
+		if strings.TrimSpace(ep.Wire) == "" {
+			continue
+		}
+		if msg := validateBaseURL(ep.BaseURL); msg != "" {
+			return nil, msg
+		}
+		adapter := ep.Adapter
+		if adapter == "" {
+			adapter = "openai-compatible"
+		}
+		out = append(out, store.ProviderEndpoint{Wire: ep.Wire, BaseURL: strings.TrimSpace(ep.BaseURL), Adapter: adapter})
+	}
+	return out, ""
 }
 
 // validateBaseURL returns "" when base is a valid absolute http(s) URL with a

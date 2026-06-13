@@ -12,6 +12,7 @@ import { ServicesPage } from './pages/Services';
 import { ServiceDetailPage } from './pages/ServiceDetail';
 import { ProvidersPage } from './pages/Providers';
 import { ProviderAddPage } from './pages/ProviderAdd';
+import { VendorAddPage } from './pages/VendorAdd';
 import { ProviderNewPage } from './pages/ProviderNew';
 import { ProviderEditPage } from './pages/ProviderEdit';
 import { UsersPage } from './pages/Users';
@@ -110,6 +111,7 @@ export function App() {
               <Route path="services/:model" element={<ServiceDetailPage />} />
               <Route path="providers" element={<ProvidersPage />} />
               <Route path="providers/add" element={<ProviderAddPage />} />
+              <Route path="providers/add/:vendorId" element={<VendorAddPage />} />
               <Route path="providers/new" element={<ProviderNewPage />} />
               <Route path="providers/:id/edit" element={<ProviderEditPage />} />
               <Route path="users" element={<UsersPage />} />

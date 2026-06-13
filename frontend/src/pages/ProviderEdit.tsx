@@ -21,7 +21,7 @@ export function ProviderEditPage() {
     <Page
       title={provider ? `Edit ${provider.name}` : 'Edit provider'}
       actions={
-        <Link to="/providers/add" className="btn">
+        <Link to="/providers" className="btn">
           <ArrowLeft size={15} /> Back
         </Link>
       }
@@ -43,10 +43,10 @@ export function ProviderEditPage() {
       ) : (
         <ProviderForm
           editing={provider}
-          onCancel={() => navigate('/providers/add')}
+          onCancel={() => navigate('/providers')}
           onSaved={() => {
             toast.success('Provider updated.');
-            navigate('/providers/add');
+            navigate('/providers');
           }}
         />
       )}

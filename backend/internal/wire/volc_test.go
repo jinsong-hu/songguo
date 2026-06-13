@@ -9,6 +9,19 @@ func TestVolcTTSResolve(t *testing.T) {
 	}
 }
 
+func TestVolcVoiceCloneResolve(t *testing.T) {
+	enabled := []string{"volc/tts", "volc/voice-clone"}
+	for _, path := range []string{"/api/v3/tts/voice_clone", "/api/v3/tts/get_voice"} {
+		w, ok := Resolve(enabled, "POST", path)
+		if !ok || w.Name != "volc/voice-clone" {
+			t.Fatalf("Resolve(%q) = %q, %v; want volc/voice-clone, true", path, w.Name, ok)
+		}
+		if !w.ZeroCost {
+			t.Errorf("volc/voice-clone should be ZeroCost")
+		}
+	}
+}
+
 func TestVolcTTSExtract(t *testing.T) {
 	body := []byte(`{"code":0,"message":"OK","data":"...","usage":{"text_words":7}}`)
 	got := volcTTSExtract(body, nil)

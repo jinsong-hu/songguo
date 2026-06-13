@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/songguo/songguo/internal/calls"
+	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/store"
 )
@@ -209,7 +210,7 @@ func (h *handler) dialWSUpstream(host string, useTLS bool, requestTarget string,
 	// deadline-free.
 	_ = conn.SetDeadline(h.now().Add(wsHandshakeTimeout))
 
-	reqBytes := buildWSHandshake(host, requestTarget, r, t.Credential.APIKey)
+	reqBytes := buildWSHandshake(host, requestTarget, r, t.Vendor.Adapter, t.Credential.APIKey)
 	if _, err := conn.Write(reqBytes); err != nil {
 		_ = conn.Close()
 		return nil, nil, nil, fmt.Errorf("write handshake: %w", err)
@@ -228,18 +229,26 @@ func (h *handler) dialWSUpstream(host string, useTLS bool, requestTarget string,
 }
 
 // buildWSHandshake assembles the raw HTTP/1.1 upgrade request sent upstream. It
-// copies the client's headers EXCEPT Authorization and hop-by-hop headers we
-// must control, but KEEPS the WebSocket handshake headers verbatim, then sets
-// Authorization to the chosen credential. Building the bytes explicitly
-// guarantees the handshake headers survive untouched.
-func buildWSHandshake(host, requestTarget string, r *http.Request, apiKey string) []byte {
+// copies the client's headers EXCEPT the credential header(s) and hop-by-hop
+// headers we must control, but KEEPS the WebSocket handshake headers verbatim,
+// then injects the chosen credential per the vendor's adapter convention.
+// Building the bytes explicitly guarantees the handshake headers survive
+// untouched.
+func buildWSHandshake(host, requestTarget string, r *http.Request, adapter, apiKey string) []byte {
+	// Header names the adapter owns; we strip any client-sent value and write
+	// our own so the upstream only ever sees the vendor credential.
+	credHeader := "Authorization"
+	if adapter == config.AdapterVolcSpeech {
+		credHeader = "X-Api-Key"
+	}
+
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "GET %s HTTP/1.1\r\n", requestTarget)
 	fmt.Fprintf(&b, "Host: %s\r\n", hostHeader(host))
 
 	for key, vals := range r.Header {
 		canon := http.CanonicalHeaderKey(key)
-		if canon == "Authorization" || canon == "Host" {
+		if canon == "Authorization" || canon == http.CanonicalHeaderKey(credHeader) || canon == "Host" {
 			continue
 		}
 		_, isHandshake := wsHandshakeHeaders[canon]
@@ -254,7 +263,11 @@ func buildWSHandshake(host, requestTarget string, r *http.Request, apiKey string
 		}
 	}
 
-	fmt.Fprintf(&b, "Authorization: Bearer %s\r\n", apiKey)
+	if adapter == config.AdapterVolcSpeech {
+		fmt.Fprintf(&b, "X-Api-Key: %s\r\n", apiKey)
+	} else {
+		fmt.Fprintf(&b, "Authorization: Bearer %s\r\n", apiKey)
+	}
 	b.WriteString("\r\n")
 	return b.Bytes()
 }

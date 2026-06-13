@@ -2,9 +2,12 @@
 // service list with specs (context window, modalities, pricing, kind).
 
 import type { Catalog, CatalogModel } from '../api/types';
+import { wireKind } from './wires';
 
 export interface CatalogInfo extends CatalogModel {
-  /** Service kind from the catalog, e.g. "chat" | "embedding". */
+  /** Model id (the key in the vendor's model map). */
+  model: string;
+  /** Coarse kind derived from the endpoint serving it, e.g. "chat" | "embedding". */
   kind: string;
 }
 
@@ -12,9 +15,11 @@ export function indexCatalog(catalog: Catalog | null): Map<string, CatalogInfo> 
   const map = new Map<string, CatalogInfo>();
   if (!catalog) return map;
   for (const vendor of catalog.vendors) {
-    for (const service of vendor.services) {
-      for (const m of service.models) {
-        if (!map.has(m.model)) map.set(m.model, { ...m, kind: service.kind });
+    for (const ep of vendor.endpoints) {
+      const kind = wireKind(ep.wire);
+      for (const id of ep.models ?? []) {
+        const m = vendor.models[id];
+        if (m && !map.has(id)) map.set(id, { ...m, model: id, kind });
       }
     }
   }
