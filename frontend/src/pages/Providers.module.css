@@ -28,9 +28,7 @@
 }
 
 .disabled .iconTile,
-.disabled .cardName,
-.disabled .baseUrl,
-.disabled .cardMeta {
+.disabled .cardName {
   opacity: 0.55;
 }
 
@@ -38,7 +36,6 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 10px;
 }
 
 .iconTile {
@@ -77,16 +74,6 @@
   flex: none;
 }
 
-.healthy {
-  background: var(--accent-weak);
-  color: var(--accent);
-}
-
-.unhealthy {
-  background: var(--danger-weak);
-  color: var(--danger);
-}
-
 .draft {
   background: var(--amber-weak);
   color: var(--amber);
@@ -94,29 +81,6 @@
 
 .off {
   background: var(--surface-2);
-  color: var(--text-muted);
-}
-
-.baseUrl {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-bottom: 10px;
-}
-
-.cardMeta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 12px;
-}
-
-.statsRow {
-  margin-top: auto;
-  font-size: 12px;
   color: var(--text-muted);
 }
 
