@@ -8,18 +8,7 @@ import { Page } from '../components/Layout';
 import { Skeleton } from '../components/Skeleton';
 import { useFetch } from '../lib/useFetch';
 import { BrandIcon, providerBrand } from '../lib/modelBrand';
-import { wireName, wireServesModels } from '../lib/wires';
 import styles from './Providers.module.css';
-
-// Distinct capability wires a vendor offers (chat/responses/embeddings/messages/
-// tts/voice-clone), dropping companion wires like model listings.
-function capabilityWires(vendor: CatalogVendor): string[] {
-  const seen: string[] = [];
-  for (const ep of vendor.endpoints) {
-    if (wireServesModels(ep.wire) && !seen.includes(ep.wire)) seen.push(ep.wire);
-  }
-  return seen;
-}
 
 export function ProvidersPage() {
   const providers = useFetch(() => api.providers(), []);
@@ -58,17 +47,16 @@ export function ProvidersPage() {
       ) : (
         <>
           {existing.length > 0 && (
-            <>
-              <div className={styles.grid}>
-                {existing.map((p) => (
-                  <ProviderCard key={p.id} provider={p} />
-                ))}
-              </div>
-              <div className={styles.separator} />
-            </>
+            <div className={styles.grid}>
+              {existing.map((p) => (
+                <ProviderCard key={p.id} provider={p} />
+              ))}
+            </div>
           )}
 
-          <div className={styles.sectionLabel}>Add a provider</div>
+          <div className={styles.divider}>
+            <span>Add a provider</span>
+          </div>
           <div className={styles.grid}>
             {vendors.map((vendor) => (
               <VendorTile
@@ -133,7 +121,6 @@ interface VendorTileProps {
 }
 
 function VendorTile({ vendor, added, onOpen }: VendorTileProps) {
-  const caps = capabilityWires(vendor);
   return (
     <button className={`card ${styles.entry} ${styles.vendorTile}`} onClick={onOpen}>
       <div className={styles.entryHead}>
@@ -150,13 +137,6 @@ function VendorTile({ vendor, added, onOpen }: VendorTileProps) {
             <Check size={12} /> Added
           </span>
         )}
-      </div>
-      <div className={styles.tags}>
-        {caps.map((w) => (
-          <span key={w} className="chip">
-            {wireName(w)}
-          </span>
-        ))}
       </div>
     </button>
   );
