@@ -12,7 +12,7 @@ export function ProviderNewPage() {
     <Page
       title="Add custom provider"
       actions={
-        <Link to="/providers/add" className="btn">
+        <Link to="/providers" className="btn">
           <ArrowLeft size={15} /> Back
         </Link>
       }
@@ -23,7 +23,7 @@ export function ProviderNewPage() {
         instead — the endpoints come pre-filled.
       </p>
       <ProviderForm
-        onCancel={() => navigate('/providers/add')}
+        onCancel={() => navigate('/providers')}
         onSaved={() => {
           toast.success('Provider added.');
           navigate('/providers');

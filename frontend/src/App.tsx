@@ -11,7 +11,6 @@ import { OverviewPage } from './pages/Overview';
 import { ServicesPage } from './pages/Services';
 import { ServiceDetailPage } from './pages/ServiceDetail';
 import { ProvidersPage } from './pages/Providers';
-import { ProviderAddPage } from './pages/ProviderAdd';
 import { VendorAddPage } from './pages/VendorAdd';
 import { ProviderNewPage } from './pages/ProviderNew';
 import { ProviderEditPage } from './pages/ProviderEdit';
@@ -124,10 +123,10 @@ export function App() {
             >
               <Route index element={<OverviewPage />} />
               <Route path="services" element={<ServicesPage />} />
-              <Route path="services/add" element={<Navigate to="/providers/add" replace />} />
+              <Route path="services/add" element={<Navigate to="/providers" replace />} />
               <Route path="services/:model" element={<ServiceDetailPage />} />
               <Route path="providers" element={<ProvidersPage />} />
-              <Route path="providers/add" element={<ProviderAddPage />} />
+              <Route path="providers/add" element={<Navigate to="/providers" replace />} />
               <Route path="providers/add/:vendorId" element={<VendorAddPage />} />
               <Route path="providers/new" element={<ProviderNewPage />} />
               <Route path="providers/:id/edit" element={<ProviderEditPage />} />

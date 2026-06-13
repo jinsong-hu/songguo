@@ -1,18 +1,48 @@
-import type { CSSProperties } from 'react';
-import { Link } from 'react-router-dom';
-import { Plug, Plus } from 'lucide-react';
+import { useMemo, type CSSProperties } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Check, Wrench } from 'lucide-react';
 import { api } from '../api/client';
-import type { Provider } from '../api/types';
-import { EmptyState } from '../components/EmptyState';
+import type { CatalogVendor, Provider } from '../api/types';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
 import { Skeleton } from '../components/Skeleton';
 import { useFetch } from '../lib/useFetch';
 import { BrandIcon, providerBrand } from '../lib/modelBrand';
+import { wireName, wireServesModels } from '../lib/wires';
 import styles from './Providers.module.css';
 
+// Distinct capability wires a vendor offers (chat/responses/embeddings/messages/
+// tts/voice-clone), dropping companion wires like model listings.
+function capabilityWires(vendor: CatalogVendor): string[] {
+  const seen: string[] = [];
+  for (const ep of vendor.endpoints) {
+    if (wireServesModels(ep.wire) && !seen.includes(ep.wire)) seen.push(ep.wire);
+  }
+  return seen;
+}
+
 export function ProvidersPage() {
-  const { data, error, initialLoading, refetch } = useFetch(() => api.providers(), []);
+  const providers = useFetch(() => api.providers(), []);
+  const catalog = useFetch(() => api.catalog(), []);
+  const navigate = useNavigate();
+
+  const error = providers.error || catalog.error;
+  const initialLoading = providers.initialLoading || catalog.initialLoading;
+
+  // Vendors that already back a configured provider, so we can mark them "Added".
+  const addedVendorIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of providers.data ?? []) if (p.catalog_id) set.add(p.catalog_id);
+    return set;
+  }, [providers.data]);
+
+  const refetch = () => {
+    providers.refetch();
+    catalog.refetch();
+  };
+
+  const existing = providers.data ?? [];
+  const vendors = catalog.data?.vendors ?? [];
 
   return (
     <Page title="Providers">
@@ -20,31 +50,49 @@ export function ProvidersPage() {
         <ErrorBanner message={error} onRetry={refetch} />
       ) : initialLoading ? (
         <div className={styles.grid}>
-          <Skeleton height={130} />
-          <Skeleton height={130} />
-          <Skeleton height={130} />
-          <Skeleton height={130} />
+          <Skeleton height={70} />
+          <Skeleton height={70} />
+          <Skeleton height={70} />
+          <Skeleton height={70} />
         </div>
-      ) : !data || data.length === 0 ? (
-        <EmptyState
-          icon={Plug}
-          title="No providers yet"
-          hint={
-            <>
-              <Link to="/providers/add">Add a provider</Link> to start routing models.
-            </>
-          }
-        />
       ) : (
-        <div className={styles.grid}>
-          <Link to="/providers/add" className={`card ${styles.addCard}`}>
-            <Plus size={20} />
-            <span>Add provider</span>
-          </Link>
-          {data.map((p) => (
-            <ProviderCard key={p.id} provider={p} />
-          ))}
-        </div>
+        <>
+          {existing.length > 0 && (
+            <>
+              <div className={styles.grid}>
+                {existing.map((p) => (
+                  <ProviderCard key={p.id} provider={p} />
+                ))}
+              </div>
+              <div className={styles.separator} />
+            </>
+          )}
+
+          <div className={styles.sectionLabel}>Add a provider</div>
+          <div className={styles.grid}>
+            {vendors.map((vendor) => (
+              <VendorTile
+                key={vendor.id}
+                vendor={vendor}
+                added={addedVendorIds.has(vendor.id)}
+                onOpen={() => navigate(`/providers/add/${encodeURIComponent(vendor.id)}`)}
+              />
+            ))}
+            <button
+              className={`card ${styles.entry} ${styles.custom}`}
+              onClick={() => navigate('/providers/new')}
+            >
+              <div className={styles.customIcon}>
+                <Wrench size={18} />
+              </div>
+              <span className={styles.serviceName}>Custom provider</span>
+              <span className={styles.note}>
+                Any OpenAI- or Anthropic-compatible endpoint: set the base URL, key, wires, and
+                per-model prices yourself.
+              </span>
+            </button>
+          </div>
+        </>
       )}
     </Page>
   );
@@ -75,5 +123,41 @@ function ProviderCard({ provider }: { provider: Provider }) {
         ) : null}
       </div>
     </Link>
+  );
+}
+
+interface VendorTileProps {
+  vendor: CatalogVendor;
+  added: boolean;
+  onOpen: () => void;
+}
+
+function VendorTile({ vendor, added, onOpen }: VendorTileProps) {
+  const caps = capabilityWires(vendor);
+  return (
+    <button className={`card ${styles.entry} ${styles.vendorTile}`} onClick={onOpen}>
+      <div className={styles.entryHead}>
+        <span className={styles.vendorTitle}>
+          <BrandIcon
+            brand={providerBrand(vendor.name, Object.keys(vendor.models))}
+            label={vendor.name}
+            size={20}
+          />
+          <span className={styles.serviceName}>{vendor.name}</span>
+        </span>
+        {added && (
+          <span className={styles.addedChip}>
+            <Check size={12} /> Added
+          </span>
+        )}
+      </div>
+      <div className={styles.tags}>
+        {caps.map((w) => (
+          <span key={w} className="chip">
+            {wireName(w)}
+          </span>
+        ))}
+      </div>
+    </button>
   );
 }

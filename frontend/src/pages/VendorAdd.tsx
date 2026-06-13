@@ -92,7 +92,7 @@ export function VendorAddPage() {
   }
   if (!vendor) {
     return (
-      <Page title="Add provider" actions={<Link to="/providers/add" className="btn"><ArrowLeft size={15} /> Back</Link>}>
+      <Page title="Add provider" actions={<Link to="/providers" className="btn"><ArrowLeft size={15} /> Back</Link>}>
         <EmptyState icon={Layers} title="Vendor not found" hint="It may have been removed from the catalog." />
       </Page>
     );
@@ -137,8 +137,8 @@ export function VendorAddPage() {
     <Page
       title={`Add ${vendor.name}`}
       actions={
-        <Link to="/providers/add" className="btn">
-          <ArrowLeft size={15} /> Back to vendors
+        <Link to="/providers" className="btn">
+          <ArrowLeft size={15} /> Back to providers
         </Link>
       }
     >
@@ -231,7 +231,7 @@ export function VendorAddPage() {
         {err && <div className={styles.error}>{err}</div>}
 
         <div className={styles.footerRow}>
-          <button type="button" className="btn" onClick={() => navigate('/providers/add')} disabled={busy}>
+          <button type="button" className="btn" onClick={() => navigate('/providers')} disabled={busy}>
             Cancel
           </button>
           <button type="submit" className="btn btn-primary" disabled={busy}>

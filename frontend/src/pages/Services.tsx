@@ -31,7 +31,7 @@ export function ServicesPage() {
           title="No services yet"
           hint={
             <>
-              <Link to="/providers/add">Add a provider</Link> to start routing models.
+              <Link to="/providers">Add a provider</Link> to start routing models.
             </>
           }
         />
