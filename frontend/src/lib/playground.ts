@@ -12,7 +12,7 @@ import { wireKind, wireName } from './wires';
 // --- Per-wire test profiles ------------------------------------------------
 
 /** Which interactive panel a wire's test renders. */
-export type TestKind = 'chat' | 'embedding' | 'asr' | 'unsupported';
+export type TestKind = 'chat' | 'embedding' | 'asr' | 'tts' | 'unsupported';
 
 export interface WireTest {
   /** Wire id, e.g. "openai/chat". */
@@ -33,7 +33,10 @@ const TEST_KIND: Record<string, TestKind> = {
   'openai/responses': 'chat',
   'anthropic/messages': 'chat',
   'openai/embeddings': 'embedding',
-  'volc/asr': 'asr',
+  'volc/asr-file': 'asr',
+  // Only the HTTP unidirectional TTS is fetch-drivable; the WebSocket stream and
+  // bidirectional variants stay on the curl fallback.
+  'volc/tts-unidirectional': 'tts',
 };
 
 // The endpoint label per wire. <provider> is a placeholder the media panels
@@ -44,8 +47,12 @@ const TEST_ENDPOINT: Record<string, string> = {
   'openai/responses': 'POST /v1/responses',
   'anthropic/messages': 'POST /v1/messages',
   'openai/embeddings': 'POST /v1/embeddings',
-  'volc/asr': 'POST /api/v3/auc/bigmodel/submit',
-  'volc/tts': 'POST /api/v3/tts/unidirectional',
+  'volc/asr-file': 'POST /api/v3/auc/bigmodel/submit',
+  'volc/asr-stream-async': 'WS /api/v3/sauc/bigmodel_async',
+  'volc/asr-stream-nostream': 'WS /api/v3/sauc/bigmodel_nostream',
+  'volc/tts-unidirectional': 'POST /api/v3/tts/unidirectional',
+  'volc/tts-unidirectional-stream': 'WS /api/v3/tts/unidirectional-stream',
+  'volc/tts-bidirectional': 'WS /api/v3/tts/bidirection',
 };
 
 /**
@@ -66,7 +73,7 @@ export function wireTests(wires: string[]): WireTest[] {
     });
   }
   // Stable, useful order: real interactive panels first, fallbacks last.
-  const rank: Record<TestKind, number> = { chat: 0, embedding: 1, asr: 2, unsupported: 3 };
+  const rank: Record<TestKind, number> = { chat: 0, embedding: 1, asr: 2, tts: 3, unsupported: 4 };
   return tests.sort((a, b) => rank[a.kind] - rank[b.kind]);
 }
 
@@ -351,6 +358,185 @@ export async function runAsr(p: AsrParams): Promise<AsrResult> {
     errorMessage: 'Timed out waiting for transcription (60s).',
     raw: '',
   };
+}
+
+// --- TTS transport (Volcengine HTTP unidirectional synthesis) --------------
+
+export interface TtsParams {
+  /** Consumer user key (gateway auth). */
+  key: string;
+  /** Provider id, pinned via X-Songguo-Provider (model-less, so no model to route on). */
+  providerId: string;
+  /** Model/billing class header, e.g. "seed-tts-2.0". */
+  resourceId: string;
+  /** Text to synthesize. */
+  text: string;
+  /** Voice id (speaker), e.g. "zh_female_vv_jupiter_bigtts". */
+  voice: string;
+  /** Audio container: "mp3" | "wav" | "ogg_opus". */
+  format: string;
+}
+
+export interface TtsResult {
+  ok: boolean;
+  /** HTTP status from the gateway; 0 for a network failure. */
+  status: number;
+  latencyMs: number;
+  /** Object URL for the synthesized audio (set on success). */
+  audioUrl?: string;
+  /** Audio MIME type, e.g. "audio/mpeg". */
+  mime?: string;
+  /** File extension for a download, e.g. "mp3". */
+  ext?: string;
+  /** Total decoded audio size in bytes. */
+  bytes?: number;
+  /** Characters billed (usage.text_words), when reported. */
+  chars?: number;
+  errorMessage?: string;
+  /** Pretty-printed response (base64 audio elided to stay readable). */
+  raw: string;
+}
+
+const TTS_MIME: Record<string, string> = {
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg_opus: 'audio/ogg',
+};
+
+/**
+ * Synthesize speech via the Volcengine HTTP unidirectional TTS endpoint. The
+ * call pins a provider (X-Songguo-Provider — the wire is model-less) and asks
+ * for usage so the gateway meters by character. The response is newline-
+ * delimited JSON: each line carries a base64 audio chunk in "data", and a
+ * trailing line reports usage.text_words. The chunks are concatenated into one
+ * audio blob the panel can play back.
+ */
+export async function runTts(p: TtsParams): Promise<TtsResult> {
+  const start = performance.now();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${p.key}`,
+    'X-Songguo-Provider': p.providerId,
+    'X-Api-Resource-Id': p.resourceId,
+    'X-Api-Request-Id': uuid(),
+    // Tell Volcengine to report usage so the call meters by character.
+    'X-Control-Require-Usage-Tokens-Return': 'true',
+  };
+
+  let res: Response;
+  try {
+    res = await fetch('/api/v3/tts/unidirectional', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        user: { uid: 'songguo-playground' },
+        req_params: {
+          text: p.text,
+          speaker: p.voice,
+          audio_params: { format: p.format, sample_rate: 24000 },
+        },
+      }),
+    });
+  } catch (e) {
+    return {
+      ok: false,
+      status: 0,
+      latencyMs: elapsed(start),
+      errorMessage: e instanceof Error ? e.message : 'Network error',
+      raw: '',
+    };
+  }
+
+  const bodyText = await res.text();
+  const latencyMs = elapsed(start);
+
+  if (!res.ok) {
+    const json = tryParse(bodyText);
+    return {
+      ok: false,
+      status: res.status,
+      latencyMs,
+      errorMessage: errorMessageOf(json) ?? `Request failed (${res.status})`,
+      raw: pretty(json, bodyText),
+    };
+  }
+
+  // Success: parse the NDJSON stream, gathering audio chunks and usage.
+  const chunks: Uint8Array[] = [];
+  let chars: number | undefined;
+  let apiError: string | undefined;
+  const rawLines: unknown[] = [];
+
+  for (const line of bodyText.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed === '') continue;
+    const obj = tryParse(trimmed);
+    if (obj === null || typeof obj !== 'object') {
+      rawLines.push(trimmed);
+      continue;
+    }
+    const o = obj as { code?: unknown; message?: unknown; data?: unknown; usage?: unknown };
+
+    if (typeof o.data === 'string' && o.data !== '') {
+      try {
+        chunks.push(base64ToBytes(o.data));
+      } catch {
+        /* a malformed chunk is skipped; the raw view still shows the line */
+      }
+    }
+    if (o.usage && typeof o.usage === 'object') {
+      const w = (o.usage as Record<string, unknown>).text_words;
+      if (typeof w === 'number') chars = w;
+    }
+    // An upstream mid-stream error rides a non-zero code on a line.
+    if (typeof o.code === 'number' && o.code !== 0 && apiError === undefined) {
+      apiError =
+        typeof o.message === 'string' && o.message !== ''
+          ? o.message
+          : `Upstream error (code ${o.code})`;
+    }
+    rawLines.push(elideAudio(o));
+  }
+
+  const raw = JSON.stringify(rawLines, null, 2);
+
+  if (chunks.length === 0) {
+    return {
+      ok: false,
+      status: res.status,
+      latencyMs,
+      errorMessage: apiError ?? 'No audio returned.',
+      raw,
+    };
+  }
+
+  const bytes = chunks.reduce((n, c) => n + c.length, 0);
+  const merged = new Uint8Array(bytes);
+  let offset = 0;
+  for (const c of chunks) {
+    merged.set(c, offset);
+    offset += c.length;
+  }
+  const mime = TTS_MIME[p.format] ?? 'audio/mpeg';
+  const audioUrl = URL.createObjectURL(new Blob([merged], { type: mime }));
+
+  return { ok: true, status: res.status, latencyMs, audioUrl, mime, ext: p.format, bytes, chars, raw };
+}
+
+/** Decode a standard base64 string to bytes. */
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/** Replace a long base64 "data" field with a short placeholder for the raw view. */
+function elideAudio(o: { data?: unknown }): unknown {
+  if (typeof o.data === 'string' && o.data.length > 24) {
+    return { ...o, data: `…${o.data.length} base64 chars` };
+  }
+  return o;
 }
 
 // --- shared helpers --------------------------------------------------------

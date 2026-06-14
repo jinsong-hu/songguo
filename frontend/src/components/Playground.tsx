@@ -1,14 +1,16 @@
-import { useMemo, useState } from 'react';
-import { Send } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Download, Send } from 'lucide-react';
 import type { Provider } from '../api/types';
 import { getAdminKey } from '../api/client';
 import {
   buildTestRequest,
   runAsr,
   runTest,
+  runTts,
   wireTests,
   type AsrResult,
   type TestResult,
+  type TtsResult,
   type WireTest,
 } from '../lib/playground';
 import { int, ms } from '../lib/format';
@@ -143,7 +145,7 @@ export function Playground({ model, wires, providers }: PlaygroundProps) {
 /**
  * Dispatch to the panel for the active wire's kind. provider is the pinned
  * provider, or undefined under Auto routing (the gateway picks). Passthrough
- * wires (ASR) need a concrete provider, so under Auto they fall back to the
+ * wires (ASR, TTS) need a concrete provider, so under Auto they fall back to the
  * first servable provider that exposes the wire.
  */
 function Panel({
@@ -167,8 +169,14 @@ function Panel({
       const p = provider ?? providers.find((pp) => pp.endpoints.some((e) => e.wire === test.wire));
       return <AsrPanel apiKey={apiKey} providerId={p?.id ?? ''} />;
     }
+    case 'tts': {
+      const p = provider ?? providers.find((pp) => pp.endpoints.some((e) => e.wire === test.wire));
+      return <TtsPanel apiKey={apiKey} providerId={p?.id ?? ''} model={model} />;
+    }
     default:
-      return <UnsupportedPanel test={test} model={model} />;
+      return (
+        <UnsupportedPanel test={test} model={model} apiKey={apiKey} providerId={provider?.id} />
+      );
   }
 }
 
@@ -403,6 +411,152 @@ function Utterances({ utterances }: { utterances: AsrResult['utterances'] }) {
   );
 }
 
+// --- TTS panel (Volcengine HTTP unidirectional synthesis) ------------------
+
+const TTS_FORMATS = ['mp3', 'wav', 'ogg_opus'];
+
+function TtsPanel({
+  apiKey,
+  providerId,
+  model,
+}: {
+  apiKey: string;
+  providerId: string;
+  /** Default X-Api-Resource-Id — the catalog selects the model by its id. */
+  model: string;
+}) {
+  const [text, setText] = useState('你好，欢迎使用松果语音合成。');
+  const [voice, setVoice] = useState('zh_female_vv_jupiter_bigtts');
+  const [format, setFormat] = useState('mp3');
+  const [resourceId, setResourceId] = useState(model);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<TtsResult | null>(null);
+  const [showRaw, setShowRaw] = useState(false);
+
+  // Free the previous clip's object URL when a new result replaces it (or on unmount).
+  useEffect(() => {
+    return () => {
+      if (result?.audioUrl) URL.revokeObjectURL(result.audioUrl);
+    };
+  }, [result]);
+
+  const canSend =
+    apiKey.trim() !== '' && text.trim() !== '' && voice.trim() !== '' && !running;
+
+  const send = async () => {
+    if (!canSend) return;
+    setRunning(true);
+    setShowRaw(false);
+    const res = await runTts({
+      key: apiKey.trim(),
+      providerId,
+      resourceId: resourceId.trim() || model,
+      text: text.trim(),
+      voice: voice.trim(),
+      format,
+    });
+    setResult(res);
+    setRunning(false);
+  };
+
+  return (
+    <>
+      <p className={styles.hint}>
+        Synthesize speech with Volcengine 大模型语音合成. The clip plays back below — the voice id
+        must be one enabled on the routed account.
+      </p>
+
+      <div className={styles.fieldGrid}>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Voice</span>
+          <input
+            className="input mono"
+            value={voice}
+            onChange={(e) => setVoice(e.target.value)}
+            placeholder="zh_female_vv_jupiter_bigtts"
+          />
+        </label>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Format</span>
+          <select className="select" value={format} onChange={(e) => setFormat(e.target.value)}>
+            {TTS_FORMATS.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Resource id</span>
+          <input
+            className="input mono"
+            value={resourceId}
+            onChange={(e) => setResourceId(e.target.value)}
+            placeholder={model}
+          />
+        </label>
+      </div>
+
+      <textarea
+        className={styles.prompt}
+        rows={3}
+        placeholder="Text to speak"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            send();
+          }
+        }}
+      />
+
+      <div className={styles.actions}>
+        <button type="button" className="btn btn-primary" onClick={send} disabled={!canSend}>
+          {running ? <span className="spinner" /> : <Send size={14} />}
+          {running ? 'Synthesizing…' : 'Synthesize'}
+        </button>
+        {result && !running && <TtsMeta result={result} />}
+      </div>
+
+      {result && !running && (
+        <div className={styles.result}>
+          {result.ok ? (
+            <>
+              {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+              <audio className={styles.audio} src={result.audioUrl} controls autoPlay />
+              <a className={styles.download} href={result.audioUrl} download={`speech.${result.ext}`}>
+                <Download size={13} /> Download
+              </a>
+            </>
+          ) : (
+            <pre className={`${styles.resultText} ${styles.resultError}`}>{result.errorMessage}</pre>
+          )}
+          <RawToggle raw={result.raw} show={showRaw} onToggle={() => setShowRaw((v) => !v)} />
+        </div>
+      )}
+    </>
+  );
+}
+
+function TtsMeta({ result }: { result: TtsResult }) {
+  return (
+    <span className={styles.meta}>
+      <span className={`pill ${result.ok ? 'pill-ok' : 'pill-err'}`}>
+        <span className="dot" />
+        {result.status || 'network error'}
+      </span>
+      <span className={styles.metaItem}>{ms(result.latencyMs)}</span>
+      {result.chars !== undefined && (
+        <span className={styles.metaItem}>{int(result.chars)} chars</span>
+      )}
+      {result.bytes !== undefined && (
+        <span className={styles.metaItem}>{(result.bytes / 1024).toFixed(1)} KB</span>
+      )}
+    </span>
+  );
+}
+
 // --- Fallback panel for wires without an interactive test ------------------
 
 function UnsupportedPanel({ test, model }: { test: WireTest; model: string }) {
@@ -427,7 +581,7 @@ function UnsupportedPanel({ test, model }: { test: WireTest; model: string }) {
 
 function curlFor(wire: string, model: string): string {
   const origin = window.location.origin;
-  if (wire === 'volc/tts') {
+  if (wire === 'volc/tts-unidirectional') {
     return `curl ${origin}/api/v3/tts/unidirectional \\
   -H "Authorization: Bearer $SONGGUO_TOKEN" \\
   -H "X-Songguo-Provider: <provider-id>" \\

@@ -3,14 +3,22 @@ package wire
 import "testing"
 
 func TestVolcTTSResolve(t *testing.T) {
-	w, ok := Resolve([]string{"volc/tts"}, "POST", "/api/v3/tts/unidirectional")
-	if !ok || w.Name != "volc/tts" {
-		t.Fatalf("Resolve = %q, %v; want volc/tts, true", w.Name, ok)
+	enabled := []string{"volc/tts-unidirectional", "volc/tts-unidirectional-stream", "volc/tts-bidirectional"}
+	cases := map[string]string{
+		"/api/v3/tts/unidirectional":        "volc/tts-unidirectional",
+		"/api/v3/tts/unidirectional-stream": "volc/tts-unidirectional-stream",
+		"/api/v3/tts/bidirection":           "volc/tts-bidirectional",
+	}
+	for path, want := range cases {
+		w, ok := Resolve(enabled, "POST", path)
+		if !ok || w.Name != want {
+			t.Fatalf("Resolve(%q) = %q, %v; want %q, true", path, w.Name, ok, want)
+		}
 	}
 }
 
 func TestVolcVoiceCloneResolve(t *testing.T) {
-	enabled := []string{"volc/tts", "volc/voice-clone"}
+	enabled := []string{"volc/tts-unidirectional", "volc/voice-clone"}
 	for _, path := range []string{"/api/v3/tts/voice_clone", "/api/v3/tts/get_voice"} {
 		w, ok := Resolve(enabled, "POST", path)
 		if !ok || w.Name != "volc/voice-clone" {
@@ -54,14 +62,17 @@ func TestVolcTTSScanner(t *testing.T) {
 }
 
 func TestVolcASRResolve(t *testing.T) {
-	enabled := []string{"volc/asr"}
-	for _, path := range []string{
-		"/api/v3/auc/bigmodel/submit",
-		"/api/v3/auc/bigmodel/query",
-	} {
+	enabled := []string{"volc/asr-file", "volc/asr-stream-async", "volc/asr-stream-nostream"}
+	cases := map[string]string{
+		"/api/v3/auc/bigmodel/submit":    "volc/asr-file",
+		"/api/v3/auc/bigmodel/query":     "volc/asr-file",
+		"/api/v3/sauc/bigmodel_async":    "volc/asr-stream-async",
+		"/api/v3/sauc/bigmodel_nostream": "volc/asr-stream-nostream",
+	}
+	for path, want := range cases {
 		w, ok := Resolve(enabled, "POST", path)
-		if !ok || w.Name != "volc/asr" {
-			t.Fatalf("Resolve(%q) = %q, %v; want volc/asr, true", path, w.Name, ok)
+		if !ok || w.Name != want {
+			t.Fatalf("Resolve(%q) = %q, %v; want %q, true", path, w.Name, ok, want)
 		}
 		if w.Modality != "stt" {
 			t.Errorf("Resolve(%q) modality = %q, want stt", path, w.Modality)

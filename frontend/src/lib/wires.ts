@@ -13,8 +13,12 @@ const WIRE_NAMES: Record<string, string> = {
   'anthropic/messages': 'Messages',
   'anthropic/models': 'Models',
   'ark/video': 'Video generation',
-  'volc/tts': 'TTS',
-  'volc/asr': 'ASR',
+  'volc/tts-unidirectional': 'TTS (unidirectional)',
+  'volc/tts-unidirectional-stream': 'TTS (unidirectional stream)',
+  'volc/tts-bidirectional': 'TTS (bidirectional)',
+  'volc/asr-file': 'ASR (file)',
+  'volc/asr-stream-async': 'ASR (streaming)',
+  'volc/asr-stream-nostream': 'ASR (streaming, final-only)',
   'volc/voice-clone': 'Voice cloning',
 };
 
@@ -51,8 +55,12 @@ const WIRE_KIND: Record<string, string> = {
   'anthropic/messages': 'chat',
   'anthropic/models': '',
   'ark/video': 'video',
-  'volc/tts': 'tts',
-  'volc/asr': 'stt',
+  'volc/tts-unidirectional': 'tts',
+  'volc/tts-unidirectional-stream': 'tts',
+  'volc/tts-bidirectional': 'tts',
+  'volc/asr-file': 'stt',
+  'volc/asr-stream-async': 'stt',
+  'volc/asr-stream-nostream': 'stt',
   'volc/voice-clone': 'tts',
 };
 
