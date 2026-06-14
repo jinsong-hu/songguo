@@ -136,6 +136,15 @@ func (s *Store) migrate() error {
 			resp_truncated   INTEGER NOT NULL DEFAULT 0,
 			created_at       INTEGER NOT NULL
 		)`,
+		// parsed_calls holds the structured, protocol-neutral view produced by
+		// the async parse pipeline (internal/parse), 1:1 with calls.id. `data`
+		// is the JSON-encoded parse.Call; `format` names the parser used.
+		`CREATE TABLE IF NOT EXISTS parsed_calls (
+			call_id    INTEGER PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE,
+			format     TEXT NOT NULL DEFAULT '',
+			data       TEXT NOT NULL DEFAULT '{}',
+			created_at INTEGER NOT NULL
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_ts ON calls(ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_user_id ON calls(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_model ON calls(model)`,

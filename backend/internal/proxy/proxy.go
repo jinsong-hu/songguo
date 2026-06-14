@@ -44,6 +44,7 @@ import (
 	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/meter"
+	"github.com/songguo/songguo/internal/parse"
 	"github.com/songguo/songguo/internal/pricing"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/store"
@@ -89,6 +90,7 @@ type handler struct {
 	now          func() time.Time
 	maxBodyBytes int64
 	limiter      *rateLimiter
+	parse        *parsePipeline
 }
 
 // NewHandler builds the transparent proxy handler.
@@ -118,6 +120,7 @@ func NewHandler(d Deps) http.Handler {
 		now:          now,
 		maxBodyBytes: max,
 		limiter:      newRateLimiter(now),
+		parse:        newParsePipeline(d.Store, logger, 0, 0),
 	}
 }
 
@@ -644,6 +647,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	var (
 		ext           wire.Extraction
 		respBody      []byte
+		parseRespBody []byte // fullest response bytes available, for async parse
 		respTruncated bool
 	)
 	if stream {
@@ -652,6 +656,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 			scanner = rw.wire.NewScanner(rw.quirks)
 		}
 		respBody, respTruncated = h.streamBody(r.Context(), w, resp.Body, capCfg, scanner)
+		parseRespBody = respBody
 		if scanner != nil {
 			ext = scanner.Result()
 		} else {
@@ -660,6 +665,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	} else {
 		var full []byte
 		full, respBody, respTruncated = h.copyBody(w, resp.Body, capCfg)
+		parseRespBody = full
 		if rw.matched {
 			ext = rw.wire.Extract(full, rw.quirks)
 		} else {
@@ -705,6 +711,22 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 
 	if capCfg.on {
 		h.savePayload(id, r, reqBody, resp, respBody, respTruncated, capCfg)
+		// Hand the captured bytes to the async parse pipeline. This is the
+		// "full parse" — off the hot path; the call is already metered above.
+		h.parse.submit(parseJob{
+			callID: id,
+			at:     h.now(),
+			in: parse.Input{
+				Wire:            wireName,
+				Adapter:         t.Vendor.Adapter,
+				Modality:        string(modality),
+				Stream:          stream,
+				ReqContentType:  r.Header.Get("Content-Type"),
+				RespContentType: resp.Header.Get("Content-Type"),
+				ReqBody:         reqBody,
+				RespBody:        parseRespBody,
+			},
+		})
 	}
 }
 

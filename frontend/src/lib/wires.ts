@@ -16,7 +16,6 @@ const WIRE_NAMES: Record<string, string> = {
   'volc/tts': 'TTS',
   'volc/asr': 'ASR',
   'volc/voice-clone': 'Voice cloning',
-  'volc/asr': 'ASR (file)',
 };
 
 // The vendor that owns each wire family. The owner shows the bare wire name
@@ -55,7 +54,6 @@ const WIRE_KIND: Record<string, string> = {
   'volc/tts': 'tts',
   'volc/asr': 'stt',
   'volc/voice-clone': 'tts',
-  'volc/asr': 'stt',
 };
 
 export function wireKind(wire: string): string {
