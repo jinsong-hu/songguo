@@ -152,8 +152,8 @@ const TAGLINES: Array<[RegExp, string]> = [
   [/^claude.*opus/, 'Anthropic’s most capable model, built for the hardest problems.'],
   [/^claude.*sonnet/, 'The best balance of intelligence, speed, and cost.'],
   [/^claude.*haiku/, 'Near-instant responses with real intelligence.'],
-  [/^gpt-4o-mini/, 'Fast, affordable intelligence for everyday tasks.'],
-  [/^gpt-4o/, 'Flagship multimodal intelligence — text and vision in one model.'],
+  [/^gpt-5.*(mini|nano)/, 'Fast, affordable intelligence for everyday tasks.'],
+  [/^gpt-5/, 'Flagship multimodal intelligence — text and vision in one model.'],
   [/reasoner|thinking|^o[1345](-|$)/, 'Thinks before it answers — deep reasoning for hard problems.'],
   [/coder|coding|codex|codestral|devstral|code(-|$)/, 'Tuned for writing, reviewing, and refactoring code.'],
   // Tier keywords are anchored to token boundaries so brand names don't

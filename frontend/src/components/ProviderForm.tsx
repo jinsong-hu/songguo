@@ -426,7 +426,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
                 <input
                   className="input mono"
                   value={row.model}
-                  placeholder="gpt-4o"
+                  placeholder="gpt-5.4"
                   onChange={(e) => setModel(i, { model: e.target.value })}
                 />
                 <input

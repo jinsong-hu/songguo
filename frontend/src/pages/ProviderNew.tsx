@@ -20,13 +20,13 @@ const KIND_META: Record<
     title: 'OpenAI',
     wire: 'openai/chat',
     urlPlaceholder: 'https://api.openai.com/v1',
-    modelPlaceholder: 'gpt-4o',
+    modelPlaceholder: 'gpt-5.4',
   },
   anthropic: {
     title: 'Anthropic',
     wire: 'anthropic/messages',
     urlPlaceholder: 'https://api.anthropic.com/v1',
-    modelPlaceholder: 'claude-sonnet-4-20250514',
+    modelPlaceholder: 'claude-sonnet-4-6',
   },
   any: {
     title: 'Any',

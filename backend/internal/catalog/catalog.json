@@ -5,15 +5,17 @@
       "name": "OpenAI",
       "homepage": "https://openai.com",
       "models": {
-        "gpt-4o": { "input": 2.5, "output": 10.0, "cached_input": 1.25, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text", "image"] },
-        "gpt-4o-mini": { "input": 0.15, "output": 0.6, "cached_input": 0.075, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text", "image"] },
-        "o3-mini": { "input": 1.1, "output": 4.4, "cached_input": 0.55, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
+        "gpt-5.5": { "input": 5.0, "output": 30.0, "cached_input": 0.5, "unit": "per_1m_tokens", "context": 1050000, "modalities": ["text", "image"] },
+        "gpt-5.4": { "input": 2.5, "output": 15.0, "cached_input": 0.25, "unit": "per_1m_tokens", "context": 400000, "modalities": ["text", "image"] },
+        "gpt-5.4-mini": { "input": 0.75, "output": 4.5, "cached_input": 0.075, "unit": "per_1m_tokens", "context": 400000, "modalities": ["text", "image"] },
+        "gpt-5.4-nano": { "input": 0.2, "output": 1.25, "cached_input": 0.02, "unit": "per_1m_tokens", "context": 400000, "modalities": ["text"] },
+        "gpt-5-mini": { "input": 0.25, "output": 2.0, "cached_input": 0.025, "unit": "per_1m_tokens", "context": 400000, "modalities": ["text", "image"] },
         "text-embedding-3-small": { "input": 0.02, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] },
         "text-embedding-3-large": { "input": 0.13, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] }
       },
       "endpoints": [
-        { "wire": "openai/chat", "endpoint": "https://api.openai.com/v1/chat/completions", "adapter": "openai-compatible", "docs": "https://platform.openai.com/docs/api-reference/chat", "models": ["gpt-4o", "gpt-4o-mini", "o3-mini"] },
-        { "wire": "openai/responses", "endpoint": "https://api.openai.com/v1/responses", "adapter": "openai-compatible", "docs": "https://platform.openai.com/docs/api-reference/responses", "note": "OpenAI's newer stateful API for agents — the successor to Chat Completions, with built-in tools (web search, file search, computer use).", "models": ["gpt-4o", "gpt-4o-mini", "o3-mini"] },
+        { "wire": "openai/chat", "endpoint": "https://api.openai.com/v1/chat/completions", "adapter": "openai-compatible", "docs": "https://platform.openai.com/docs/api-reference/chat", "models": ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5-mini"] },
+        { "wire": "openai/responses", "endpoint": "https://api.openai.com/v1/responses", "adapter": "openai-compatible", "docs": "https://platform.openai.com/docs/api-reference/responses", "note": "OpenAI's newer stateful API for agents — the successor to Chat Completions, with built-in tools (web search, file search, computer use).", "models": ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5-mini"] },
         { "wire": "openai/embeddings", "endpoint": "https://api.openai.com/v1/embeddings", "adapter": "openai-compatible", "docs": "https://platform.openai.com/docs/api-reference/embeddings", "models": ["text-embedding-3-small", "text-embedding-3-large"] },
         { "wire": "openai/completions", "endpoint": "https://api.openai.com/v1/completions", "adapter": "openai-compatible" },
         { "wire": "openai/models", "endpoint": "https://api.openai.com/v1", "adapter": "openai-compatible" }
@@ -24,12 +26,13 @@
       "name": "Anthropic",
       "homepage": "https://anthropic.com",
       "models": {
-        "claude-opus-4-20250514": { "input": 15.0, "output": 75.0, "cached_input": 1.5, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text", "image"] },
-        "claude-sonnet-4-20250514": { "input": 3.0, "output": 15.0, "cached_input": 0.3, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text", "image"] },
-        "claude-3-5-haiku-20241022": { "input": 0.8, "output": 4.0, "cached_input": 0.08, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] }
+        "claude-fable-5": { "input": 10.0, "output": 50.0, "cached_input": 1.0, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text", "image"] },
+        "claude-opus-4-8": { "input": 5.0, "output": 25.0, "cached_input": 0.5, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text", "image"] },
+        "claude-sonnet-4-6": { "input": 3.0, "output": 15.0, "cached_input": 0.3, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text", "image"] },
+        "claude-haiku-4-5": { "input": 1.0, "output": 5.0, "cached_input": 0.1, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text", "image"] }
       },
       "endpoints": [
-        { "wire": "anthropic/messages", "endpoint": "https://api.anthropic.com/v1/messages", "adapter": "anthropic-compatible", "docs": "https://docs.anthropic.com/en/api/messages", "note": "Authenticates with x-api-key + anthropic-version. Point the Anthropic SDK's base_url at http://<songguo>; it appends /v1/messages.", "models": ["claude-opus-4-20250514", "claude-sonnet-4-20250514", "claude-3-5-haiku-20241022"] },
+        { "wire": "anthropic/messages", "endpoint": "https://api.anthropic.com/v1/messages", "adapter": "anthropic-compatible", "docs": "https://docs.anthropic.com/en/api/messages", "note": "Authenticates with x-api-key + anthropic-version. Point the Anthropic SDK's base_url at http://<songguo>; it appends /v1/messages.", "models": ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"] },
         { "wire": "anthropic/models", "endpoint": "https://api.anthropic.com/v1", "adapter": "anthropic-compatible" }
       ]
     },
@@ -195,11 +198,26 @@
       "name": "Azure OpenAI",
       "homepage": "https://azure.microsoft.com/products/ai-services/openai-service",
       "models": {
-        "gpt-4o": { "input": 2.5, "output": 10.0, "cached_input": 1.25, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text", "image"] },
-        "gpt-4o-mini": { "input": 0.15, "output": 0.6, "cached_input": 0.075, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text", "image"] }
+        "gpt-5.4": { "input": 2.5, "output": 15.0, "cached_input": 0.25, "unit": "per_1m_tokens", "context": 400000, "modalities": ["text", "image"] },
+        "gpt-5.4-mini": { "input": 0.75, "output": 4.5, "cached_input": 0.075, "unit": "per_1m_tokens", "context": 400000, "modalities": ["text", "image"] }
       },
       "endpoints": [
-        { "wire": "openai/chat", "endpoint": "https://your-resource.openai.azure.com/openai/deployments/{model}/chat/completions?api-version=2024-10-21", "adapter": "openai-compatible", "docs": "https://learn.microsoft.com/azure/ai-services/openai/reference", "note": "Demonstrates full-endpoint templating: {model} is replaced with the request's model (name your Azure deployment to match the model id) and the ?api-version query is merged into every call. Replace your-resource with your Azure resource name. Note: Azure's api-key header auth differs from the openai-compatible Bearer scheme.", "models": ["gpt-4o", "gpt-4o-mini"] }
+        { "wire": "openai/chat", "endpoint": "https://your-resource.openai.azure.com/openai/deployments/{model}/chat/completions?api-version=2025-04-01-preview", "adapter": "openai-compatible", "docs": "https://learn.microsoft.com/azure/ai-services/openai/reference", "note": "Demonstrates full-endpoint templating: {model} is replaced with the request's model (name your Azure deployment to match the model id) and the ?api-version query is merged into every call. Replace your-resource with your Azure resource name. Note: Azure's api-key header auth differs from the openai-compatible Bearer scheme.", "models": ["gpt-5.4", "gpt-5.4-mini"] }
+      ]
+    },
+    {
+      "id": "custom",
+      "name": "Custom",
+      "custom": true,
+      "models": {},
+      "endpoints": [
+        { "wire": "openai/chat", "endpoint": "{base}/chat/completions", "adapter": "openai-compatible" },
+        { "wire": "openai/responses", "endpoint": "{base}/responses", "adapter": "openai-compatible" },
+        { "wire": "openai/embeddings", "endpoint": "{base}/embeddings", "adapter": "openai-compatible" },
+        { "wire": "openai/images", "endpoint": "{base}/images/generations", "adapter": "openai-compatible" },
+        { "wire": "openai/models", "endpoint": "{base}", "adapter": "openai-compatible" },
+        { "wire": "anthropic/messages", "endpoint": "{base}/messages", "adapter": "anthropic-compatible" },
+        { "wire": "anthropic/models", "endpoint": "{base}", "adapter": "anthropic-compatible" }
       ]
     }
   ]

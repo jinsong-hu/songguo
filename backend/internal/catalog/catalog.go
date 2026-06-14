@@ -24,17 +24,22 @@ type Catalog struct {
 // keyed by model id) and the endpoints it exposes. Quirks parameterize usage
 // extraction (see internal/wire) and apply to the whole vendor.
 type Vendor struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	Homepage  string            `json:"homepage,omitempty"`
-	Quirks    map[string]string `json:"quirks,omitempty"`
-	Models    map[string]Model  `json:"models"`
-	Endpoints []Endpoint        `json:"endpoints"`
+	ID       string            `json:"id"`
+	Name     string            `json:"name"`
+	Homepage string            `json:"homepage,omitempty"`
+	Quirks   map[string]string `json:"quirks,omitempty"`
+	// Custom marks a template vendor with no preset models or pinned upstream:
+	// the user supplies the base URL (substituted into the {base} placeholder in
+	// each endpoint) and types their own model ids. Used for the "Custom" tile.
+	Custom    bool             `json:"custom,omitempty"`
+	Models    map[string]Model `json:"models"`
+	Endpoints []Endpoint       `json:"endpoints"`
 }
 
 // Endpoint is one preset wire bound to its full upstream URL + adapter (auth
 // scheme), 1:1 with the wire. The URL is used as-is by the proxy and may carry a
-// {model} placeholder. Models lists the model ids (keys into Vendor.Models) this
+// {model} placeholder (or, on Custom vendors, a {base} placeholder the user
+// fills in). Models lists the model ids (keys into Vendor.Models) this
 // endpoint serves; companion wires like a model-listing endpoint carry none.
 type Endpoint struct {
 	Wire     string   `json:"wire"`

@@ -270,6 +270,8 @@ export interface CatalogVendor {
   name: string;
   homepage?: string;
   quirks?: Record<string, string>;
+  /** Template vendor: no preset models, user supplies base URL ({base} placeholder) and model ids. */
+  custom?: boolean;
   /** Price list keyed by model id, shared across this vendor's endpoints. */
   models: Record<string, CatalogModel>;
   endpoints: CatalogEndpoint[];
