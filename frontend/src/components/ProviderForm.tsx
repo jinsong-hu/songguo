@@ -236,7 +236,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
           placeholder="e.g. openai-main"
           onChange={(e) => setName(e.target.value)}
         />
-        <span className={styles.hint}>Unique handle; also addressable at /x/&lt;name&gt;/…</span>
+        <span className={styles.hint}>Unique display name, shown in stats and the call ledger</span>
       </div>
 
       <div className={styles.field}>

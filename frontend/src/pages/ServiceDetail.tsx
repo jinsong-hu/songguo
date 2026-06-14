@@ -206,17 +206,19 @@ function quickStartSnippet(origin: string, model: string, kind: string): string 
   }'`;
     case 'asr':
       return `# 1. Submit a recording (audio fetched by URL)
-curl ${origin}/x/<provider>/api/v3/auc/bigmodel/submit \\
+curl ${origin}/api/v3/auc/bigmodel/submit \\
   -H "Authorization: Bearer $SONGGUO_TOKEN" \\
+  -H "X-Songguo-Provider: <provider-id>" \\
   -H "X-Api-Resource-Id: volc.seedasr.auc" \\
   -H "X-Api-Request-Id: $REQUEST_ID" \\
   -H "Content-Type: application/json" \\
   -d '{ "user": {"uid":"me"}, "audio": {"url":"https://…/audio.wav","format":"wav"},
         "request": {"model_name":"bigmodel"} }'
 
-# 2. Poll for the transcript with the same X-Api-Request-Id
-curl ${origin}/x/<provider>/api/v3/auc/bigmodel/query \\
+# 2. Poll for the transcript with the same provider pin and X-Api-Request-Id
+curl ${origin}/api/v3/auc/bigmodel/query \\
   -H "Authorization: Bearer $SONGGUO_TOKEN" \\
+  -H "X-Songguo-Provider: <provider-id>" \\
   -H "X-Api-Resource-Id: volc.seedasr.auc" \\
   -H "X-Api-Request-Id: $REQUEST_ID" -d '{}'`;
     case 'chat':
@@ -228,9 +230,10 @@ curl ${origin}/x/<provider>/api/v3/auc/bigmodel/query \\
     "messages": [{ "role": "user", "content": "Hello!" }]
   }'`;
     default:
-      return `# ${model} is served over a passthrough wire — call the vendor path directly:
-curl ${origin}/x/<provider>/<vendor-path> \\
+      return `# ${model} is served over a model-less wire — call the native vendor path directly:
+curl ${origin}/<vendor-path> \\
   -H "Authorization: Bearer $SONGGUO_TOKEN" \\
+  -H "X-Songguo-Provider: <provider-id>" \\
   -H "Content-Type: application/json" \\
   -d '{ "model": "${model}" }'`;
   }

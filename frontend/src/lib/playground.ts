@@ -62,8 +62,8 @@ const TEST_ENDPOINT: Record<string, string> = {
   'openai/responses': 'POST /v1/responses',
   'anthropic/messages': 'POST /v1/messages',
   'openai/embeddings': 'POST /v1/embeddings',
-  'volc/asr': 'POST /x/<provider>/api/v3/auc/bigmodel/submit',
-  'volc/tts': 'POST /x/<provider>/api/v3/tts/unidirectional',
+  'volc/asr': 'POST /api/v3/auc/bigmodel/submit',
+  'volc/tts': 'POST /api/v3/tts/unidirectional',
 };
 
 /**
@@ -198,13 +198,13 @@ export async function runTest(
   return { ok: true, status: res.status, latencyMs, text, usage, raw };
 }
 
-// --- ASR transport (Volcengine bigmodel file recognition, /x passthrough) ---
+// --- ASR transport (Volcengine bigmodel file recognition) ------------------
 
 export interface AsrParams {
   /** Consumer user key (gateway auth). */
   key: string;
-  /** Provider handle for the /x/<provider>/ mount. */
-  providerName: string;
+  /** Provider id, pinned via X-Songguo-Provider (model-less, so no model to route on). */
+  providerId: string;
   /** Billing class header, e.g. "volc.seedasr.auc". */
   resourceId: string;
   /** Publicly fetchable audio URL (the bigmodel file API pulls by URL). */
@@ -239,16 +239,18 @@ export interface AsrResult {
 /**
  * Run a Volcengine bigmodel file-ASR test: submit the audio URL, then poll the
  * query endpoint (correlated by X-Api-Request-Id) until the transcript is
- * ready. Both calls go through /x/<provider>/ so the gateway swaps in the
- * upstream X-Api-Key and meters the audio duration.
+ * ready. Both calls hit the native /api/v3/... path and pin the same provider
+ * via X-Songguo-Provider, so the gateway swaps in the upstream X-Api-Key, keeps
+ * the submit→poll lifecycle on one provider, and meters the audio duration.
  */
 export async function runAsr(p: AsrParams): Promise<AsrResult> {
   const start = performance.now();
   const requestId = uuid();
-  const base = `/x/${encodeURIComponent(p.providerName)}/api/v3/auc/bigmodel`;
+  const base = `/api/v3/auc/bigmodel`;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${p.key}`,
+    'X-Songguo-Provider': p.providerId,
     'X-Api-Resource-Id': p.resourceId,
     'X-Api-Request-Id': requestId,
   };

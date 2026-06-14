@@ -189,7 +189,7 @@ function Panel({
       return <PromptPanel test={test} model={model} apiKey={apiKey} providerId={provider?.id} />;
     case 'asr': {
       const p = provider ?? providers.find((pp) => pp.endpoints.some((e) => e.wire === test.wire));
-      return <AsrPanel apiKey={apiKey} providerName={p?.name ?? ''} />;
+      return <AsrPanel apiKey={apiKey} providerId={p?.id ?? ''} />;
     }
     default:
       return <UnsupportedPanel test={test} model={model} />;
@@ -295,10 +295,10 @@ const ASR_FORMATS = ['wav', 'mp3', 'm4a', 'ogg', 'flac', 'pcm'];
 
 function AsrPanel({
   apiKey,
-  providerName,
+  providerId,
 }: {
   apiKey: string;
-  providerName: string;
+  providerId: string;
 }) {
   const [audioUrl, setAudioUrl] = useState('');
   const [format, setFormat] = useState('wav');
@@ -316,7 +316,7 @@ function AsrPanel({
     setTestKey(apiKey.trim());
     const res = await runAsr({
       key: apiKey.trim(),
-      providerName,
+      providerId,
       resourceId: resourceId.trim() || 'volc.seedasr.auc',
       audioUrl: audioUrl.trim(),
       format,
@@ -454,14 +454,16 @@ function UnsupportedPanel({ test, model }: { test: WireTest; model: string }) {
 function curlFor(wire: string, model: string): string {
   const origin = window.location.origin;
   if (wire === 'volc/tts') {
-    return `curl ${origin}/x/<provider>/api/v3/tts/unidirectional \\
+    return `curl ${origin}/api/v3/tts/unidirectional \\
   -H "Authorization: Bearer $SONGGUO_TOKEN" \\
+  -H "X-Songguo-Provider: <provider-id>" \\
   -H "X-Api-Resource-Id: volc.service_type.10029" \\
   -H "Content-Type: application/json" \\
   -d '{ "req_params": { "text": "你好，世界" } }'`;
   }
-  return `curl ${origin}/x/<provider>/<vendor-path> \\
+  return `curl ${origin}/<vendor-path> \\
   -H "Authorization: Bearer $SONGGUO_TOKEN" \\
+  -H "X-Songguo-Provider: <provider-id>" \\
   -H "Content-Type: application/json" \\
   -d '{ "model": "${model}", "…": "…" }'`;
 }

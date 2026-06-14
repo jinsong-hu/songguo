@@ -69,7 +69,55 @@ func (r *Router) Candidates(model string) ([]Target, error) {
 	if len(vendors) == 0 {
 		return nil, ErrNoVendor
 	}
+	return r.order(model, vendors), nil
+}
 
+// CandidatesForProvider returns the ordered attempts for every vendor derived
+// from the given provider id (its credential id), regardless of model. It backs
+// requests that pin a provider with X-Songguo-Provider but carry no model to
+// route on — model-less wires and WebSocket upgrades. The (origin, adapter)
+// split means one provider can yield several vendors; wire matching downstream
+// narrows them to the one serving the requested path. Returns ErrNoVendor if no
+// vendor carries that provider id.
+func (r *Router) CandidatesForProvider(providerID string) ([]Target, error) {
+	snap := r.snapshot()
+	if snap == nil {
+		return nil, ErrNoVendor
+	}
+	var vendors []config.Vendor
+	for _, v := range snap.Vendors() {
+		if v.Credential.ID == providerID {
+			vendors = append(vendors, v)
+		}
+	}
+	if len(vendors) == 0 {
+		return nil, ErrNoVendor
+	}
+	return r.order(providerID, vendors), nil
+}
+
+// AllCandidates returns the ordered attempts across every configured vendor. It
+// is the default selection for a model-less request with no provider pin: wire
+// matching downstream narrows these to the vendors that serve the requested
+// path, and priority/health ordering picks the default among them. Returns
+// ErrNoVendor when no vendor is configured at all.
+func (r *Router) AllCandidates() ([]Target, error) {
+	snap := r.snapshot()
+	if snap == nil {
+		return nil, ErrNoVendor
+	}
+	vendors := snap.Vendors()
+	if len(vendors) == 0 {
+		return nil, ErrNoVendor
+	}
+	return r.order("", vendors), nil
+}
+
+// order groups vendors by priority (ascending), orders each group by weighted
+// round-robin then health (cooling-down vendors last), and flattens to Targets.
+// key namespaces the round-robin cursor — the model, the provider id, or "" for
+// the global default.
+func (r *Router) order(key string, vendors []config.Vendor) []Target {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -88,33 +136,18 @@ func (r *Router) Candidates(model string) ([]Target, error) {
 
 	var targets []Target
 	for _, prio := range priorities {
-		ordered := r.orderGroup(model, prio, groups[prio], now)
+		ordered := r.orderGroup(key, prio, groups[prio], now)
 		for _, v := range ordered {
 			targets = append(targets, Target{Vendor: v, Credential: v.Credential})
 		}
 	}
-	return targets, nil
-}
-
-// CandidatesForVendor returns the single attempt for a named vendor. It is used
-// by explicit-vendor passthrough, where the caller has pinned the vendor and no
-// failover applies. Returns ErrNoVendor if no vendor of that name exists.
-func (r *Router) CandidatesForVendor(name string) ([]Target, error) {
-	snap := r.snapshot()
-	if snap == nil {
-		return nil, ErrNoVendor
-	}
-	v, ok := snap.Vendor(name)
-	if !ok {
-		return nil, ErrNoVendor
-	}
-	return []Target{{Vendor: v, Credential: v.Credential}}, nil
+	return targets
 }
 
 // orderGroup orders one priority group: weighted round-robin first, then a
 // stable partition placing cooling-down vendors after healthy ones.
-func (r *Router) orderGroup(model string, prio int, group []config.Vendor, now time.Time) []config.Vendor {
-	ordered := r.weightedOrder(model, prio, group)
+func (r *Router) orderGroup(key string, prio int, group []config.Vendor, now time.Time) []config.Vendor {
+	ordered := r.weightedOrder(key, prio, group)
 
 	healthy := make([]config.Vendor, 0, len(ordered))
 	cooling := make([]config.Vendor, 0, len(ordered))
@@ -129,9 +162,9 @@ func (r *Router) orderGroup(model string, prio int, group []config.Vendor, now t
 }
 
 // weightedOrder returns the group's vendors in weighted round-robin order using
-// a per-(model,priority) cursor that advances by one each call, so successive
+// a per-(key,priority) cursor that advances by one each call, so successive
 // calls rotate the starting vendor proportional to Weight.
-func (r *Router) weightedOrder(model string, prio int, group []config.Vendor) []config.Vendor {
+func (r *Router) weightedOrder(key string, prio int, group []config.Vendor) []config.Vendor {
 	if len(group) == 1 {
 		return group
 	}
@@ -147,9 +180,9 @@ func (r *Router) weightedOrder(model string, prio int, group []config.Vendor) []
 		total += w
 	}
 
-	key := wrrKey(model, prio)
-	start := r.wrr[key]
-	r.wrr[key] = (start + 1) % total
+	wk := wrrKey(key, prio)
+	start := r.wrr[wk]
+	r.wrr[wk] = (start + 1) % total
 
 	// Generate the interleaved slot sequence deterministically, then rotate by
 	// start and dedup to produce a vendor ordering for this call.
@@ -215,6 +248,6 @@ func (r *Router) Report(vendorName, credentialID string, status int, err error) 
 	delete(r.coolDown, vendorName)
 }
 
-func wrrKey(model string, prio int) string {
-	return model + "\x00" + strconv.Itoa(prio)
+func wrrKey(key string, prio int) string {
+	return key + "\x00" + strconv.Itoa(prio)
 }

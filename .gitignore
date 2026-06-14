@@ -13,6 +13,7 @@
 frontend/node_modules/
 frontend/*.tsbuildinfo
 frontend/dist/
+backend/web/dist/
 
 # Misc
 .DS_Store

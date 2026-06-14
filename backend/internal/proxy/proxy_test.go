@@ -156,6 +156,29 @@ func (e *testEnv) postPinned(t *testing.T, path, token, providerID, body string)
 	return resp
 }
 
+// doPinned is do with an X-Songguo-Provider pin header, for model-less requests
+// (e.g. async GET polls) that select their provider explicitly.
+func (e *testEnv) doPinned(t *testing.T, method, path, token, providerID, body string) *http.Response {
+	t.Helper()
+	var rdr io.Reader
+	if body != "" {
+		rdr = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, e.server.URL+path, rdr)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	req.Header.Set("X-Songguo-Provider", providerID)
+	resp, err := e.client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	return resp
+}
+
 func (e *testEnv) callRows(t *testing.T) []callRow {
 	t.Helper()
 	entries, err := e.store.QueryCalls(storeFilterAll())
@@ -810,12 +833,12 @@ func (e *testEnv) do(t *testing.T, method, path, token, body string) *http.Respo
 	return resp
 }
 
-// --- Test 11: Mode A reaches a non-/v1 vendor base prefix (e.g. Ark) ---
+// --- Test 11: a non-/v1 vendor endpoint (e.g. Ark) is hit via its stored URL ---
 
 func TestModelRoutedNonV1Prefix(t *testing.T) {
 	// This mock ONLY serves /api/v3/chat/completions, mimicking 火山方舟/Ark whose
 	// OpenAI-compatible base is …/api/v3. A /v1/chat/completions request must land
-	// on /api/v3/chat/completions after the origin + suffix rewrite.
+	// on /api/v3/chat/completions via the wire's stored full endpoint.
 	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v3/chat/completions" {
 			w.WriteHeader(http.StatusNotFound)
@@ -831,14 +854,15 @@ func TestModelRoutedNonV1Prefix(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: ark
-    origin: %s/api/v3
+    origin: %s
     served_models: [doubao-pro-32k]
     priority: 1
-    wires: [openai/chat]
+    endpoints:
+      openai/chat: %s/api/v3/chat/completions
     credential: {id: arkKey, api_key: ark-secret}
     prices:
       doubao-pro-32k: { input: 2.50, output: 10.00, unit: per_1m_tokens }
-`, mock.URL)
+`, mock.URL, mock.URL)
 
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
@@ -884,12 +908,11 @@ func (p *pathRecorder) handler() http.HandlerFunc {
 	}
 }
 
-// passthroughYAML builds a one-vendor config for passthrough tests. Mode B
-// forwards the native path after /x/<vendor>/ to the vendor's origin (scheme://
-// host). The native endpoints exercised here have no phase-1 wire, so the vendor
-// opts into allow_unmatched: calls are forwarded but metered zero at unknown
-// confidence.
-func passthroughYAML(baseURL, vendor string) string {
+// nativeYAML builds a one-vendor config for native-path tests. The native
+// endpoints exercised here have no phase-1 wire, so the vendor opts into
+// allow_unmatched: calls are forwarded to the vendor origin (scheme://host) with
+// the inbound path verbatim, but metered zero at unknown confidence.
+func nativeYAML(baseURL, vendor string) string {
 	return fmt.Sprintf(`
 vendors:
   - name: %s
@@ -904,21 +927,22 @@ vendors:
 `, vendor, baseURL, vendor, vendor)
 }
 
-// --- Test 12: Mode B native submit forwarded to origin+rest (allow_unmatched) ---
+// --- Test 12: a native path is forwarded to origin + path (allow_unmatched) ---
 
-func TestPassthroughNativeUsage(t *testing.T) {
+func TestNativeUsage(t *testing.T) {
 	rec := &pathRecorder{}
 	mock := httptest.NewServer(rec.handler())
 	defer mock.Close()
 
-	yaml := passthroughYAML(mock.URL, "bailian")
+	yaml := nativeYAML(mock.URL, "bailian")
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
-	// Native generation endpoint with a model in the body.
+	// Native generation endpoint with a model in the body: the model selects the
+	// provider, no /x/ prefix and no header needed.
 	body := `{"model":"qwen-plus","input":{"prompt":"hi"}}`
-	resp := env.post(t, "/x/bailian/api/v1/services/aigc/text-generation/generation", key, body)
+	resp := env.post(t, "/api/v1/services/aigc/text-generation/generation", key, body)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -929,7 +953,7 @@ func TestPassthroughNativeUsage(t *testing.T) {
 	gotAuth := rec.auth
 	rec.mu.Unlock()
 
-	// Mode B forwards the native path to the vendor origin verbatim.
+	// The native path is forwarded to the vendor origin verbatim.
 	if len(gotPaths) != 1 || gotPaths[0] != "/api/v1/services/aigc/text-generation/generation" {
 		t.Fatalf("upstream paths = %v, want [/api/v1/services/aigc/text-generation/generation]", gotPaths)
 	}
@@ -954,20 +978,21 @@ func TestPassthroughNativeUsage(t *testing.T) {
 	}
 }
 
-// --- Test 13: Mode B model-less GET (async task poll) is forwarded, not 400 ---
+// --- Test 13: a model-less GET resolves via the default provider, not 400 ---
 
-func TestPassthroughModelLessGet(t *testing.T) {
+func TestNativeModelLessGet(t *testing.T) {
 	rec := &pathRecorder{}
 	mock := httptest.NewServer(rec.handler())
 	defer mock.Close()
 
-	yaml := passthroughYAML(mock.URL, "bailian")
+	yaml := nativeYAML(mock.URL, "bailian")
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
-	// No body, no model: an async task poll. Must NOT be rejected as missing_model.
-	resp := env.do(t, http.MethodGet, "/x/bailian/api/v1/tasks/abc", key, "")
+	// No body, no model, no header: an async task poll. With a single configured
+	// provider it resolves as the default — never rejected as missing_model.
+	resp := env.do(t, http.MethodGet, "/api/v1/tasks/abc", key, "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (model-less GET must be forwarded)", resp.StatusCode)
@@ -986,45 +1011,97 @@ func TestPassthroughModelLessGet(t *testing.T) {
 	}
 }
 
-// --- Test 14: Mode B unknown vendor -> 404 ---
+// --- Test 13b: X-Songguo-Provider pins a model-less request to one provider ---
 
-func TestPassthroughUnknownVendor(t *testing.T) {
-	rec := &pathRecorder{}
-	mock := httptest.NewServer(rec.handler())
-	defer mock.Close()
+func TestNativeModelLessProviderPin(t *testing.T) {
+	recA := &pathRecorder{}
+	mockA := httptest.NewServer(recA.handler())
+	defer mockA.Close()
+	recB := &pathRecorder{}
+	mockB := httptest.NewServer(recB.handler())
+	defer mockB.Close()
 
-	yaml := passthroughYAML(mock.URL, "bailian")
+	// Two providers both serving the same allow_unmatched native path. A pin must
+	// send the call to exactly the named provider's origin.
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: bailian-a
+    origin: %s
+    served_models: [qwen-plus]
+    priority: 1
+    wires: [openai/chat]
+    allow_unmatched: true
+    credential: {id: provA, api_key: a-secret}
+  - name: bailian-b
+    origin: %s
+    served_models: [qwen-plus]
+    priority: 0
+    wires: [openai/chat]
+    allow_unmatched: true
+    credential: {id: provB, api_key: b-secret}
+`, mockA.URL, mockB.URL)
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
-	resp := env.do(t, http.MethodGet, "/x/nope/api/v1/tasks/abc", key, "")
+	resp := env.doPinned(t, http.MethodGet, "/api/v1/tasks/abc", key, "provA", "")
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 for unknown vendor", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	recA.mu.Lock()
+	aCalls := len(recA.paths)
+	recA.mu.Unlock()
+	recB.mu.Lock()
+	bCalls := len(recB.paths)
+	recB.mu.Unlock()
+	if aCalls != 1 || bCalls != 0 {
+		t.Fatalf("calls A=%d B=%d, want the pinned provider A only", aCalls, bCalls)
+	}
+}
+
+// --- Test 14: an unknown provider pin -> 502 no_upstream, nothing forwarded ---
+
+func TestNativeUnknownProviderPin(t *testing.T) {
+	rec := &pathRecorder{}
+	mock := httptest.NewServer(rec.handler())
+	defer mock.Close()
+
+	yaml := nativeYAML(mock.URL, "bailian")
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	resp := env.doPinned(t, http.MethodGet, "/api/v1/tasks/abc", key, "nope", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 for unknown provider pin", resp.StatusCode)
 	}
 	rec.mu.Lock()
 	calls := len(rec.paths)
 	rec.mu.Unlock()
 	if calls != 0 {
-		t.Fatalf("upstream called %d times for unknown vendor", calls)
+		t.Fatalf("upstream called %d times for unknown provider", calls)
 	}
 }
 
-// --- Test 15: Mode B passthrough scope enforces vendor allowlist -> 403 ---
+// --- Test 15: a scoped user is denied a model-less pin to an out-of-scope vendor ---
 
-func TestPassthroughScope(t *testing.T) {
+func TestNativeScope(t *testing.T) {
 	rec := &pathRecorder{}
 	mock := httptest.NewServer(rec.handler())
 	defer mock.Close()
 
-	yaml := passthroughYAML(mock.URL, "bailian")
+	yaml := nativeYAML(mock.URL, "bailian")
 	st := openStore(t)
 	// User scoped to a different vendor: it may not address bailian.
 	_, key := mustUser(t, st, store.NewUser{Name: "t", Scope: []string{"othervendor"}})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
-	resp := env.post(t, "/x/bailian/api/v1/services/x/generation", key, `{"model":"qwen-plus"}`)
+	// Model-less pin to bailian (provider id bailian-key); vendor "bailian" is not
+	// in scope, so it is rejected before any upstream call.
+	resp := env.doPinned(t, http.MethodGet, "/api/v1/tasks/abc", key, "bailian-key", "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 (vendor not in scope)", resp.StatusCode)
@@ -1037,11 +1114,11 @@ func TestPassthroughScope(t *testing.T) {
 	}
 }
 
-// --- Test 16: Mode B is a single attempt (one key per service, no retry) ---
+// --- Test 16: a single provider serving the model is a single attempt ---
 
-func TestPassthroughSingleAttempt(t *testing.T) {
-	// The mock 500s; with one credential per service the passthrough must
-	// surface that error to the client rather than retrying.
+func TestNativeSingleAttempt(t *testing.T) {
+	// The mock 500s; with only one provider serving the model there is nothing
+	// to fail over to, so the error is surfaced to the client, not retried.
 	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer key1" {
 			t.Errorf("Authorization = %q, want Bearer key1", r.Header.Get("Authorization"))
@@ -1054,7 +1131,7 @@ func TestPassthroughSingleAttempt(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: bailian
-    origin: %s/compatible-mode/v1
+    origin: %s
     served_models: [qwen-plus]
     priority: 1
     wires: [openai/chat]
@@ -1068,7 +1145,7 @@ vendors:
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
-	resp := env.post(t, "/x/bailian/api/v1/services/x/generation", key, `{"model":"qwen-plus"}`)
+	resp := env.post(t, "/api/v1/services/x/generation", key, `{"model":"qwen-plus"}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 (single attempt, no retry)", resp.StatusCode)
@@ -1129,9 +1206,9 @@ vendors:
 	}
 }
 
-// --- Test 18: unmatched path denied (passthrough, no allow_unmatched) ---
+// --- Test 18: unmatched native path denied when allow_unmatched is off ---
 
-func TestUnmatchedDenyPassthrough(t *testing.T) {
+func TestUnmatchedDenyNative(t *testing.T) {
 	rec := &pathRecorder{}
 	mock := httptest.NewServer(rec.handler())
 	defer mock.Close()
@@ -1139,7 +1216,7 @@ func TestUnmatchedDenyPassthrough(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: bailian
-    origin: %s/compatible-mode/v1
+    origin: %s
     served_models: [qwen-plus]
     priority: 1
     wires: [openai/chat]
@@ -1151,7 +1228,7 @@ vendors:
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
-	resp := env.post(t, "/x/bailian/api/v1/services/aigc/text-generation/generation", key, `{"model":"qwen-plus"}`)
+	resp := env.post(t, "/api/v1/services/aigc/text-generation/generation", key, `{"model":"qwen-plus"}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (no allow_unmatched)", resp.StatusCode)
@@ -1163,7 +1240,7 @@ vendors:
 		t.Fatalf("upstream called for denied path")
 	}
 	// But a wired path on the same vendor still works.
-	resp2 := env.post(t, "/x/bailian/compatible-mode/v1/chat/completions", key, `{"model":"qwen-plus","messages":[]}`)
+	resp2 := env.post(t, "/v1/chat/completions", key, `{"model":"qwen-plus","messages":[]}`)
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("wired path status = %d, want 200", resp2.StatusCode)

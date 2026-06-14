@@ -103,8 +103,10 @@ func (m *Manager) build() (*config.Snapshot, error) {
 // becomes a vendor carrying that group's wire→endpoint map. Wire names not present
 // in the registry are dropped with a warning so a typo can never silently match.
 // The shared API key, models/prices, and quirks are replicated onto every group.
-// The first group keeps the provider's name (so /x/<name> and stats stay stable
-// for single-host providers); additional groups get an "-<adapter>" suffix.
+// The first group keeps the provider's name (so vendor names and stats stay
+// stable for single-host providers); additional groups get an "-<adapter>"
+// suffix. Every group carries the provider id as its credential id, so an
+// X-Songguo-Provider pin resolves across the split.
 func vendorsFromProvider(pvd store.Provider, logger *slog.Logger) []config.Vendor {
 	models := make([]string, 0, len(pvd.Models))
 	prices := make(map[string]config.Price, len(pvd.Models))
@@ -119,7 +121,7 @@ func vendorsFromProvider(pvd store.Provider, logger *slog.Logger) []config.Vendo
 
 	// Group endpoints by (origin, adapter): a group shares a credential, auth
 	// scheme, and host. Each wire's full URL is kept verbatim for model-routed
-	// forwarding; the shared origin serves passthrough/WebSocket/unmatched.
+	// forwarding; the shared origin serves WebSocket/unmatched paths.
 	type groupKey struct{ origin, adapter string }
 	order := make([]groupKey, 0, len(pvd.Endpoints))
 	groups := make(map[groupKey][]store.ProviderEndpoint)
@@ -136,7 +138,7 @@ func vendorsFromProvider(pvd store.Provider, logger *slog.Logger) []config.Vendo
 	}
 
 	// Stable, intuitive primary: openai-compatible groups rank first, then by
-	// origin. The primary group keeps the provider's plain name (so /x/<name>
+	// origin. The primary group keeps the provider's plain name (so vendor names
 	// and stats stay stable); others get a unique suffix.
 	sort.SliceStable(order, func(i, j int) bool {
 		ri, rj := adapterRank(order[i].adapter), adapterRank(order[j].adapter)

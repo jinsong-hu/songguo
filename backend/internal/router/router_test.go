@@ -269,25 +269,37 @@ vendors:
 	}
 }
 
-func TestCandidatesForVendor(t *testing.T) {
+func TestCandidatesForProvider(t *testing.T) {
+	// Two vendors derived from the same provider (the (origin, adapter) split):
+	// both carry the provider id c1 as their credential id, so a pin by c1
+	// resolves to both regardless of model.
 	snap := buildSnapshot(t, `
 vendors:
   - name: bailian
     origin: https://dashscope.aliyuncs.com/compatible-mode/v1
     served_models: [qwen-plus]
     credential: {id: c1, api_key: k1}
+  - name: bailian-anthropic
+    origin: https://dashscope.aliyuncs.com
+    served_models: [qwen-plus]
+    credential: {id: c1, api_key: k1}
 `)
 	r := New(staticSnap(snap))
-	got, err := r.CandidatesForVendor("bailian")
+	got, err := r.CandidatesForProvider("c1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Vendor.Name != "bailian" || got[0].Credential.ID != "c1" {
-		t.Fatalf("got %+v", got)
+	if len(got) != 2 {
+		t.Fatalf("got %d targets, want 2: %+v", len(got), got)
+	}
+	for _, tg := range got {
+		if tg.Credential.ID != "c1" {
+			t.Fatalf("target %q has credential %q, want c1", tg.Vendor.Name, tg.Credential.ID)
+		}
 	}
 }
 
-func TestCandidatesForVendorMissing(t *testing.T) {
+func TestCandidatesForProviderMissing(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: bailian
@@ -296,14 +308,49 @@ vendors:
     credential: {id: c1, api_key: k1}
 `)
 	r := New(staticSnap(snap))
-	if _, err := r.CandidatesForVendor("nope"); !errors.Is(err, ErrNoVendor) {
-		t.Fatalf("want ErrNoVendor for missing vendor, got %v", err)
+	if _, err := r.CandidatesForProvider("nope"); !errors.Is(err, ErrNoVendor) {
+		t.Fatalf("want ErrNoVendor for missing provider, got %v", err)
 	}
 }
 
-func TestCandidatesForVendorNilSnapshot(t *testing.T) {
+func TestCandidatesForProviderNilSnapshot(t *testing.T) {
 	r := New(func() *config.Snapshot { return nil })
-	if _, err := r.CandidatesForVendor("x"); !errors.Is(err, ErrNoVendor) {
+	if _, err := r.CandidatesForProvider("x"); !errors.Is(err, ErrNoVendor) {
+		t.Fatalf("want ErrNoVendor on nil snapshot, got %v", err)
+	}
+}
+
+func TestAllCandidates(t *testing.T) {
+	snap := buildSnapshot(t, `
+vendors:
+  - name: a
+    origin: https://a.example
+    served_models: [m]
+    priority: 1
+    credential: {id: a1, api_key: k}
+  - name: b
+    origin: https://b.example
+    served_models: [n]
+    priority: 0
+    credential: {id: b1, api_key: k}
+`)
+	r := New(staticSnap(snap))
+	got, err := r.AllCandidates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d targets, want 2", len(got))
+	}
+	// Priority ascending: b (0) before a (1).
+	if got[0].Vendor.Name != "b" || got[1].Vendor.Name != "a" {
+		t.Fatalf("order = %s,%s, want b,a (priority order)", got[0].Vendor.Name, got[1].Vendor.Name)
+	}
+}
+
+func TestAllCandidatesNilSnapshot(t *testing.T) {
+	r := New(func() *config.Snapshot { return nil })
+	if _, err := r.AllCandidates(); !errors.Is(err, ErrNoVendor) {
 		t.Fatalf("want ErrNoVendor on nil snapshot, got %v", err)
 	}
 }

@@ -124,8 +124,10 @@ vendors:
 
 // dialProxyWS opens a raw TCP connection to the proxy and writes a WebSocket
 // upgrade request for the given path with the given token, returning the conn
-// and a buffered reader positioned to read the handshake response.
-func dialProxyWS(t *testing.T, proxyURL, path, token string) (net.Conn, *bufio.Reader) {
+// and a buffered reader positioned to read the handshake response. When provider
+// is non-empty it is sent as the X-Songguo-Provider pin (WS cannot be
+// model-routed, so the caller names the provider explicitly).
+func dialProxyWS(t *testing.T, proxyURL, path, token, provider string) (net.Conn, *bufio.Reader) {
 	t.Helper()
 	u, err := url.Parse(proxyURL)
 	if err != nil {
@@ -145,6 +147,9 @@ func dialProxyWS(t *testing.T, proxyURL, path, token string) (net.Conn, *bufio.R
 	req.WriteString("Sec-WebSocket-Version: 13\r\n")
 	if token != "" {
 		fmt.Fprintf(&req, "Authorization: Bearer %s\r\n", token)
+	}
+	if provider != "" {
+		fmt.Fprintf(&req, "X-Songguo-Provider: %s\r\n", provider)
 	}
 	req.WriteString("\r\n")
 
@@ -219,7 +224,7 @@ func TestWebSocketHappyPath(t *testing.T) {
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
 
-	conn, br := dialProxyWS(t, env.server.URL, "/x/rt/realtime?model=realtime-model", key)
+	conn, br := dialProxyWS(t, env.server.URL, "/v1/realtime?model=realtime-model", key, "credR")
 	defer conn.Close()
 
 	if code := readStatusLine(t, br); code != http.StatusSwitchingProtocols {
@@ -238,9 +243,9 @@ func TestWebSocketHappyPath(t *testing.T) {
 	if accept := headers.Get("Sec-WebSocket-Accept"); accept != wsAccept("dGhlIHNhbXBsZSBub25jZQ==") {
 		t.Errorf("Sec-WebSocket-Accept = %q, want correct accept", accept)
 	}
-	// The upstream must have seen the rest path (origin-relative), not /x/...
-	if up.lastPath != "/realtime?model=realtime-model" {
-		t.Errorf("upstream request-target = %q, want /realtime?model=realtime-model", up.lastPath)
+	// The upstream must have seen the native inbound path forwarded verbatim.
+	if up.lastPath != "/v1/realtime?model=realtime-model" {
+		t.Errorf("upstream request-target = %q, want /v1/realtime?model=realtime-model", up.lastPath)
 	}
 
 	// Now send raw bytes and expect them echoed back unchanged both directions.
@@ -305,7 +310,7 @@ func TestWebSocketUpstreamRefuses(t *testing.T) {
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
 
-	conn, br := dialProxyWS(t, env.server.URL, "/x/rt/realtime", key)
+	conn, br := dialProxyWS(t, env.server.URL, "/v1/realtime", key, "credR")
 	defer conn.Close()
 
 	if code := readStatusLine(t, br); code != http.StatusUnauthorized {
@@ -325,9 +330,9 @@ func TestWebSocketUpstreamRefuses(t *testing.T) {
 	}
 }
 
-// --- WS Test 3: unknown vendor -> 404 ---
+// --- WS Test 3: unknown provider pin -> 502 ---
 
-func TestWebSocketUnknownVendor(t *testing.T) {
+func TestWebSocketUnknownProvider(t *testing.T) {
 	up := &wsMockUpstream{}
 	mock := wsMockServer(t, up)
 
@@ -335,20 +340,20 @@ func TestWebSocketUnknownVendor(t *testing.T) {
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
 
-	conn, br := dialProxyWS(t, env.server.URL, "/x/nope/realtime", key)
+	conn, br := dialProxyWS(t, env.server.URL, "/v1/realtime", key, "nope")
 	defer conn.Close()
 
-	if code := readStatusLine(t, br); code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 for unknown vendor", code)
+	if code := readStatusLine(t, br); code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 for unknown provider pin", code)
 	}
 	if up.lastAuth != "" {
-		t.Errorf("upstream was dialed for an unknown vendor")
+		t.Errorf("upstream was dialed for an unknown provider")
 	}
 }
 
-// --- WS Test 4: WS upgrade on /v1/... -> 426 ---
+// --- WS Test 4: WS upgrade with no provider pin -> 400 ---
 
-func TestWebSocketOnV1Rejected(t *testing.T) {
+func TestWebSocketMissingProvider(t *testing.T) {
 	up := &wsMockUpstream{}
 	mock := wsMockServer(t, up)
 
@@ -356,11 +361,15 @@ func TestWebSocketOnV1Rejected(t *testing.T) {
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
 
-	conn, br := dialProxyWS(t, env.server.URL, "/v1/realtime", key)
+	// No X-Songguo-Provider: a WS upgrade cannot be model-routed.
+	conn, br := dialProxyWS(t, env.server.URL, "/v1/realtime", key, "")
 	defer conn.Close()
 
-	if code := readStatusLine(t, br); code != http.StatusUpgradeRequired {
-		t.Fatalf("status = %d, want 426 for WS on /v1", code)
+	if code := readStatusLine(t, br); code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for WS without a provider pin", code)
+	}
+	if up.lastAuth != "" {
+		t.Errorf("upstream was dialed without a provider pin")
 	}
 }
 
@@ -374,14 +383,14 @@ func TestWebSocketAuthRequired(t *testing.T) {
 	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
 
 	// Invalid token.
-	conn, br := dialProxyWS(t, env.server.URL, "/x/rt/realtime", "sg-bogus")
+	conn, br := dialProxyWS(t, env.server.URL, "/v1/realtime", "sg-bogus", "credR")
 	if code := readStatusLine(t, br); code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 for invalid token", code)
 	}
 	conn.Close()
 
 	// Missing token.
-	conn2, br2 := dialProxyWS(t, env.server.URL, "/x/rt/realtime", "")
+	conn2, br2 := dialProxyWS(t, env.server.URL, "/v1/realtime", "", "credR")
 	if code := readStatusLine(t, br2); code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 for missing token", code)
 	}
@@ -405,7 +414,7 @@ func TestWebSocketScopeRejected(t *testing.T) {
 	_, key := mustUser(t, st, store.NewUser{Name: "t", Scope: []string{"othervendor"}})
 	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
 
-	conn, br := dialProxyWS(t, env.server.URL, "/x/rt/realtime", key)
+	conn, br := dialProxyWS(t, env.server.URL, "/v1/realtime", key, "credR")
 	defer conn.Close()
 
 	if code := readStatusLine(t, br); code != http.StatusForbidden {

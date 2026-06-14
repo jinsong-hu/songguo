@@ -5,11 +5,13 @@
 
 Songguo has two surfaces:
 
-- **Data plane** — the transparent proxy at `/v1/*` (model-routed) and
-  `/x/<provider>/*` (passthrough). It speaks each vendor's native wire protocol,
-  so any SDK just points its `base_url` at Songguo. This is already agent-friendly
-  and is **not** wrapped in MCP (that would be a translation layer, which Songguo
-  never does). See `registry.md`.
+- **Data plane** — the transparent proxy at the native vendor paths (`/v1/*` for
+  OpenAI/Anthropic-shaped APIs, `/api/v3/*` for Volcengine speech); the provider is
+  selected by the `X-Songguo-Provider` header, else the body's model, else the wire
+  default. It speaks each vendor's native wire protocol, so any SDK just points its
+  `base_url` at Songguo. This is already agent-friendly and is **not** wrapped in
+  MCP (that would be a translation layer, which Songguo never does). See
+  `registry.md`.
 - **Control plane** — the admin API under `/api/*`: usage, the call ledger, users,
   providers, services, pricing and settings. This is what the dashboard uses, and
   what the **MCP server** and the **OpenAPI spec** below expose for agents.

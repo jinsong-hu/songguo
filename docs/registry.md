@@ -22,20 +22,20 @@ The only thing Songguo will refuse to forward is an over-budget / out-of-scope c
 
 ## The model: four layers
 
-A **wire** is the protocol contract. A **Songguo endpoint** is its inbound face; a **provider endpoint** is its outbound face; **routing** connects one to the other by exact model string.
+A **wire** is the protocol contract. A **Songguo endpoint** is its inbound face; a **provider endpoint** is its outbound face; **routing** connects one to the other by an explicit selector — a provider header, else the exact model string, else the wire's default.
 
 | Layer | What it is | Static / dynamic | Cardinality |
 |---|---|---|---|
 | **Wire** | Protocol shape + metering contract (`openai/chat`). The fixed vocabulary. | Static (compiled-in, 10 today) | the catalogue |
 | **Songguo endpoint** | The public path a consumer calls (`POST /v1/chat/completions`). Inbound face of a wire. | Static (matched by suffix) | → exactly 1 wire |
 | **Provider endpoint** | An **exact vendor URL** that speaks the same wire (`https://api.openai.com/v1/chat/completions`) + its credential. Outbound face. | Dynamic (operator-set, SQLite) | → exactly 1 wire |
-| **Routing** | Given `(wire, model-string)` pick the provider endpoint. Exact match, no aliasing. | Dynamic (SQLite) | model-string → provider |
+| **Routing** | Given `(wire)` pick the provider endpoint, by `header → model-string → default`. Exact match, no aliasing. | Dynamic (SQLite) | selector → provider |
 
 Request lifecycle, one line:
 
 ```
-inbound path → match Songguo endpoint → (wire) → read model string
-            → routing picks provider endpoint for (wire, model)
+inbound path → match Songguo endpoint (wire) by path suffix
+            → select provider: X-Songguo-Provider header ?? body model ?? wire default
             → forward to exact vendor URL, swap auth, body + model unchanged
             → wire meters the response (read-only)
 ```
@@ -54,54 +54,45 @@ Matching is by **path suffix**, scoped to the service's enabled wires:
 
 Because matching is suffix-based, the path _prefix_ is conventional. The canonical endpoints below use each vendor's standard prefix (`/v1/...`); a request to any path ending in the same suffix resolves the same way.
 
-### Addressing modes — model-bearing vs model-less
+### Provider selection
 
-How a request finds its provider depends on whether the call carries a `model`:
+Every request resolves the same way — there are **no addressing "modes."** Once the wire is fixed by path suffix, the provider is chosen by the first available selector:
 
-- **Mode A — model-routed (`/v1/...`).** The gateway reads the exact `model` string from the body and picks the provider(s) that declare it (pooling + failover apply). Used by the model-bearing wires (`openai/chat|completions|embeddings|responses`, `anthropic/messages`). **A `/v1/...` call with no model string is rejected `400 missing_model`** — there is nothing to route on.
-- **Mode B — passthrough (`/x/<provider>/<native-path>`).** The provider is named explicitly in the path; no model is required; a single attempt, no failover. Used by every **model-less** wire — all `*/models` listings, the `volc/*` speech wires, and async submit/poll calls. The native vendor path after `/x/<provider>/` is preserved and matched by suffix.
+1. **`X-Songguo-Provider: <name>` header** — explicit pin. A control header (like `X-Control-Require-Usage-Tokens-Return`): **stripped before forwarding**, never part of the body, so it stays inside no-transform. Use it to pick a specific account/provider, or to keep a submit→poll lifecycle on the same provider (affinity).
+2. **The body's `model` string** — for model-bearing wires, picks the provider(s) that declare `(wire, model)`; pooling + failover apply.
+3. **The default provider** — when neither a header nor a model is present, every vendor serving the matched wire is a candidate, ordered by the existing priority → weighted-RR → health ranking; the top one is the default and the rest are failover. (No separate "default" flag — it reuses provider priority.)
 
-Consequence: **a model-less endpoint is always addressed via `/x/<provider>/`, never bare.** Bare `GET /v1/models` does not work (it 400s) — and that is deliberate: aggregating providers' model lists would mean *synthesizing* a response, which violates no-transform. List models per provider with `GET /x/<provider>/v1/models`.
+If none resolves, the call is denied with a clear error.
+
+Two consequences:
+
+- **Paths are always native — there is no `/x/<provider>/` prefix.** A model-less endpoint is reached at its plain vendor path (`GET /v1/models`, `POST /api/v3/tts/unidirectional`); the provider comes from the header or the default, never the path.
+- **Bare `GET /v1/models` works** and returns the selected provider's list. That is a passthrough of *one* provider's response — Songguo still never aggregates lists across providers (a merged list would be a synthesized response = transform).
 
 ## The registry — everything supported today (10 wires)
 
-### OpenAI family — auth: `Authorization: Bearer <key>`
+One row per wire. **Auth** is derived from the wire prefix (operator never picks it). **Songguo endpoint** is the native path the consumer calls; the provider is chosen by `header → model → default` (see above). **Usage read** is the field(s) the meter sniffs — read-only, never blocks traffic.
 
-| Wire | Songguo endpoint | Matched suffix | Modality | Streams | Cost |
-|---|---|---|---|---|---|
-| `openai/chat` | `POST /v1/chat/completions` | `/chat/completions` | chat | yes (SSE) | metered |
-| `openai/completions` | `POST /v1/completions` | `/completions` | chat | yes (SSE) | metered |
-| `openai/embeddings` | `POST /v1/embeddings` | `/embeddings` | embedding | no | metered |
-| `openai/responses` | `POST /v1/responses` | `/responses` | chat | yes (SSE) | metered |
-| `openai/models` | `GET /x/<provider>/v1/models` | `/models` | — | no | zero-cost |
+| Wire | Family / Auth | Songguo endpoint(s) | Matched suffix | Modality | Streams | Cost | Usage read |
+|---|---|---|---|---|---|---|---|
+| `openai/chat` | OpenAI · `Authorization: Bearer <key>` | `POST /v1/chat/completions` | `/chat/completions` | chat | yes (SSE) | metered | `usage.prompt_tokens`/`input_tokens` + `completion_tokens`/`output_tokens`; cached per quirk (default `prompt_tokens_details.cached_tokens`, DeepSeek `prompt_cache_hit_tokens`, MiniMax `cached_tokens`); stream usage on final SSE chunk |
+| `openai/completions` | OpenAI · `Authorization: Bearer <key>` | `POST /v1/completions` | `/completions` | chat | yes (SSE) | metered | same as `openai/chat` |
+| `openai/embeddings` | OpenAI · `Authorization: Bearer <key>` | `POST /v1/embeddings` | `/embeddings` | embedding | no | metered | `usage.prompt_tokens`/`input_tokens` |
+| `openai/responses` | OpenAI · `Authorization: Bearer <key>` | `POST /v1/responses` | `/responses` | chat | yes (SSE) | metered | `usage.input_tokens` + `output_tokens` + `input_tokens_details.cached_tokens`; stream usage on `response.completed` → `response.usage` |
+| `openai/models` | OpenAI · `Authorization: Bearer <key>` | `GET /v1/models` | `/models` | — | no | zero-cost | not parsed (management) |
+| `anthropic/messages` | Anthropic · `x-api-key: <key>` + `anthropic-version` | `POST /v1/messages` | `/messages` | chat | yes (SSE) | metered | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` → `InputTokens` (cache-create 1.25× premium ignored); `cache_read` also → `CachedInputTokens`; stream merges `message_start…usage` (input) + `message_delta.usage` (output) |
+| `anthropic/models` | Anthropic · `x-api-key: <key>` + `anthropic-version` | `GET /v1/models` | `/models` | — | no | zero-cost | not parsed (management) |
+| `volc/tts` | Volcengine · `x-api-key: <key>` | `POST /api/v3/tts/unidirectional` | `/tts/unidirectional` | tts | yes (NDJSON) | metered | `usage.text_words` → `Chars` (per-char); only when client sets `X-Control-Require-Usage-Tokens-Return`, else coarse/unknown |
+| `volc/voice-clone` | Volcengine · `x-api-key: <key>` | `POST /api/v3/tts/voice_clone`, `GET /api/v3/tts/get_voice` | `/tts/voice_clone`, `/tts/get_voice` | tts (mgmt) | no | zero-cost | not parsed; slot fee billed out-of-band on first synthesis |
+| `volc/asr` | Volcengine · `x-api-key: <key>` | `POST /api/v3/auc/bigmodel/submit`, `POST /api/v3/auc/bigmodel/query` | `/auc/bigmodel/submit`, `/auc/bigmodel/query` | stt | no | metered on `query` | `audio_info.duration` (ms) → `Seconds` (per-second); `submit` ack has no `audio_info` (meters zero), `query` poll bills |
 
-### Anthropic family — auth: `x-api-key: <key>` + `anthropic-version: <date>`
-
-| Wire | Songguo endpoint | Matched suffix | Modality | Streams | Cost |
-|---|---|---|---|---|---|
-| `anthropic/messages` | `POST /v1/messages` | `/messages` | chat | yes (SSE) | metered |
-| `anthropic/models` | `GET /x/<provider>/v1/models` | `/models` | — | no | zero-cost |
-
-### Volcengine speech family — auth: `x-api-key: <key>` — all Mode B (`/x/<provider>/`)
-
-| Wire | Songguo endpoint | Matched suffix | Modality | Streams | Cost |
-|---|---|---|---|---|---|
-| `volc/tts` | `POST /x/<provider>/api/v3/tts/unidirectional` | `/tts/unidirectional` | tts | yes (NDJSON) | metered |
-| `volc/voice-clone` | `POST /x/<provider>/api/v3/tts/voice_clone`, `GET /x/<provider>/api/v3/tts/get_voice` | `/tts/voice_clone`, `/tts/get_voice` | tts (mgmt) | no | zero-cost |
-| `volc/asr` | `POST /x/<provider>/api/v3/auc/bigmodel/submit`, `POST /x/<provider>/api/v3/auc/bigmodel/query` | `/auc/bigmodel/submit`, `/auc/bigmodel/query` | stt | no | metered on `query` |
-
-Volcengine speech is model-less, so it is addressed via `/x/<provider>/` passthrough with the **native Volcengine path** (`/api/v3/...`). The provider is explicit; the suffix is what the wire matches.
-
-## Metering — how each wire reads usage
+Volcengine speech is model-less: it's reached at its **native Volcengine path** (`/api/v3/...`) and the provider comes from `X-Songguo-Provider` (or the wire default). The suffix is what the wire matches. For `volc/asr`, send the same `X-Songguo-Provider` on both `submit` and `query` so the poll lands on the provider that issued the task.
 
 All wires normalize into one canonical view: `{ InputTokens, OutputTokens, CachedInputTokens, Calls, Images, Seconds, Chars }`. Raw vendor usage is logged verbatim alongside.
 
-- **`openai/chat`, `openai/completions`, `openai/embeddings`** — top-level `usage`: `prompt_tokens`/`input_tokens`, `completion_tokens`/`output_tokens`. Cached input tokens read per quirk: default `prompt_tokens_details.cached_tokens`, DeepSeek `prompt_cache_hit_tokens`, MiniMax `cached_tokens`. Streaming usage rides the final SSE chunk (some vendors only when the client sets `stream_options.include_usage`).
-- **`openai/responses`** — top-level `usage` (`input_tokens`, `output_tokens`, `input_tokens_details.cached_tokens`); streaming usage rides the `response.completed` event under `response.usage`.
-- **`anthropic/messages`** — `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` folded into `InputTokens` (cache-create's 1.25× premium ignored, by design); `cache_read` also recorded as `CachedInputTokens`. Streaming merges `message_start.message.usage` (input) with `message_delta.usage` (output).
-- **`volc/tts`** — `usage.text_words` → `Chars` (per-char pricing). Usage is only returned when the client sets `X-Control-Require-Usage-Tokens-Return`; otherwise coarse/unknown.
-- **`volc/asr`** — `audio_info.duration` (ms) → `Seconds` (per-second pricing). The `submit` ack carries no `audio_info`, so it meters zero; the `query` poll bills.
-- **`*/models`, `volc/voice-clone`** — zero-cost management endpoints; not parsed. (Voice-clone's slot fee is billed out-of-band on first synthesis.)
+## Metering notes
+
+Per-wire usage fields live in the **Usage read** column above. Two cross-cutting points: some OpenAI-family vendors only emit streaming usage when the client sets `stream_options.include_usage`; and if a usage shape isn't recognized the call still succeeds with coarse/unknown metering — parsing never blocks traffic.
 
 ## Auth adapters
 
@@ -115,11 +106,12 @@ Derived from the wire name prefix — the operator never picks it.
 
 ## Resolved decisions
 
-1. **`/v1/models` is not ambiguous.** Model-listing carries no model string, so bare `/v1/models` is rejected `400 missing_model` (Mode A needs a model) — the `openai/models`/`anthropic/models` suffix tie-break is never reached. Listing is a Mode-B operation: `GET /x/<provider>/v1/models` resolves against one provider's wires, which hold at most one `/models` wire. By design Songguo does **not** aggregate model lists (that would be a synthesized response = transform).
-2. **Volcengine paths are the native `/api/v3/...`**, addressed via `/x/<provider>/` passthrough (speech is model-less). Pinned by `wire/volc_test.go`. No Songguo-local prefix.
+1. **Bare `GET /v1/models` returns one provider's list.** Model-listing carries no model string, so the provider comes from `X-Songguo-Provider` (or the priority-ordered default). The `openai/models`/`anthropic/models` suffix tie-break is resolved by the service's enabled wires (a service holds at most one `/models` wire per family). The response is that single provider's list, forwarded verbatim — Songguo never aggregates lists across providers (a merged list would be a synthesized response = transform).
+2. **Volcengine paths are the native `/api/v3/...`** with no Songguo-local prefix; the provider comes from `X-Songguo-Provider` / the default (speech is model-less). Suffix matching is pinned by `wire/volc_test.go`.
 
 ## Implementation status
 
-- **Full per-wire endpoints — done.** Provider config stores an explicit full upstream URL per wire (DB column `provider_endpoints.endpoint`), used as-is in model-routed (Mode A) forwarding — no base+suffix join. `{model}` in the path is substituted with the request's model, and an endpoint query (e.g. Azure's `?api-version=…`) is merged with any inbound query, so non-uniform vendors like **Azure OpenAI** (`/openai/deployments/{model}/chat/completions?api-version=…`) work. Mode B / WebSocket use the vendor's `origin` (scheme://host). Runtime vendors group by `(origin, adapter)`. A one-time idempotent migration renames `base_url`→`endpoint` and rewrites legacy bases to full URLs.
-- **Still open:** `prd.md` §4.1 still models `Channel.base_url`; "Channel" (PRD) ≈ "provider"/"vendor" (config) should be reconciled when the PRD is next revised.
+- **Full per-wire endpoints — done.** Provider config stores an explicit full upstream URL per wire (DB column `provider_endpoints.endpoint`), used as-is — no base+suffix join. `{model}` in the path is substituted with the request's model, and an endpoint query (e.g. Azure's `?api-version=…`) is merged with any inbound query, so non-uniform vendors like **Azure OpenAI** (`/openai/deployments/{model}/chat/completions?api-version=…`) work. Model-less / WebSocket forwarding uses the vendor's `origin` (scheme://host) with the inbound native path. Runtime vendors group by `(origin, adapter)`. A one-time idempotent migration renames `base_url`→`endpoint` and rewrites legacy bases to full URLs.
+- **Unified addressing — done.** One resolution path: match the wire by suffix, then select the provider `header → model → default`. `X-Songguo-Provider` (provider id) is a control header, stripped before forwarding. The default reuses provider priority — no separate flag. The `/x/<provider>/` passthrough is **removed**; the proxy is mounted at the native prefixes `/v1/` and `/api/v3/` (the latter is more specific than the admin `/api/`, so ServeMux routes it to the proxy). WebSocket upgrades carry the pin in the same header. `router.Candidates`/`CandidatesForProvider`/`AllCandidates` back the three selectors.
+- **Still open:** `prd.md` §4.1 still models `Channel.base_url`; "Channel" (PRD) ≈ "provider"/"vendor" (config) should be reconciled when the PRD is next revised. A new native top-level path prefix (beyond `/v1/`, `/api/v3/`) would need an added proxy mount in `server.go`.
 

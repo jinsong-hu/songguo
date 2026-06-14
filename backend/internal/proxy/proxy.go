@@ -16,16 +16,20 @@
 // allow_unmatched, which forwards the bytes metered-zero at unknown
 // confidence.
 //
-// Two routing modes share this handler, decided by the request path:
+// There is one resolution rule, with no addressing "modes": match the wire by
+// path suffix, then select the provider by the first available selector —
 //
-//   - Model-routed (/v1/...): the ergonomic default for OpenAI-compatible SDKs.
-//     The model is read from the body, candidates span every vendor serving it
-//     (priority/weighted-RR/failover), and the upstream URL is the matched wire's
-//     full endpoint (a {model} placeholder substituted, its query merged).
-//   - Passthrough (/x/<vendor>/...): the caller pins a vendor by name; no model
-//     is required (so model-less async polls work), failover is across that
-//     vendor's own credentials only, and the rest of the path is forwarded to
-//     the vendor's origin (scheme://host).
+//   - the X-Songguo-Provider header (an explicit pin by provider id, stripped
+//     before forwarding), else
+//   - the body's model string (every vendor serving it; priority/weighted-RR/
+//     failover), else
+//   - the default: every vendor serving the matched path, priority-ordered.
+//
+// For a vendor with a stored endpoint for the matched wire, the upstream URL is
+// that full endpoint ({model} substituted, query merged); otherwise (an
+// allow_unmatched path, or a wire without a stored endpoint) the inbound path is
+// forwarded verbatim to the vendor's origin. Paths are always native: there is
+// no /x/<vendor>/ mount.
 package proxy
 
 import (
@@ -166,16 +170,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 1b. WebSocket upgrade detection. A WS handshake must be relayed as a raw
 	// byte pipe (see handleWebSocket); it cannot be model-routed (the model
-	// lives only in the body, and there is no body to buffer here), so only the
-	// explicit-vendor /x/ mount supports it. We branch BEFORE buffering the body
-	// so an upgrade is never read as an HTTP body.
+	// lives only in the body, and there is no body to buffer here), so the caller
+	// pins the provider with X-Songguo-Provider. We branch BEFORE buffering the
+	// body so an upgrade is never read as an HTTP body.
 	if isWebSocketUpgrade(r) {
-		if rest, isX := strings.CutPrefix(r.URL.Path, "/x/"); isX {
-			h.handleWebSocket(w, r, user, rest)
-			return
-		}
-		writeError(w, http.StatusUpgradeRequired, "upgrade_required",
-			"websocket upgrades must use /x/<vendor>/... (cannot be model-routed)")
+		h.handleWebSocket(w, r, user)
 		return
 	}
 
@@ -195,10 +194,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// used for this request are stable even if config hot-reloads mid-flight.
 	capCfg := h.captureFor(user)
 
-	// 3. Resolve the route. Mode is decided by the mount path: explicit-vendor
-	// passthrough under /x/, otherwise model-routed under /v1/. Resolution sets
-	// the model/modality, the candidate targets (with their failover policy),
-	// and the per-target upstream-URL builder.
+	// 3. Resolve the route: match the wire by path suffix and select the
+	// provider (X-Songguo-Provider header, else body model, else default).
+	// Resolution sets the model/modality, the candidate targets (with their
+	// failover policy), and the per-target upstream-URL builder.
 	rt, ok := h.resolve(w, r, user, body)
 	if !ok {
 		return
@@ -358,39 +357,46 @@ func (h *handler) denyUnmatched(w http.ResponseWriter, r *http.Request, userID, 
 	writeError(w, http.StatusNotFound, "wire_unmatched", detail)
 }
 
-// resolve dispatches on the request path to build the route, enforcing
-// per-mode scope and writing any error response itself. It returns ok=false
-// when it has already responded.
+// resolve builds the route with a single rule: match the wire by path suffix,
+// then select the provider by the first available selector — the
+// X-Songguo-Provider header (an explicit pin by provider id), else the body's
+// model string, else the default (every vendor serving the matched path,
+// priority-ordered). It enforces scope and writes any error response itself,
+// returning ok=false when it has already responded.
 func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.User, body []byte) (route, bool) {
-	if rest, isX := strings.CutPrefix(r.URL.Path, "/x/"); isX {
-		return h.resolvePassthrough(w, r, user, body, rest)
-	}
-	return h.resolveModelRouted(w, r, user, body)
-}
-
-// resolveModelRouted handles Mode A: model-routed traffic mounted at /v1/. The
-// upstream URL is the matched wire's full endpoint, used as-is ({model}
-// substituted, query merged). For an allow_unmatched path that resolves to no
-// wire, it falls back to the vendor origin plus the path suffix after /v1.
-func (h *handler) resolveModelRouted(w http.ResponseWriter, r *http.Request, user store.User, body []byte) (route, bool) {
-	suffix := strings.TrimPrefix(r.URL.Path, "/v1")
-
 	res := meter.Classify(r.Method, r.URL.Path, body)
 	if res.Model == "" {
-		writeError(w, http.StatusBadRequest, "missing_model", "missing model")
-		return route{}, false
+		// ByteDance openspeech APIs name the billed model in a header rather
+		// than the body; using it lets PriceFor match the price table.
+		res.Model = r.Header.Get("X-Api-Resource-Id")
 	}
 
-	// Scope: the model must be allowed when the user is scoped.
-	if len(user.Scope) > 0 && !contains(user.Scope, res.Model) {
+	// Scope (model-bearing case): reject early if the requested model is not in
+	// a scoped user's allowlist, before any routing work.
+	if res.Model != "" && len(user.Scope) > 0 && !contains(user.Scope, res.Model) {
 		writeError(w, http.StatusForbidden, "model_not_allowed", "model not allowed for this user")
 		return route{}, false
 	}
 
-	targets, err := h.router.Candidates(res.Model)
+	// Select the candidate set. A provider pin wins; else the body's model
+	// routes across every vendor serving it; else the default is every vendor
+	// (wire matching below narrows to those serving the path, priority-ordered).
+	pin := r.Header.Get("X-Songguo-Provider")
+	var (
+		targets []router.Target
+		err     error
+	)
+	switch {
+	case pin != "":
+		targets, err = h.router.CandidatesForProvider(pin)
+	case res.Model != "":
+		targets, err = h.router.Candidates(res.Model)
+	default:
+		targets, err = h.router.AllCandidates()
+	}
 	if err != nil {
 		if errors.Is(err, router.ErrNoVendor) {
-			writeError(w, http.StatusBadGateway, "no_upstream", "no upstream for model")
+			writeError(w, http.StatusBadGateway, "no_upstream", "no upstream serves this request")
 			return route{}, false
 		}
 		h.logger.Error("routing failed", "err", err)
@@ -398,118 +404,51 @@ func (h *handler) resolveModelRouted(w http.ResponseWriter, r *http.Request, use
 		return route{}, false
 	}
 
-	// Optional provider pin: a caller (the dashboard test panel) can constrain
-	// model-routed traffic to one configured provider by its id, so a model
-	// served by several providers can be exercised one provider at a time
-	// without losing the real /v1 routing/metering path. Every vendor derived
-	// from a provider carries that provider's id as its credential id, so the
-	// pin survives the (origin, adapter) vendor split.
-	if pin := r.Header.Get("X-Songguo-Provider"); pin != "" {
-		var only []router.Target
-		for _, t := range targets {
-			if t.Credential.ID == pin {
-				only = append(only, t)
-			}
-		}
-		if len(only) == 0 {
-			writeError(w, http.StatusBadGateway, "no_upstream", "requested provider does not serve this model")
-			return route{}, false
-		}
-		targets = only
-	}
-
-	kept, wires, denied := resolveWires(targets, r.Method, suffix)
+	kept, wires, denied := resolveWires(targets, r.Method, r.URL.Path)
 	if len(kept) == 0 {
-		h.denyUnmatched(w, r, user.ID, res.Model, suffix, denied)
+		h.denyUnmatched(w, r, user.ID, res.Model, r.URL.Path, denied)
 		return route{}, false
 	}
 
+	// Scope (model-less case): a scoped user is restricted to its allowed
+	// providers/vendors when there is no model to check.
+	if res.Model == "" && len(user.Scope) > 0 {
+		kept = filterScopedVendors(kept, user.Scope)
+		if len(kept) == 0 {
+			writeError(w, http.StatusForbidden, "vendor_not_allowed", "vendor not allowed for this user")
+			return route{}, false
+		}
+	}
+
+	model := res.Model
 	return route{
-		model:    res.Model,
+		model:    model,
 		modality: res.Modality,
 		targets:  kept,
 		wires:    wires,
 		upstreamURL: func(t router.Target) string {
 			if rw, ok := wires[t.Vendor.Name]; ok && rw.matched {
 				if ep, ok := t.Vendor.Endpoints[rw.wire.Name]; ok {
-					return buildUpstreamURL(ep, res.Model, r.URL.RawQuery)
+					return buildUpstreamURL(ep, model, r.URL.RawQuery)
 				}
 			}
-			// allow_unmatched (or a wire without a stored endpoint): forward to
-			// the vendor origin with the inbound path, as before.
-			return joinQuery(strings.TrimRight(t.Vendor.Origin, "/")+suffix, r.URL.RawQuery)
+			// allow_unmatched (or a matched wire without a stored endpoint):
+			// forward the inbound path verbatim to the vendor origin.
+			return joinQuery(strings.TrimRight(t.Vendor.Origin, "/")+r.URL.Path, r.URL.RawQuery)
 		},
 	}, true
 }
 
-// resolvePassthrough handles Mode B: explicit-vendor passthrough mounted at
-// /x/<vendor>/<rest>. No model is required (this is what lets model-less calls
-// like async GET /api/v1/tasks/{id} polls through). The rest of the path is
-// appended to the vendor's origin (scheme://host), so native/async/rerank
-// endpoints are reachable. Failover is across the named vendor's own credentials
-// only.
-func (h *handler) resolvePassthrough(w http.ResponseWriter, r *http.Request, user store.User, body []byte, rest string) (route, bool) {
-	vendorName, rest, ok := strings.Cut(rest, "/")
-	if !ok || vendorName == "" || rest == "" {
-		writeError(w, http.StatusNotFound, "not_found", "expected /x/<vendor>/<path>")
-		return route{}, false
+// filterScopedVendors keeps only the targets whose vendor name is in the scope
+// allowlist, used to constrain a model-less request from a scoped user.
+func filterScopedVendors(targets []router.Target, scope []string) []router.Target {
+	var out []router.Target
+	for _, t := range targets {
+		if contains(scope, t.Vendor.Name) {
+			out = append(out, t)
+		}
 	}
-	rest = "/" + rest
-
-	snap := h.snapshot()
-	if snap == nil {
-		writeError(w, http.StatusNotFound, "unknown_vendor", "unknown vendor")
-		return route{}, false
-	}
-	vendor, ok := snap.Vendor(vendorName)
-	if !ok {
-		writeError(w, http.StatusNotFound, "unknown_vendor", "unknown vendor")
-		return route{}, false
-	}
-
-	// Scope: in passthrough mode a scoped user restricts which VENDORS it may
-	// address, not which models (model is often absent here).
-	if len(user.Scope) > 0 && !contains(user.Scope, vendorName) {
-		writeError(w, http.StatusForbidden, "vendor_not_allowed", "vendor not allowed for this user")
-		return route{}, false
-	}
-
-	if vendor.Origin == "" {
-		h.logger.Error("vendor has no origin", "vendor", vendorName)
-		writeError(w, http.StatusBadGateway, "upstream_error", "vendor origin invalid")
-		return route{}, false
-	}
-	origin := vendor.Origin
-
-	targets, err := h.router.CandidatesForVendor(vendorName)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "no_upstream", "no credentials for vendor")
-		return route{}, false
-	}
-
-	// Best-effort metering only; model may be empty for model-less calls.
-	res := meter.Classify(r.Method, rest, body)
-	if res.Model == "" {
-		// ByteDance openspeech APIs name the billed model in a header rather
-		// than the body; using it lets PriceFor match the price table.
-		res.Model = r.Header.Get("X-Api-Resource-Id")
-	}
-
-	kept, wires, denied := resolveWires(targets, r.Method, rest)
-	if len(kept) == 0 {
-		h.denyUnmatched(w, r, user.ID, res.Model, rest, denied)
-		return route{}, false
-	}
-
-	return route{
-		model:    res.Model,
-		modality: res.Modality,
-		targets:  kept,
-		wires:    wires,
-		upstreamURL: func(router.Target) string {
-			return joinQuery(origin+rest, r.URL.RawQuery)
-		},
-	}, true
+	return out
 }
 
 // buildUpstreamRequest constructs the upstream request: the given URL, the

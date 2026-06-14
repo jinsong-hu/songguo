@@ -9,8 +9,10 @@ info:
     when that key is empty the server runs the API unprotected and logs a warning.
 
     This describes only the control plane. The data plane — the transparent proxy
-    at `/v1/*` (model-routed) and `/x/<provider>/*` (passthrough) — speaks each
-    vendor's native wire protocol and is documented in docs/registry.md.
+    at the native vendor paths (`/v1/*`, `/api/v3/*`), with the provider selected
+    by the `X-Songguo-Provider` header, else the body's model, else the wire
+    default — speaks each vendor's native wire protocol and is documented in
+    docs/registry.md.
 servers:
   - url: /
 security:

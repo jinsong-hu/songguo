@@ -16,8 +16,10 @@ import (
 type Options struct {
 	// Addr is the listen address, e.g. ":8080".
 	Addr string
-	// ProxyHandler, if non-nil, is mounted under /v1/ (model-routed) and /x/
-	// (explicit-vendor passthrough) as the transparent proxy.
+	// ProxyHandler, if non-nil, is the transparent proxy. It is mounted at the
+	// native vendor path prefixes (/v1/ for OpenAI/Anthropic-shaped APIs, /api/v3/
+	// for Volcengine speech); the provider is selected by header/model/default.
+	// There is no /x/ passthrough mount — all addressing is native + explicit.
 	ProxyHandler http.Handler
 	// AdminHandler, if non-nil, is mounted under /api/ as the admin/dashboard API.
 	AdminHandler http.Handler
@@ -55,11 +57,13 @@ func New(cfg Options) *Server {
 func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /healthz", handleHealthz)
 	if s.opts.ProxyHandler != nil {
-		// Consumers point their SDK base URL at http://<songguo>/v1 (model-routed),
-		// and address vendors explicitly at http://<songguo>/x/<vendor>/...
-		// (passthrough for native, async, and other non-OpenAI-shaped APIs).
+		// Consumers call native vendor paths directly: OpenAI/Anthropic-shaped
+		// APIs under /v1/, Volcengine speech under /api/v3/. The proxy matches the
+		// wire by path suffix and selects the provider by header/model/default.
+		// /api/v3/ is more specific than the admin API's /api/ mount, so ServeMux
+		// routes it here; new native prefixes are added as further mounts.
 		s.mux.Handle("/v1/", s.opts.ProxyHandler)
-		s.mux.Handle("/x/", s.opts.ProxyHandler)
+		s.mux.Handle("/api/v3/", s.opts.ProxyHandler)
 	}
 	if s.opts.AdminHandler != nil {
 		// The dashboard and CLI call the admin API under http://<songguo>/api.
@@ -76,7 +80,7 @@ func (s *Server) registerRoutes() {
 		s.mux.Handle("GET /openapi.json", s.opts.OpenAPIHandler)
 	}
 	// Serve the embedded React dashboard at "/". The more specific /healthz,
-	// /v1/, /x/, and /api/ patterns registered above take precedence in
+	// /v1/, /api/v3/, and /api/ patterns registered above take precedence in
 	// ServeMux, so this catch-all only handles dashboard assets and client-side
 	// routes.
 	if sub, err := web.FS(); err == nil {

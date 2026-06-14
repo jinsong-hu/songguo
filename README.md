@@ -17,12 +17,12 @@ Songguo is **single-tenant, multi-token**: one owner, many scoped keys. No accou
 ## Features (v1)
 
 - **Transparent proxy** for OpenAI-compatible APIs (chat, embeddings), including **SSE streaming** — forwarded chunk-by-chunk, never buffered.
-- **Two routing modes** — model-routed `/v1/...` for OpenAI-compatible SDKs, and explicit-vendor passthrough `/x/<vendor>/...` for native, rerank, and async submit→poll APIs (see below).
+- **One addressing model** — native vendor paths (`/v1/...`, `/api/v3/...`) with the provider selected by the `X-Songguo-Provider` header, else the body's model, else the wire default. Covers OpenAI-compatible SDKs, native/rerank, and model-less submit→poll APIs alike — no `/x/` mount (see below).
 - **号池 routing + failover** — multiple vendors per model and multiple credentials per vendor; priority → weighted round-robin, credential rotation, automatic failover on `429`/`5xx`.
 - **Budgets & scope** per token (hard cap, allowed models, per-token RPM). Over-budget calls are rejected, not transformed.
 - **Read-only metering** — usage sniffed from the native payload (with coarse fallback); a parse failure never blocks traffic. Per-model pricing yields true cost.
 - **Append-only call log** — one row per call attempt; every dashboard view is a query over it.
-- **WebSocket passthrough** — realtime APIs (OpenAI Realtime, streaming ASR/TTS) proxied over `/x/<vendor>/`: the handshake is replayed with the credential swapped, frames are piped untouched, and the session is metered by bytes + duration.
+- **WebSocket passthrough** — realtime APIs (OpenAI Realtime, streaming ASR/TTS) proxied at the native path with an `X-Songguo-Provider` pin: the handshake is replayed with the credential swapped, frames are piped untouched, and the session is metered by bytes + duration.
 - **Opt-in request/response capture** — store the raw request + response bodies (headers redacted, size-capped, retained) and inspect them by expanding a call in the dashboard. Off by default; per-token override.
 - **Dashboard** (light + dark, pine-green) — Overview (spend, runway, by-modality, latency percentiles, recent calls with filters + CSV/JSON export, expand a row to view its captured request/response), **Services** (manage upstreams: keys, models, prices, health/connectivity test), **Catalog** (browse known providers and add one in a click), Tokens (CRUD with budget bars), Settings.
 - **Vendor config in SQLite, managed from the dashboard** — add/edit services, rotate keys, and set prices on the **Services**/**Catalog** pages; changes apply immediately with no restart.
@@ -61,14 +61,17 @@ The call is forwarded to whichever vendor serves `gpt-4o`, metered into the call
 
 Services (an upstream's adapter, base URL, credential, and per-model prices) and tokens both live in **SQLite** and are managed from the dashboard — the **Services** page to add/edit them by hand, the **Catalog** page to add a known provider in one click. A new service speaks one of two adapters: `openai-compatible` (bearer auth) or `anthropic-compatible` (`x-api-key` + `anthropic-version`).
 
-### Routing modes
+### Addressing
 
-Songguo's transparent proxy serves two shapes from one handler, chosen by the request path:
+Songguo's transparent proxy has **one resolution rule** — match the wire by path suffix, then select the provider — applied to every request. Consumers call **native vendor paths** (OpenAI/Anthropic-shaped APIs under `/v1/...`, Volcengine speech under `/api/v3/...`); there is no `/x/` mount. The provider is chosen by the first available selector:
 
-- **Model-routed (`/v1/...`)** — the ergonomic default. Point any OpenAI-compatible SDK at `http://<songguo>/v1`; the model is read from the body and routed across every vendor that serves it (priority → weighted RR → failover). The upstream URL is `base_url + (path after /v1)`.
-- **Explicit passthrough (`/x/<vendor>/...`)** — pin a vendor by name and forward the rest of the path to its **host** (`base_url`'s `scheme://host`, path stripped). **No model is required**, which makes DashScope's native generation endpoints and async image/video **submit→poll** flows forwardable (e.g. `POST /x/bailian/api/v1/services/aigc/.../generation`, then `GET /x/bailian/api/v1/tasks/{id}`). **WebSocket upgrades on this path are proxied too** (realtime APIs): the handshake is replayed with the credential swapped and frames are piped untouched, metered by bytes + duration. Each service holds **one credential**, so this mode is a single attempt; a scoped token may be limited to specific vendors. To spread load over several keys for the same platform, configure several services that serve the same models.
+- **`X-Songguo-Provider` header** — an explicit pin (by provider id). It is a control header, stripped before forwarding. Use it to target a specific account, or to keep an async **submit→poll** lifecycle on one provider.
+- **the body's `model` string** — routed across every vendor that serves it (priority → weighted RR → failover).
+- **the wire's default provider** — used when there is neither a header nor a model (e.g. a model-less `GET /v1/models` or `POST /api/v3/tts/unidirectional`).
 
-**`base_url` convention:** it is the vendor's *published* base **including any version/path prefix** — OpenAI `https://api.openai.com/v1`, Ark/方舟 `https://ark.cn-beijing.volces.com/api/v3`, DashScope/百炼 `https://dashscope.aliyuncs.com/compatible-mode/v1`, DeepSeek `https://api.deepseek.com`. So a model-routed `/v1/chat/completions` reaches `…/api/v3/chat/completions` on Ark, while a passthrough `/x/bailian/api/v1/tasks/abc` reaches `https://dashscope.aliyuncs.com/api/v1/tasks/abc`.
+This makes model-less calls — model listings, the `volc/*` speech wires, and async submit→poll flows — first-class without a special path. **WebSocket upgrades** (realtime APIs) work the same way: they carry no body, so the caller pins the provider with `X-Songguo-Provider`; the handshake is replayed with the credential swapped and frames are piped untouched, metered by bytes + duration.
+
+**Endpoint convention:** each enabled wire stores a full upstream URL (a `{model}` placeholder substituted, its query merged), so non-uniform vendors work as-is — Ark/方舟 `https://ark.cn-beijing.volces.com/api/v3/chat/completions`, DashScope/百炼 `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions`, Azure's `…/deployments/{model}/chat/completions?api-version=…`. Model-less and WebSocket forwarding uses the vendor's `scheme://host` origin with the inbound native path.
 
 ### Request/response capture (optional)
 
@@ -91,8 +94,8 @@ Off by default. Toggle capture from the dashboard **Settings** page to record th
 
 | Path | Purpose |
 |------|---------|
-| `/v1/*` | Transparent proxy, model-routed (consumer traffic) |
-| `/x/<vendor>/*` | Transparent proxy, explicit-vendor passthrough (native / async / rerank / **WebSocket**) |
+| `/v1/*` | Transparent proxy, native OpenAI/Anthropic-shaped paths (consumer traffic) |
+| `/api/v3/*` | Transparent proxy, native Volcengine speech paths (model-less / async / **WebSocket**) |
 | `/api/*` | Admin REST API (admin-key gated) |
 | `/` | Embedded dashboard |
 | `/healthz` | Liveness |
@@ -139,4 +142,4 @@ The dashboard build output goes to `backend/web/dist`, which is committed so the
 
 ## Not in v1 (deferred)
 
-Async multimodal channels (image/video submit→poll) are **forwardable** via `/x/<vendor>/...` passthrough, and **realtime WebSocket** APIs are proxied (metered by bytes + duration). Still deferred: **per-image / per-second media metering** (passthrough media + WebSocket calls are forwarded and recorded, but dollar cost is only computed when the vendor returns token usage), **vendor-specific WebSocket auth** (the WS handshake swaps the `Authorization: Bearer` header — providers that authenticate realtime via signed URLs / query-param tokens need per-vendor handling), AK/SK request signing, MCP tool proxying, tag-based business attribution, and cross-model cost×latency optimization. The calls schema already carries the fields these will use.
+Async multimodal channels (image/video submit→poll) are **forwardable** via native vendor paths (provider pinned with `X-Songguo-Provider`), and **realtime WebSocket** APIs are proxied (metered by bytes + duration). Still deferred: **per-image / per-second media metering** (model-less media + WebSocket calls are forwarded and recorded, but dollar cost is only computed when the vendor returns token usage), **vendor-specific WebSocket auth** (the WS handshake swaps the `Authorization: Bearer` header — providers that authenticate realtime via signed URLs / query-param tokens need per-vendor handling), AK/SK request signing, MCP tool proxying, tag-based business attribution, and cross-model cost×latency optimization. The calls schema already carries the fields these will use.
