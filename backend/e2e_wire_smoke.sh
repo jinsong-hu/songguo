@@ -69,8 +69,8 @@ check "PATCH api_key never echoes raw key" "$(echo "$PATCHED" | grep -c 'sk-upst
 CODE=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/services/new)
 check "GET /services/new serves the SPA" "$CODE" "200"
 
-# 5. Consumer token.
-TOKEN=$(curl -fsS -X POST http://127.0.0.1:18080/api/tokens -H 'Content-Type: application/json' -d '{"name":"t"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["key"])')
+# 5. Consumer user key.
+TOKEN=$(curl -fsS -X POST http://127.0.0.1:18080/api/users -H 'Content-Type: application/json' -d '{"name":"t"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["key"])')
 [ -n "$TOKEN" ] && ok "token created" || bad "token creation"
 
 # 6. Wired chat call routes + meters with cache discount.

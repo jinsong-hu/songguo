@@ -194,7 +194,7 @@ func TestTokenCaptureCreatePatch(t *testing.T) {
 	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
 
 	// Create with capture=true.
-	rec := do(h, "POST", "/api/tokens", "secret", strings.NewReader(`{"name":"cap","capture":true}`))
+	rec := do(h, "POST", "/api/users", "secret", strings.NewReader(`{"name":"cap","capture":true}`))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create: code = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -205,7 +205,7 @@ func TestTokenCaptureCreatePatch(t *testing.T) {
 	}
 
 	// Create without capture -> null (inherit).
-	rec = do(h, "POST", "/api/tokens", "secret", strings.NewReader(`{"name":"inherit"}`))
+	rec = do(h, "POST", "/api/users", "secret", strings.NewReader(`{"name":"inherit"}`))
 	var inherit userView
 	decodeBody(t, rec, &inherit)
 	if inherit.Capture != nil {
@@ -213,7 +213,7 @@ func TestTokenCaptureCreatePatch(t *testing.T) {
 	}
 
 	// Patch capture=false on the inherit token.
-	rec = do(h, "PATCH", "/api/tokens/"+inherit.ID, "secret", strings.NewReader(`{"capture":false}`))
+	rec = do(h, "PATCH", "/api/users/"+inherit.ID, "secret", strings.NewReader(`{"capture":false}`))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("patch: code = %d, body = %s", rec.Code, rec.Body.String())
 	}
