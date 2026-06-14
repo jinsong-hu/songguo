@@ -30,10 +30,20 @@ type serviceView struct {
 // Each service corresponds to a unique model name served by one or more
 // providers. No database table — derived from the live snapshot + call stats.
 func (a *api) handleListServices(w http.ResponseWriter, r *http.Request) {
-	snap := a.snapshot()
-	if snap == nil {
-		writeJSON(w, http.StatusOK, []serviceView{})
+	views, err := a.servicesData()
+	if err != nil {
+		a.writeDataErr(w, "model stats", err)
 		return
+	}
+	writeJSON(w, http.StatusOK, views)
+}
+
+// servicesData derives the model-centric service list from the live snapshot
+// (which providers serve each model) plus per-model call stats.
+func (a *api) servicesData() ([]serviceView, error) {
+	snap := a.snap()
+	if snap == nil {
+		return []serviceView{}, nil
 	}
 
 	vendors := snap.Vendors()
@@ -60,8 +70,7 @@ func (a *api) handleListServices(w http.ResponseWriter, r *http.Request) {
 	// Aggregate call stats per model.
 	modelStats, err := a.store.ModelStats(nil, nil)
 	if err != nil {
-		a.serverError(w, "model stats", err)
-		return
+		return nil, err
 	}
 
 	// Sort models for stable output.
@@ -88,5 +97,5 @@ func (a *api) handleListServices(w http.ResponseWriter, r *http.Request) {
 		}
 		views = append(views, serviceView{Model: m, Providers: pvs, Stats: sv})
 	}
-	writeJSON(w, http.StatusOK, views)
+	return views, nil
 }

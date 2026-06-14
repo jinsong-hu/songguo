@@ -21,6 +21,12 @@ type Options struct {
 	ProxyHandler http.Handler
 	// AdminHandler, if non-nil, is mounted under /api/ as the admin/dashboard API.
 	AdminHandler http.Handler
+	// MCPHandler, if non-nil, is mounted at /mcp as the agent-facing MCP server
+	// over the same control plane as AdminHandler (admin-key gated).
+	MCPHandler http.Handler
+	// OpenAPIHandler, if non-nil, serves the admin API's OpenAPI spec at
+	// /openapi.yaml and /openapi.json (unauthenticated; schema only).
+	OpenAPIHandler http.Handler
 }
 
 // Server wraps an *http.Server and its route mux.
@@ -58,6 +64,16 @@ func (s *Server) registerRoutes() {
 	if s.opts.AdminHandler != nil {
 		// The dashboard and CLI call the admin API under http://<songguo>/api.
 		s.mux.Handle("/api/", s.opts.AdminHandler)
+	}
+	if s.opts.MCPHandler != nil {
+		// Agents connect an MCP client to http://<songguo>/mcp (admin-key gated).
+		s.mux.Handle("/mcp", s.opts.MCPHandler)
+		s.mux.Handle("/mcp/", s.opts.MCPHandler)
+	}
+	if s.opts.OpenAPIHandler != nil {
+		// The machine-readable admin-API contract, unauthenticated (schema only).
+		s.mux.Handle("GET /openapi.yaml", s.opts.OpenAPIHandler)
+		s.mux.Handle("GET /openapi.json", s.opts.OpenAPIHandler)
 	}
 	// Serve the embedded React dashboard at "/". The more specific /healthz,
 	// /v1/, /x/, and /api/ patterns registered above take precedence in

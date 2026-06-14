@@ -3,12 +3,41 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"time"
 )
+
+// apiError is a client-facing (4xx) error returned by the transport-free *Data
+// methods. It carries the HTTP status, a songguo_-prefixed reason, and a safe
+// message. The HTTP layer maps it via writeDataErr; MCP tools surface its
+// message. Server-side failures are returned as ordinary errors instead and
+// become a logged 500 (HTTP) or a generic tool error (MCP).
+type apiError struct {
+	status int
+	reason string
+	msg    string
+}
+
+func (e *apiError) Error() string { return e.msg }
+
+func badRequestErr(msg string) *apiError { return &apiError{http.StatusBadRequest, "bad_request", msg} }
+func notFoundErr(msg string) *apiError   { return &apiError{http.StatusNotFound, "not_found", msg} }
+func conflictErr(msg string) *apiError   { return &apiError{http.StatusConflict, "conflict", msg} }
+
+// writeDataErr maps an error from a *Data method onto an HTTP response: a known
+// *apiError becomes its status/reason/message, anything else a logged 500.
+func (a *api) writeDataErr(w http.ResponseWriter, op string, err error) {
+	var ae *apiError
+	if errors.As(err, &ae) {
+		writeError(w, ae.status, ae.reason, ae.msg)
+		return
+	}
+	a.serverError(w, op, err)
+}
 
 // maxRequestBody bounds the JSON request body size for admin writes.
 const maxRequestBody = 1 << 20 // 1 MiB

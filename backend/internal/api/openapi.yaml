@@ -1,0 +1,684 @@
+openapi: 3.1.0
+info:
+  title: Songguo Admin API
+  version: "1"
+  description: >
+    Control-plane (admin) API for the Songguo AI usage gateway. It is read-mostly
+    and consumed by the dashboard, the `songguo` MCP server, and any other tooling.
+    Every endpoint is gated by a single admin bearer key (`SONGGUO_ADMIN_KEY`);
+    when that key is empty the server runs the API unprotected and logs a warning.
+
+    This describes only the control plane. The data plane — the transparent proxy
+    at `/v1/*` (model-routed) and `/x/<provider>/*` (passthrough) — speaks each
+    vendor's native wire protocol and is documented in docs/registry.md.
+servers:
+  - url: /
+security:
+  - adminKey: []
+tags:
+  - name: usage
+  - name: calls
+  - name: users
+  - name: providers
+  - name: services
+  - name: config
+paths:
+  /api/overview:
+    get:
+      tags: [usage]
+      summary: Spend & health summary over a window
+      operationId: getOverview
+      parameters:
+        - $ref: "#/components/parameters/Since"
+        - $ref: "#/components/parameters/Until"
+      responses:
+        "200":
+          description: Overview
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Overview" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/usage/series:
+    get:
+      tags: [usage]
+      summary: Cost/request/error totals bucketed over time
+      operationId: getUsageSeries
+      parameters:
+        - $ref: "#/components/parameters/Since"
+        - $ref: "#/components/parameters/Until"
+        - name: bucket
+          in: query
+          schema: { type: string, enum: [hour, day] }
+          description: Bucket size; omit to auto-select (day for ranges over 2 days, else hour).
+      responses:
+        "200":
+          description: Series
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UsageSeries" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/calls:
+    get:
+      tags: [calls]
+      summary: Browse the per-call ledger (filtered, paginated)
+      operationId: listCalls
+      parameters:
+        - { name: user_id, in: query, schema: { type: string } }
+        - { name: model, in: query, schema: { type: string } }
+        - { name: vendor, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: integer }, description: HTTP status filter }
+        - $ref: "#/components/parameters/Since"
+        - $ref: "#/components/parameters/Until"
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 500 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: A page of calls plus the total count for the filter
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CallsPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/calls/export:
+    get:
+      tags: [calls]
+      summary: Download filtered calls as CSV or JSON
+      operationId: exportCalls
+      parameters:
+        - name: format
+          in: query
+          schema: { type: string, enum: [csv, json], default: csv }
+        - { name: user_id, in: query, schema: { type: string } }
+        - { name: model, in: query, schema: { type: string } }
+        - { name: vendor, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: integer } }
+        - $ref: "#/components/parameters/Since"
+        - $ref: "#/components/parameters/Until"
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: A downloadable attachment (text/csv or application/json)
+          content:
+            text/csv: { schema: { type: string } }
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Call" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/calls/{id}/trace:
+    get:
+      tags: [calls]
+      summary: Captured request/response payload for a call
+      operationId: getCallTrace
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: Trace
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Trace" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/users:
+    get:
+      tags: [users]
+      summary: List users with computed lifetime spend
+      operationId: listUsers
+      responses:
+        "200":
+          description: Users
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/User" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [users]
+      summary: Create a user (plaintext key returned once)
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateUser" }
+      responses:
+        "201":
+          description: The created user, including the plaintext `key`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/users/{id}:
+    patch:
+      tags: [users]
+      summary: Update a user's mutable fields
+      operationId: patchUser
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PatchUser" }
+      responses:
+        "200":
+          description: The updated user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/users/{id}/revoke:
+    post:
+      tags: [users]
+      summary: Revoke a user's key
+      operationId: revokeUser
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The revoked user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/vendors:
+    get:
+      tags: [providers]
+      summary: List vendors from the live snapshot (with stats)
+      operationId: listVendors
+      responses:
+        "200":
+          description: Vendors
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Vendor" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/vendors/{name}/test:
+    post:
+      tags: [providers]
+      summary: Probe a vendor host for reachability
+      operationId: testVendor
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Reachability result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TestResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/services:
+    get:
+      tags: [services]
+      summary: Auto-derived, model-centric services
+      operationId: listServices
+      responses:
+        "200":
+          description: Services
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Service" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/providers:
+    get:
+      tags: [providers]
+      summary: List configured providers (keys masked)
+      operationId: listProviders
+      responses:
+        "200":
+          description: Providers
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Provider" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [providers]
+      summary: Create a provider
+      operationId: createProvider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateProvider" }
+      responses:
+        "201":
+          description: The created provider
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Provider" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/providers/{id}:
+    get:
+      tags: [providers]
+      summary: Get one provider
+      operationId: getProvider
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Provider
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Provider" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [providers]
+      summary: Update a provider's mutable fields
+      operationId: patchProvider
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PatchProvider" }
+      responses:
+        "200":
+          description: The updated provider
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Provider" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      tags: [providers]
+      summary: Delete a provider
+      operationId: deleteProvider
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/providers/{id}/test:
+    post:
+      tags: [providers]
+      summary: Probe a provider host for reachability
+      operationId: testProvider
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Reachability result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TestResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/catalog:
+    get:
+      tags: [config]
+      summary: Provider preset catalogue
+      operationId: getCatalog
+      responses:
+        "200":
+          description: Catalogue (preset directory)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/wires:
+    get:
+      tags: [config]
+      summary: Registered wire names
+      operationId: listWires
+      responses:
+        "200":
+          description: Wire names
+          content:
+            application/json:
+              schema: { type: array, items: { type: string } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/settings:
+    get:
+      tags: [config]
+      summary: Non-secret runtime settings
+      operationId: getSettings
+      responses:
+        "200":
+          description: Settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Settings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [config]
+      summary: Update capture settings
+      operationId: patchSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PatchSettings" }
+      responses:
+        "200":
+          description: The updated settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Settings" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/pricing:
+    get:
+      tags: [config]
+      summary: Flattened per-provider model prices
+      operationId: listPricing
+      responses:
+        "200":
+          description: Pricing rows
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/PricingRow" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+components:
+  securitySchemes:
+    adminKey:
+      type: http
+      scheme: bearer
+      description: The admin key from SONGGUO_ADMIN_KEY.
+  parameters:
+    Since:
+      name: since
+      in: query
+      schema: { type: integer, format: int64 }
+      description: Window start, unix seconds.
+    Until:
+      name: until
+      in: query
+      schema: { type: integer, format: int64 }
+      description: Window end, unix seconds.
+  responses:
+    Unauthorized:
+      description: Missing or invalid admin key
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: Conflict (e.g. duplicate name)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            message: { type: string }
+            type: { type: string, description: "songguo_-prefixed reason, e.g. songguo_not_found" }
+    Range:
+      type: object
+      properties:
+        since: { type: integer, format: int64 }
+        until: { type: integer, format: int64 }
+    Latency:
+      type: object
+      properties:
+        p50: { type: integer, format: int64 }
+        p95: { type: integer, format: int64 }
+        p99: { type: integer, format: int64 }
+    Overview:
+      type: object
+      properties:
+        range: { $ref: "#/components/schemas/Range" }
+        total_spend: { type: number }
+        spend_by_modality:
+          type: object
+          additionalProperties: { type: number }
+        requests: { type: integer }
+        errors: { type: integer }
+        error_rate: { type: number }
+        latency_ms: { $ref: "#/components/schemas/Latency" }
+        vendors_active: { type: integer }
+        users_active: { type: integer }
+        daily_burn: { type: number }
+        runway_days: { type: [number, "null"] }
+    SeriesPoint:
+      type: object
+      properties:
+        ts: { type: string, format: date-time }
+        cost: { type: number }
+        requests: { type: integer }
+        errors: { type: integer }
+    UsageSeries:
+      type: object
+      properties:
+        bucket: { type: string }
+        points: { type: array, items: { $ref: "#/components/schemas/SeriesPoint" } }
+    Call:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        ts: { type: string, format: date-time }
+        user_id: { type: string }
+        model: { type: string }
+        modality: { type: string }
+        vendor: { type: string }
+        credential_id: { type: string }
+        wire: { type: string }
+        confidence: { type: string, description: "measured | derived | unknown" }
+        attempt: { type: integer }
+        status: { type: integer }
+        err: { type: string }
+        usage: { type: object, additionalProperties: true }
+        cost: { type: number }
+        latency_ms: { type: integer, format: int64 }
+        stream: { type: boolean }
+        tags: { type: object, additionalProperties: { type: string } }
+        has_trace: { type: boolean }
+    CallsPage:
+      type: object
+      properties:
+        entries: { type: array, items: { $ref: "#/components/schemas/Call" } }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+    TraceSide:
+      type: object
+      properties:
+        headers: { type: object, additionalProperties: { type: string } }
+        body: { type: string }
+        body_base64: { type: boolean }
+        content_type: { type: string }
+        truncated: { type: boolean }
+    Trace:
+      type: object
+      properties:
+        call_id: { type: integer, format: int64 }
+        request: { $ref: "#/components/schemas/TraceSide" }
+        response: { $ref: "#/components/schemas/TraceSide" }
+        captured_at: { type: string, format: date-time }
+    User:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        key_prefix: { type: string }
+        budget: { type: [number, "null"] }
+        scope: { type: array, items: { type: string } }
+        rpm: { type: integer }
+        capture: { type: [boolean, "null"] }
+        created_at: { type: string, format: date-time }
+        revoked_at: { type: [string, "null"], format: date-time }
+        spent: { type: number }
+        active: { type: boolean }
+        key: { type: string, description: "Plaintext key; present only in the create response." }
+    CreateUser:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        budget: { type: number, description: "USD budget cap." }
+        scope: { type: array, items: { type: string }, description: "Allowed model strings." }
+        rpm: { type: integer }
+        capture: { type: boolean }
+    PatchUser:
+      type: object
+      properties:
+        name: { type: string }
+        budget: { type: number }
+        scope: { type: array, items: { type: string } }
+        rpm: { type: integer }
+        capture: { type: boolean }
+    ProviderEndpoint:
+      type: object
+      properties:
+        wire: { type: string, description: "Wire name, e.g. openai/chat." }
+        endpoint: { type: string, description: "Full upstream URL for this wire." }
+        adapter: { type: string, description: "Auth scheme: openai-compatible | anthropic-compatible | volc-speech." }
+    ProviderModel:
+      type: object
+      properties:
+        model: { type: string }
+        input: { type: number }
+        output: { type: number }
+        cached_input: { type: number }
+        unit: { type: string, description: "e.g. per_1m_tokens." }
+    VendorStats:
+      type: object
+      properties:
+        requests: { type: integer }
+        errors: { type: integer }
+        error_rate: { type: number }
+        avg_latency_ms: { type: number }
+        last_status: { type: integer }
+        healthy: { type: boolean }
+    Provider:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        vendor: { type: string }
+        priority: { type: integer }
+        weight: { type: integer }
+        enabled: { type: boolean }
+        catalog_id: { type: string }
+        endpoints: { type: array, items: { $ref: "#/components/schemas/ProviderEndpoint" } }
+        allow_unmatched: { type: boolean }
+        quirks: { type: object, additionalProperties: { type: string } }
+        masked_key: { type: string }
+        models: { type: array, items: { $ref: "#/components/schemas/ProviderModel" } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        stats: { $ref: "#/components/schemas/VendorStats" }
+    CreateProvider:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        vendor: { type: string }
+        priority: { type: integer }
+        weight: { type: integer }
+        enabled: { type: boolean }
+        catalog_id: { type: string }
+        allow_unmatched: { type: boolean }
+        quirks: { type: object, additionalProperties: { type: string } }
+        api_key: { type: string }
+        models: { type: array, items: { $ref: "#/components/schemas/ProviderModel" } }
+        endpoints: { type: array, items: { $ref: "#/components/schemas/ProviderEndpoint" } }
+    PatchProvider:
+      type: object
+      description: Only present fields change. Supplying models or endpoints replaces those lists wholesale.
+      properties:
+        name: { type: string }
+        vendor: { type: string }
+        priority: { type: integer }
+        weight: { type: integer }
+        enabled: { type: boolean }
+        allow_unmatched: { type: boolean }
+        api_key: { type: string, description: "Replaces the key when non-empty." }
+        quirks: { type: object, additionalProperties: { type: string } }
+        models: { type: array, items: { $ref: "#/components/schemas/ProviderModel" } }
+        endpoints: { type: array, items: { $ref: "#/components/schemas/ProviderEndpoint" } }
+    ServiceProvider:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        priority: { type: integer }
+        weight: { type: integer }
+    ServiceStats:
+      type: object
+      properties:
+        requests: { type: integer }
+        errors: { type: integer }
+        avg_latency_ms: { type: number }
+    Service:
+      type: object
+      properties:
+        model: { type: string }
+        providers: { type: array, items: { $ref: "#/components/schemas/ServiceProvider" } }
+        stats: { $ref: "#/components/schemas/ServiceStats" }
+    PricingRow:
+      type: object
+      properties:
+        vendor: { type: string }
+        model: { type: string }
+        input: { type: number }
+        output: { type: number }
+        unit: { type: string }
+    Settings:
+      type: object
+      properties:
+        listen: { type: string }
+        db_path: { type: string }
+        admin_protected: { type: boolean }
+        version: { type: string }
+        capture: { type: boolean }
+        capture_max_bytes: { type: integer }
+        capture_retain: { type: integer }
+    PatchSettings:
+      type: object
+      properties:
+        capture: { type: boolean }
+        capture_max_bytes: { type: integer }
+        capture_retain: { type: integer }
+    Credential:
+      type: object
+      properties:
+        id: { type: string }
+        masked_key: { type: string }
+    Price:
+      type: object
+      properties:
+        input: { type: number }
+        output: { type: number }
+        unit: { type: string }
+    Vendor:
+      type: object
+      properties:
+        name: { type: string }
+        base_url: { type: string }
+        served_models: { type: array, items: { type: string } }
+        priority: { type: integer }
+        weight: { type: integer }
+        credential: { $ref: "#/components/schemas/Credential" }
+        prices: { type: object, additionalProperties: { $ref: "#/components/schemas/Price" } }
+        stats: { $ref: "#/components/schemas/VendorStats" }
+    TestResult:
+      type: object
+      properties:
+        reachable: { type: boolean }
+        status: { type: integer }
+        latency_ms: { type: integer, format: int64 }
+        error: { type: string }

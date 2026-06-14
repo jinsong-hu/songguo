@@ -57,7 +57,7 @@ func main() {
 		Logger:   logger,
 	})
 
-	adminHandler := api.NewHandler(api.Deps{
+	adminDeps := api.Deps{
 		Store:      st,
 		Snapshot:   manager.Current,
 		Reload:     manager.Reload,
@@ -66,12 +66,24 @@ func main() {
 		Version:    "dev",
 		ListenAddr: listen,
 		DBPath:     dbPath,
-	})
+	}
+	adminHandler := api.NewHandler(adminDeps)
+
+	// The MCP server exposes the same control plane as tools (admin-key gated).
+	// Write tools are opt-in: only registered when SONGGUO_MCP_WRITE is truthy,
+	// since the admin key already controls budgets and upstream credentials.
+	mcpWrite := getenv("SONGGUO_MCP_WRITE", "") != ""
+	mcpHandler := api.NewMCPHandler(adminDeps, mcpWrite)
+	if mcpWrite {
+		logger.Warn("MCP write tools are ENABLED (SONGGUO_MCP_WRITE is set)")
+	}
 
 	srv := server.New(server.Options{
-		Addr:         listen,
-		ProxyHandler: proxyHandler,
-		AdminHandler: adminHandler,
+		Addr:           listen,
+		ProxyHandler:   proxyHandler,
+		AdminHandler:   adminHandler,
+		MCPHandler:     mcpHandler,
+		OpenAPIHandler: api.NewOpenAPIHandler(),
 	})
 
 	errCh := make(chan error, 1)

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -98,80 +99,98 @@ func newProviderView(pvd store.Provider, stat store.VendorStat, hasStat bool) pr
 
 type providerModelReq struct {
 	Model       string  `json:"model"`
-	Input       float64 `json:"input"`
-	Output      float64 `json:"output"`
-	CachedInput float64 `json:"cached_input"`
-	Unit        string  `json:"unit"`
+	Input       float64 `json:"input,omitempty"`
+	Output      float64 `json:"output,omitempty"`
+	CachedInput float64 `json:"cached_input,omitempty"`
+	Unit        string  `json:"unit,omitempty"`
 }
 
 type providerEndpointReq struct {
 	Wire     string `json:"wire"`
 	Endpoint string `json:"endpoint"`
-	Adapter  string `json:"adapter"`
+	Adapter  string `json:"adapter,omitempty"`
 }
 
 type createProviderReq struct {
 	Name           string                `json:"name"`
-	Vendor         string                `json:"vendor"`
-	Priority       int                   `json:"priority"`
-	Weight         int                   `json:"weight"`
-	Enabled        *bool                 `json:"enabled"`
-	CatalogID      string                `json:"catalog_id"`
-	AllowUnmatched bool                  `json:"allow_unmatched"`
-	Quirks         map[string]string     `json:"quirks"`
-	APIKey         string                `json:"api_key"`
-	Models         []providerModelReq    `json:"models"`
-	Endpoints      []providerEndpointReq `json:"endpoints"`
+	Vendor         string                `json:"vendor,omitempty"`
+	Priority       int                   `json:"priority,omitempty"`
+	Weight         int                   `json:"weight,omitempty"`
+	Enabled        *bool                 `json:"enabled,omitempty"`
+	CatalogID      string                `json:"catalog_id,omitempty"`
+	AllowUnmatched bool                  `json:"allow_unmatched,omitempty"`
+	Quirks         map[string]string     `json:"quirks,omitempty"`
+	APIKey         string                `json:"api_key,omitempty"`
+	Models         []providerModelReq    `json:"models,omitempty"`
+	Endpoints      []providerEndpointReq `json:"endpoints,omitempty"`
 }
 
 type patchProviderReq struct {
-	Name           *string `json:"name"`
-	Vendor         *string `json:"vendor"`
-	Priority       *int    `json:"priority"`
-	Weight         *int    `json:"weight"`
-	Enabled        *bool   `json:"enabled"`
-	AllowUnmatched *bool   `json:"allow_unmatched"`
+	Name           *string `json:"name,omitempty"`
+	Vendor         *string `json:"vendor,omitempty"`
+	Priority       *int    `json:"priority,omitempty"`
+	Weight         *int    `json:"weight,omitempty"`
+	Enabled        *bool   `json:"enabled,omitempty"`
+	AllowUnmatched *bool   `json:"allow_unmatched,omitempty"`
 	// APIKey replaces the provider's key when present and non-empty.
-	APIKey    *string                `json:"api_key"`
-	Quirks    *map[string]string     `json:"quirks"`
-	Models    *[]providerModelReq    `json:"models"`
-	Endpoints *[]providerEndpointReq `json:"endpoints"`
+	APIKey    *string                `json:"api_key,omitempty"`
+	Quirks    *map[string]string     `json:"quirks,omitempty"`
+	Models    *[]providerModelReq    `json:"models,omitempty"`
+	Endpoints *[]providerEndpointReq `json:"endpoints,omitempty"`
 }
 
 // --- handlers ---
 
 // handleListProviders returns all configured providers (keys masked) with stats.
 func (a *api) handleListProviders(w http.ResponseWriter, r *http.Request) {
+	views, err := a.providersData()
+	if err != nil {
+		a.writeDataErr(w, "list providers", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, views)
+}
+
+// providersData returns all configured providers (keys masked) with per-vendor
+// stats.
+func (a *api) providersData() ([]providerView, error) {
 	pvds, err := a.store.ListProviders()
 	if err != nil {
-		a.serverError(w, "list providers", err)
-		return
+		return nil, err
 	}
 	stats, err := a.store.VendorStats(nil, nil)
 	if err != nil {
-		a.serverError(w, "vendor stats", err)
-		return
+		return nil, err
 	}
 	views := make([]providerView, 0, len(pvds))
 	for _, pvd := range pvds {
 		st, ok := stats[pvd.Name]
 		views = append(views, newProviderView(pvd, st, ok))
 	}
-	writeJSON(w, http.StatusOK, views)
+	return views, nil
 }
 
 // handleGetProvider returns one provider.
 func (a *api) handleGetProvider(w http.ResponseWriter, r *http.Request) {
-	pvd, err := a.store.GetProvider(r.PathValue("id"))
+	view, err := a.getProviderData(r.PathValue("id"))
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "provider not found")
-			return
-		}
-		a.serverError(w, "get provider", err)
+		a.writeDataErr(w, "get provider", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, newProviderView(pvd, store.VendorStat{}, false))
+	writeJSON(w, http.StatusOK, view)
+}
+
+// getProviderData returns one provider (key masked). An unknown id is a
+// *apiError (404).
+func (a *api) getProviderData(id string) (providerView, error) {
+	pvd, err := a.store.GetProvider(id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return providerView{}, notFoundErr("provider not found")
+		}
+		return providerView{}, err
+	}
+	return newProviderView(pvd, store.VendorStat{}, false), nil
 }
 
 // handleCreateProvider creates a provider from a JSON body and reloads the config.
@@ -181,14 +200,24 @@ func (a *api) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
 		return
 	}
-	if strings.TrimSpace(req.Name) == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "name is required")
+	view, err := a.createProviderData(req)
+	if err != nil {
+		a.writeDataErr(w, "create provider", err)
 		return
+	}
+	writeJSON(w, http.StatusCreated, view)
+}
+
+// createProviderData creates a provider and reloads the live config. A missing
+// name or an invalid endpoint is a *apiError (400); a duplicate name is a
+// *apiError (409).
+func (a *api) createProviderData(req createProviderReq) (providerView, error) {
+	if strings.TrimSpace(req.Name) == "" {
+		return providerView{}, badRequestErr("name is required")
 	}
 	endpoints, msg := toStoreEndpoints(req.Endpoints)
 	if msg != "" {
-		writeError(w, http.StatusBadRequest, "bad_request", msg)
-		return
+		return providerView{}, badRequestErr(msg)
 	}
 
 	enabled := true
@@ -211,14 +240,12 @@ func (a *api) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
-			writeError(w, http.StatusConflict, "conflict", "a provider with that name already exists")
-			return
+			return providerView{}, conflictErr("a provider with that name already exists")
 		}
-		a.serverError(w, "create provider", err)
-		return
+		return providerView{}, err
 	}
 	a.reloadAfterWrite()
-	writeJSON(w, http.StatusCreated, newProviderView(pvd, store.VendorStat{}, false))
+	return newProviderView(pvd, store.VendorStat{}, false), nil
 }
 
 // handlePatchProvider applies a subset of fields and reloads the config.
@@ -228,11 +255,22 @@ func (a *api) handlePatchProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
 		return
 	}
+	view, err := a.updateProviderData(r.PathValue("id"), req)
+	if err != nil {
+		a.writeDataErr(w, "update provider", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// updateProviderData applies a subset of fields and reloads the config. An empty
+// api_key or invalid endpoint is a *apiError (400); an unknown id is 404; a
+// duplicate name is 409.
+func (a *api) updateProviderData(id string, req patchProviderReq) (providerView, error) {
 	if req.APIKey != nil {
 		trimmed := strings.TrimSpace(*req.APIKey)
 		if trimmed == "" {
-			writeError(w, http.StatusBadRequest, "bad_request", "api_key cannot be empty")
-			return
+			return providerView{}, badRequestErr("api_key cannot be empty")
 		}
 		req.APIKey = &trimmed
 	}
@@ -255,8 +293,7 @@ func (a *api) handlePatchProvider(w http.ResponseWriter, r *http.Request) {
 	if req.Endpoints != nil {
 		eps, msg := toStoreEndpoints(*req.Endpoints)
 		if msg != "" {
-			writeError(w, http.StatusBadRequest, "bad_request", msg)
-			return
+			return providerView{}, badRequestErr(msg)
 		}
 		upd.Endpoints = eps
 		if upd.Endpoints == nil {
@@ -264,67 +301,79 @@ func (a *api) handlePatchProvider(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	pvd, err := a.store.UpdateProvider(r.PathValue("id"), upd)
+	pvd, err := a.store.UpdateProvider(id, upd)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "provider not found")
-			return
+			return providerView{}, notFoundErr("provider not found")
 		}
 		if isUniqueViolation(err) {
-			writeError(w, http.StatusConflict, "conflict", "a provider with that name already exists")
-			return
+			return providerView{}, conflictErr("a provider with that name already exists")
 		}
-		a.serverError(w, "update provider", err)
-		return
+		return providerView{}, err
 	}
 	a.reloadAfterWrite()
-	writeJSON(w, http.StatusOK, newProviderView(pvd, store.VendorStat{}, false))
+	return newProviderView(pvd, store.VendorStat{}, false), nil
 }
 
 // handleDeleteProvider removes a provider and reloads the config.
 func (a *api) handleDeleteProvider(w http.ResponseWriter, r *http.Request) {
-	if err := a.store.DeleteProvider(r.PathValue("id")); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "provider not found")
-			return
-		}
-		a.serverError(w, "delete provider", err)
+	if err := a.deleteProviderData(r.PathValue("id")); err != nil {
+		a.writeDataErr(w, "delete provider", err)
 		return
 	}
-	a.reloadAfterWrite()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteProviderData removes a provider and reloads the config. An unknown id is
+// a *apiError (404).
+func (a *api) deleteProviderData(id string) error {
+	if err := a.store.DeleteProvider(id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return notFoundErr("provider not found")
+		}
+		return err
+	}
+	a.reloadAfterWrite()
+	return nil
 }
 
 // handleTestProvider probes a configured provider's host origin for reachability,
 // authenticating with its API key.
 func (a *api) handleTestProvider(w http.ResponseWriter, r *http.Request) {
-	pvd, err := a.store.GetProvider(r.PathValue("id"))
+	view, err := a.testProviderData(r.Context(), r.PathValue("id"))
+	if err != nil {
+		a.writeDataErr(w, "get provider", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// testProviderData probes the host origin of a provider's first endpoint,
+// authenticating with its API key. Reachability failures are reported in the
+// view (not as errors); only an unknown id returns a *apiError (404).
+func (a *api) testProviderData(ctx context.Context, id string) (testVendorView, error) {
+	pvd, err := a.store.GetProvider(id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "provider not found")
-			return
+			return testVendorView{}, notFoundErr("provider not found")
 		}
-		a.serverError(w, "get provider", err)
-		return
+		return testVendorView{}, err
 	}
 
 	if len(pvd.Endpoints) == 0 {
-		writeJSON(w, http.StatusOK, testVendorView{Reachable: false, Error: "provider has no endpoints"})
-		return
+		return testVendorView{Reachable: false, Error: "provider has no endpoints"}, nil
 	}
 	ep := pvd.Endpoints[0]
 	origin, err := originOf(ep.Endpoint)
 	if err != nil {
-		writeJSON(w, http.StatusOK, testVendorView{Reachable: false, Error: err.Error()})
-		return
+		return testVendorView{Reachable: false, Error: err.Error()}, nil
 	}
-	ctx, cancel := contextWithTimeout(r, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin, nil)
 	if err != nil {
-		writeJSON(w, http.StatusOK, testVendorView{Reachable: false, Error: err.Error()})
-		return
+		return testVendorView{Reachable: false, Error: err.Error()}, nil
 	}
 	if pvd.APIKey != "" {
 		applyTestAuth(req, ep.Adapter, pvd.APIKey)
@@ -334,13 +383,12 @@ func (a *api) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 	resp, err := a.client.Do(req)
 	latency := a.now().Sub(start).Milliseconds()
 	if err != nil {
-		writeJSON(w, http.StatusOK, testVendorView{Reachable: false, LatencyMS: latency, Error: err.Error()})
-		return
+		return testVendorView{Reachable: false, LatencyMS: latency, Error: err.Error()}, nil
 	}
 	defer resp.Body.Close()
 	drain(resp.Body)
 
-	writeJSON(w, http.StatusOK, testVendorView{Reachable: true, Status: resp.StatusCode, LatencyMS: latency})
+	return testVendorView{Reachable: true, Status: resp.StatusCode, LatencyMS: latency}, nil
 }
 
 // handleCatalog returns the embedded preset directory.
@@ -360,9 +408,9 @@ func (a *api) handleWires(w http.ResponseWriter, r *http.Request) {
 }
 
 type patchSettingsReq struct {
-	Capture         *bool `json:"capture"`
-	CaptureMaxBytes *int  `json:"capture_max_bytes"`
-	CaptureRetain   *int  `json:"capture_retain"`
+	Capture         *bool `json:"capture,omitempty"`
+	CaptureMaxBytes *int  `json:"capture_max_bytes,omitempty"`
+	CaptureRetain   *int  `json:"capture_retain,omitempty"`
 }
 
 // handlePatchSettings updates the gateway settings singleton and reloads.
@@ -372,10 +420,20 @@ func (a *api) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
 		return
 	}
+	view, err := a.updateSettingsData(req)
+	if err != nil {
+		a.writeDataErr(w, "update settings", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// updateSettingsData applies a subset of capture settings to the singleton,
+// reloads the live config, and returns the resulting (non-secret) settings view.
+func (a *api) updateSettingsData(req patchSettingsReq) (settingsView, error) {
 	cur, err := a.store.GetAppSettings()
 	if err != nil {
-		a.serverError(w, "get settings", err)
-		return
+		return settingsView{}, err
 	}
 	if req.Capture != nil {
 		cur.Capture = *req.Capture
@@ -387,11 +445,10 @@ func (a *api) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 		cur.CaptureRetain = *req.CaptureRetain
 	}
 	if err := a.store.UpdateAppSettings(cur); err != nil {
-		a.serverError(w, "update settings", err)
-		return
+		return settingsView{}, err
 	}
 	a.reloadAfterWrite()
-	a.handleSettings(w, r)
+	return a.settingsData(), nil
 }
 
 // --- helpers ---

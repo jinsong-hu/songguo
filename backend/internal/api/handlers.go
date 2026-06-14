@@ -108,20 +108,29 @@ func (a *api) handleOverview(w http.ResponseWriter, r *http.Request) {
 		until = *v
 	}
 
+	view, err := a.overviewData(since, until)
+	if err != nil {
+		a.writeDataErr(w, "overview", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// overviewData computes the dashboard summary over [since, until]: total spend,
+// spend by modality, request/error/latency stats, active vendors/users, daily
+// burn and (when any budget is set) runway in days.
+func (a *api) overviewData(since, until time.Time) (overviewView, error) {
 	totalSpend, err := a.store.TotalSpend(&since, &until)
 	if err != nil {
-		a.serverError(w, "total spend", err)
-		return
+		return overviewView{}, err
 	}
 	byMod, err := a.store.SpendByModality(&since, &until)
 	if err != nil {
-		a.serverError(w, "spend by modality", err)
-		return
+		return overviewView{}, err
 	}
 	stats, err := a.store.OverviewStats(&since, &until)
 	if err != nil {
-		a.serverError(w, "overview stats", err)
-		return
+		return overviewView{}, err
 	}
 
 	errorRate := 0.0
@@ -138,8 +147,7 @@ func (a *api) handleOverview(w http.ResponseWriter, r *http.Request) {
 	// users_active = non-revoked users; also compute runway from budgets.
 	users, err := a.store.ListUsers()
 	if err != nil {
-		a.serverError(w, "list users", err)
-		return
+		return overviewView{}, err
 	}
 	usersActive := 0
 	var remainingBudget float64
@@ -152,8 +160,7 @@ func (a *api) handleOverview(w http.ResponseWriter, r *http.Request) {
 			anyBudget = true
 			spent, err := a.store.SpendByUser(u.ID, nil)
 			if err != nil {
-				a.serverError(w, "spend by user", err)
-				return
+				return overviewView{}, err
 			}
 			rem := *u.Budget - spent
 			if rem > 0 {
@@ -163,11 +170,11 @@ func (a *api) handleOverview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// daily_burn = spend over the last 7 days / 7.
+	now := a.now().UTC()
 	weekAgo := now.AddDate(0, 0, -7)
 	weekSpend, err := a.store.TotalSpend(&weekAgo, &now)
 	if err != nil {
-		a.serverError(w, "weekly spend", err)
-		return
+		return overviewView{}, err
 	}
 	dailyBurn := weekSpend / 7.0
 
@@ -181,7 +188,7 @@ func (a *api) handleOverview(w http.ResponseWriter, r *http.Request) {
 		byMod = map[string]float64{}
 	}
 
-	writeJSON(w, http.StatusOK, overviewView{
+	return overviewView{
 		Range:           rangeView{Since: since.Unix(), Until: until.Unix()},
 		TotalSpend:      totalSpend,
 		SpendByModality: byMod,
@@ -193,7 +200,7 @@ func (a *api) handleOverview(w http.ResponseWriter, r *http.Request) {
 		UsersActive:     usersActive,
 		DailyBurn:       dailyBurn,
 		RunwayDays:      runway,
-	})
+	}, nil
 }
 
 // handleUsageSeries returns cost/request/error totals bucketed over time for
@@ -211,12 +218,24 @@ func (a *api) handleUsageSeries(w http.ResponseWriter, r *http.Request) {
 		until = *v
 	}
 
-	raw := r.URL.Query().Get("bucket")
+	view, err := a.usageSeriesData(since, until, r.URL.Query().Get("bucket"))
+	if err != nil {
+		a.writeDataErr(w, "usage series", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// usageSeriesData buckets cost/request/error totals over [since, until].
+// bucketRaw is "", "hour" or "day"; "" auto-selects day for ranges over 2 days,
+// else hour. An invalid bucket or a range too large for the bucket returns a
+// *apiError (400).
+func (a *api) usageSeriesData(since, until time.Time, bucketRaw string) (usageSeriesView, error) {
 	var (
 		bucket time.Duration
 		label  string
 	)
-	switch raw {
+	switch bucketRaw {
 	case "":
 		// Default by range: day if range > 2 days, else hour.
 		if until.Sub(since) > 48*time.Hour {
@@ -229,18 +248,15 @@ func (a *api) handleUsageSeries(w http.ResponseWriter, r *http.Request) {
 	case "day":
 		bucket, label = 24*time.Hour, "day"
 	default:
-		writeError(w, http.StatusBadRequest, "bad_request", "bucket must be hour or day")
-		return
+		return usageSeriesView{}, badRequestErr("bucket must be hour or day")
 	}
 
 	points, err := a.store.UsageSeries(since, until, bucket)
 	if err != nil {
 		if errors.Is(err, store.ErrTooManyBuckets) {
-			writeError(w, http.StatusBadRequest, "bad_request", "requested range is too large for the chosen bucket")
-			return
+			return usageSeriesView{}, badRequestErr("requested range is too large for the chosen bucket")
 		}
-		a.serverError(w, "usage series", err)
-		return
+		return usageSeriesView{}, err
 	}
 
 	views := make([]seriesPoint, 0, len(points))
@@ -253,47 +269,64 @@ func (a *api) handleUsageSeries(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, usageSeriesView{Bucket: label, Points: views})
+	return usageSeriesView{Bucket: label, Points: views}, nil
 }
 
 // handleCalls returns a filtered, paginated page of call entries plus the
 // total count for the same filter.
 func (a *api) handleCalls(w http.ResponseWriter, r *http.Request) {
-	f := callFilterFromQuery(r, defaultCallsAPILimit, maxCallsAPILimit)
+	view, err := a.callsData(callFilterFromQuery(r, defaultCallsAPILimit, maxCallsAPILimit))
+	if err != nil {
+		a.writeDataErr(w, "query calls", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// callsData returns a page of calls plus the total count for the same filter.
+// Limit/offset are clamped defensively (default 50, cap 500, offset >= 0) so the
+// method is safe to call with a raw, un-parsed filter (e.g. from an MCP tool).
+func (a *api) callsData(f store.CallFilter) (callsView, error) {
+	if f.Limit <= 0 {
+		f.Limit = defaultCallsAPILimit
+	}
+	if f.Limit > maxCallsAPILimit {
+		f.Limit = maxCallsAPILimit
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
 
 	entries, err := a.store.QueryCalls(f)
 	if err != nil {
-		a.serverError(w, "query calls", err)
-		return
+		return callsView{}, err
 	}
 	total, err := a.store.CountCalls(f)
 	if err != nil {
-		a.serverError(w, "count calls", err)
-		return
+		return callsView{}, err
 	}
 
-	views := make([]entryView, 0, len(entries))
 	ids := make([]int64, 0, len(entries))
 	for _, e := range entries {
 		ids = append(ids, e.ID)
 	}
 	hasTrace, err := a.store.HasPayloads(ids)
 	if err != nil {
-		a.serverError(w, "has payloads", err)
-		return
+		return callsView{}, err
 	}
+	views := make([]entryView, 0, len(entries))
 	for _, e := range entries {
 		v := newEntryView(e)
 		v.HasTrace = hasTrace[e.ID]
 		views = append(views, v)
 	}
 
-	writeJSON(w, http.StatusOK, callsView{
+	return callsView{
 		Entries: views,
 		Total:   total,
 		Limit:   f.Limit,
 		Offset:  f.Offset,
-	})
+	}, nil
 }
 
 // handleCallTrace returns the captured request/response payload for a call, or
@@ -305,44 +338,61 @@ func (a *api) handleCallTrace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "trace not found")
 		return
 	}
+	view, err := a.callTraceData(id)
+	if err != nil {
+		a.writeDataErr(w, "get payload", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// callTraceData returns the captured request/response payload for a call, or a
+// *apiError (404) when no payload was stored for it.
+func (a *api) callTraceData(id int64) (traceView, error) {
 	p, err := a.store.GetPayload(id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "trace not found")
-			return
+			return traceView{}, notFoundErr("trace not found")
 		}
-		a.serverError(w, "get payload", err)
-		return
+		return traceView{}, err
 	}
-	writeJSON(w, http.StatusOK, newTraceView(p))
+	return newTraceView(p), nil
 }
 
 // handleListUsers returns all users with computed lifetime spend.
 func (a *api) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	views, err := a.usersData()
+	if err != nil {
+		a.writeDataErr(w, "list users", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, views)
+}
+
+// usersData returns all users with computed lifetime spend (keys never exposed).
+func (a *api) usersData() ([]userView, error) {
 	users, err := a.store.ListUsers()
 	if err != nil {
-		a.serverError(w, "list users", err)
-		return
+		return nil, err
 	}
 	views := make([]userView, 0, len(users))
 	for _, u := range users {
 		spent, err := a.store.SpendByUser(u.ID, nil)
 		if err != nil {
-			a.serverError(w, "spend by user", err)
-			return
+			return nil, err
 		}
 		views = append(views, newUserView(u, spent))
 	}
-	writeJSON(w, http.StatusOK, views)
+	return views, nil
 }
 
 // createUserReq is the POST /api/users body.
 type createUserReq struct {
 	Name    string    `json:"name"`
-	Budget  *float64  `json:"budget"`
-	Scope   *[]string `json:"scope"`
-	RPM     *int      `json:"rpm"`
-	Capture *bool     `json:"capture"`
+	Budget  *float64  `json:"budget,omitempty"`
+	Scope   *[]string `json:"scope,omitempty"`
+	RPM     *int      `json:"rpm,omitempty"`
+	Capture *bool     `json:"capture,omitempty"`
 }
 
 // handleCreateUser creates a user and returns it once with the plaintext key.
@@ -352,9 +402,19 @@ func (a *api) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
 		return
 	}
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "name is required")
+	v, err := a.createUserData(req)
+	if err != nil {
+		a.writeDataErr(w, "create user", err)
 		return
+	}
+	writeJSON(w, http.StatusCreated, v)
+}
+
+// createUserData creates a user, returning the view with the plaintext key set
+// (the only time it is ever exposed). A missing name is a *apiError (400).
+func (a *api) createUserData(req createUserReq) (userView, error) {
+	if req.Name == "" {
+		return userView{}, badRequestErr("name is required")
 	}
 	nu := store.NewUser{Name: req.Name, Budget: req.Budget, Capture: req.Capture}
 	if req.Scope != nil {
@@ -366,12 +426,11 @@ func (a *api) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 
 	usr, plaintext, err := a.store.CreateUser(nu)
 	if err != nil {
-		a.serverError(w, "create user", err)
-		return
+		return userView{}, err
 	}
 	v := newUserView(usr, 0)
 	v.Key = plaintext
-	writeJSON(w, http.StatusCreated, v)
+	return v, nil
 }
 
 // patchUserReq distinguishes "omitted" from "present" for each field via
@@ -379,21 +438,31 @@ func (a *api) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 // UserUpdate uses a *float64 set-or-unchanged; PATCH cannot reset budget to
 // null (documented limitation for v1).
 type patchUserReq struct {
-	Name    *string   `json:"name"`
-	Budget  *float64  `json:"budget"`
-	Scope   *[]string `json:"scope"`
-	RPM     *int      `json:"rpm"`
-	Capture *bool     `json:"capture"`
+	Name    *string   `json:"name,omitempty"`
+	Budget  *float64  `json:"budget,omitempty"`
+	Scope   *[]string `json:"scope,omitempty"`
+	RPM     *int      `json:"rpm,omitempty"`
+	Capture *bool     `json:"capture,omitempty"`
 }
 
 // handlePatchUser applies a subset of fields to a user.
 func (a *api) handlePatchUser(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
 	var req patchUserReq
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
 		return
 	}
+	view, err := a.updateUserData(r.PathValue("id"), req)
+	if err != nil {
+		a.writeDataErr(w, "update user", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// updateUserData applies a subset of fields to a user and returns the updated
+// view with computed spend. An unknown id is a *apiError (404).
+func (a *api) updateUserData(id string, req patchUserReq) (userView, error) {
 	upd := store.UserUpdate{
 		Name:    req.Name,
 		Budget:  req.Budget,
@@ -404,42 +473,45 @@ func (a *api) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 	usr, err := a.store.UpdateUser(id, upd)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "user not found")
-			return
+			return userView{}, notFoundErr("user not found")
 		}
-		a.serverError(w, "update user", err)
-		return
+		return userView{}, err
 	}
 	spent, err := a.store.SpendByUser(usr.ID, nil)
 	if err != nil {
-		a.serverError(w, "spend by user", err)
-		return
+		return userView{}, err
 	}
-	writeJSON(w, http.StatusOK, newUserView(usr, spent))
+	return newUserView(usr, spent), nil
 }
 
 // handleRevokeUser revokes a user and returns its updated view.
 func (a *api) handleRevokeUser(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	view, err := a.revokeUserData(r.PathValue("id"))
+	if err != nil {
+		a.writeDataErr(w, "revoke user", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// revokeUserData revokes a user and returns its updated view. An unknown id is a
+// *apiError (404).
+func (a *api) revokeUserData(id string) (userView, error) {
 	if err := a.store.RevokeUser(id); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "user not found")
-			return
+			return userView{}, notFoundErr("user not found")
 		}
-		a.serverError(w, "revoke user", err)
-		return
+		return userView{}, err
 	}
 	usr, err := a.store.GetUser(id)
 	if err != nil {
-		a.serverError(w, "get user", err)
-		return
+		return userView{}, err
 	}
 	spent, err := a.store.SpendByUser(usr.ID, nil)
 	if err != nil {
-		a.serverError(w, "spend by user", err)
-		return
+		return userView{}, err
 	}
-	writeJSON(w, http.StatusOK, newUserView(usr, spent))
+	return newUserView(usr, spent), nil
 }
 
 // handleListVendors returns vendors (without secrets) plus per-vendor stats.
@@ -517,11 +589,16 @@ func (a *api) handleTestVendor(w http.ResponseWriter, r *http.Request) {
 
 // handleSettings returns non-secret runtime settings.
 func (a *api) handleSettings(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, a.settingsData())
+}
+
+// settingsData returns non-secret runtime settings (never the admin key).
+func (a *api) settingsData() settingsView {
 	var settings config.Settings
 	if snap := a.snap(); snap != nil {
 		settings = snap.Settings()
 	}
-	writeJSON(w, http.StatusOK, settingsView{
+	return settingsView{
 		Listen:          a.listenAddr,
 		DBPath:          a.dbPath,
 		AdminProtected:  a.adminKey != "",
@@ -529,11 +606,16 @@ func (a *api) handleSettings(w http.ResponseWriter, r *http.Request) {
 		Capture:         settings.Capture,
 		CaptureMaxBytes: settings.CaptureMaxBytes,
 		CaptureRetain:   settings.CaptureRetain,
-	})
+	}
 }
 
 // handlePricing returns a flattened list of all per-vendor model prices.
 func (a *api) handlePricing(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, a.pricingData())
+}
+
+// pricingData returns a flattened, sorted list of all per-vendor model prices.
+func (a *api) pricingData() []pricingRow {
 	snap := a.snap()
 	rows := []pricingRow{}
 	if snap != nil {
@@ -551,7 +633,7 @@ func (a *api) handlePricing(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, rows)
+	return rows
 }
 
 // --- small handler helpers ---

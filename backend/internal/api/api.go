@@ -49,10 +49,10 @@ type api struct {
 	warnOnce sync.Once
 }
 
-// NewHandler builds the admin API as an http.Handler. Routes are registered on
-// an internal ServeMux using Go 1.22 method+path patterns and wrapped in the
-// admin-auth middleware.
-func NewHandler(d Deps) http.Handler {
+// newAPI resolves Deps into a concrete *api with defaults applied. It is shared
+// by NewHandler (REST) and NewMCPHandler (MCP) so both expose identical behavior
+// over the same store/snapshot.
+func newAPI(d Deps) *api {
 	logger := d.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -74,7 +74,7 @@ func NewHandler(d Deps) http.Handler {
 		reload = func() error { return nil }
 	}
 
-	a := &api{
+	return &api{
 		store:      d.Store,
 		snapshot:   d.Snapshot,
 		reload:     reload,
@@ -86,33 +86,58 @@ func NewHandler(d Deps) http.Handler {
 		listenAddr: d.ListenAddr,
 		dbPath:     d.DBPath,
 	}
+}
+
+// adminRoute is one admin API route: an HTTP method, a Go-mux path pattern and
+// its handler (as a method expression bound at registration). This table is the
+// single source of truth for both route registration and the OpenAPI drift test.
+type adminRoute struct {
+	Method  string
+	Pattern string
+	Handler func(*api, http.ResponseWriter, *http.Request)
+}
+
+var adminRoutes = []adminRoute{
+	{"GET", "/api/overview", (*api).handleOverview},
+	{"GET", "/api/usage/series", (*api).handleUsageSeries},
+	{"GET", "/api/calls", (*api).handleCalls},
+	{"GET", "/api/calls/export", (*api).handleCallsExport},
+	{"GET", "/api/calls/{id}/trace", (*api).handleCallTrace},
+	{"GET", "/api/users", (*api).handleListUsers},
+	{"POST", "/api/users", (*api).handleCreateUser},
+	{"PATCH", "/api/users/{id}", (*api).handlePatchUser},
+	{"POST", "/api/users/{id}/revoke", (*api).handleRevokeUser},
+	{"GET", "/api/vendors", (*api).handleListVendors},
+	{"POST", "/api/vendors/{name}/test", (*api).handleTestVendor},
+	// Services: auto-derived, model-centric view (read-only).
+	{"GET", "/api/services", (*api).handleListServices},
+	// Providers: SQLite-backed upstream config, managed from the dashboard.
+	{"GET", "/api/providers", (*api).handleListProviders},
+	{"POST", "/api/providers", (*api).handleCreateProvider},
+	{"GET", "/api/providers/{id}", (*api).handleGetProvider},
+	{"PATCH", "/api/providers/{id}", (*api).handlePatchProvider},
+	{"DELETE", "/api/providers/{id}", (*api).handleDeleteProvider},
+	{"POST", "/api/providers/{id}/test", (*api).handleTestProvider},
+	{"GET", "/api/catalog", (*api).handleCatalog},
+	{"GET", "/api/wires", (*api).handleWires},
+	{"GET", "/api/settings", (*api).handleSettings},
+	{"PATCH", "/api/settings", (*api).handlePatchSettings},
+	{"GET", "/api/pricing", (*api).handlePricing},
+}
+
+// NewHandler builds the admin API as an http.Handler. Routes are registered from
+// adminRoutes on an internal ServeMux using Go 1.22 method+path patterns and
+// wrapped in the admin-auth middleware.
+func NewHandler(d Deps) http.Handler {
+	a := newAPI(d)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/overview", a.handleOverview)
-	mux.HandleFunc("GET /api/usage/series", a.handleUsageSeries)
-	mux.HandleFunc("GET /api/calls", a.handleCalls)
-	mux.HandleFunc("GET /api/calls/export", a.handleCallsExport)
-	mux.HandleFunc("GET /api/calls/{id}/trace", a.handleCallTrace)
-	mux.HandleFunc("GET /api/users", a.handleListUsers)
-	mux.HandleFunc("POST /api/users", a.handleCreateUser)
-	mux.HandleFunc("PATCH /api/users/{id}", a.handlePatchUser)
-	mux.HandleFunc("POST /api/users/{id}/revoke", a.handleRevokeUser)
-	mux.HandleFunc("GET /api/vendors", a.handleListVendors)
-	mux.HandleFunc("POST /api/vendors/{name}/test", a.handleTestVendor)
-	// Services: auto-derived, model-centric view (read-only).
-	mux.HandleFunc("GET /api/services", a.handleListServices)
-	// Providers: SQLite-backed upstream config, managed from the dashboard.
-	mux.HandleFunc("GET /api/providers", a.handleListProviders)
-	mux.HandleFunc("POST /api/providers", a.handleCreateProvider)
-	mux.HandleFunc("GET /api/providers/{id}", a.handleGetProvider)
-	mux.HandleFunc("PATCH /api/providers/{id}", a.handlePatchProvider)
-	mux.HandleFunc("DELETE /api/providers/{id}", a.handleDeleteProvider)
-	mux.HandleFunc("POST /api/providers/{id}/test", a.handleTestProvider)
-	mux.HandleFunc("GET /api/catalog", a.handleCatalog)
-	mux.HandleFunc("GET /api/wires", a.handleWires)
-	mux.HandleFunc("GET /api/settings", a.handleSettings)
-	mux.HandleFunc("PATCH /api/settings", a.handlePatchSettings)
-	mux.HandleFunc("GET /api/pricing", a.handlePricing)
+	for _, rt := range adminRoutes {
+		h := rt.Handler
+		mux.HandleFunc(rt.Method+" "+rt.Pattern, func(w http.ResponseWriter, r *http.Request) {
+			h(a, w, r)
+		})
+	}
 
 	return a.authMiddleware(mux)
 }
