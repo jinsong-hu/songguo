@@ -71,28 +71,35 @@ Two consequences:
 
 ## The registry — everything supported today (10 wires)
 
-One row per wire. **Auth** is derived from the wire prefix (operator never picks it). **Songguo endpoint** is the native path the consumer calls; the provider is chosen by `header → model → default` (see above). **Usage read** is the field(s) the meter sniffs — read-only, never blocks traffic.
+One row per wire. **Endpoint** = the native path the consumer calls; **bold** marks the suffix that's actually matched (the prefix is conventional). **Providers** = example vendors that speak the wire — the real set is operator-configured in SQLite, not fixed here. **Routing** = how the provider is picked once the wire is matched (full order is always `header → model → default`; see [Provider selection](#provider-selection)). `exact model` = model-bearing, keyed on the body `model`; `header · default` = model-less, no model step.
 
-| Wire | Family / Auth | Songguo endpoint(s) | Matched suffix | Modality | Streams | Cost | Usage read |
-|---|---|---|---|---|---|---|---|
-| `openai/chat` | OpenAI · `Authorization: Bearer <key>` | `POST /v1/chat/completions` | `/chat/completions` | chat | yes (SSE) | metered | `usage.prompt_tokens`/`input_tokens` + `completion_tokens`/`output_tokens`; cached per quirk (default `prompt_tokens_details.cached_tokens`, DeepSeek `prompt_cache_hit_tokens`, MiniMax `cached_tokens`); stream usage on final SSE chunk |
-| `openai/completions` | OpenAI · `Authorization: Bearer <key>` | `POST /v1/completions` | `/completions` | chat | yes (SSE) | metered | same as `openai/chat` |
-| `openai/embeddings` | OpenAI · `Authorization: Bearer <key>` | `POST /v1/embeddings` | `/embeddings` | embedding | no | metered | `usage.prompt_tokens`/`input_tokens` |
-| `openai/responses` | OpenAI · `Authorization: Bearer <key>` | `POST /v1/responses` | `/responses` | chat | yes (SSE) | metered | `usage.input_tokens` + `output_tokens` + `input_tokens_details.cached_tokens`; stream usage on `response.completed` → `response.usage` |
-| `openai/models` | OpenAI · `Authorization: Bearer <key>` | `GET /v1/models` | `/models` | — | no | zero-cost | not parsed (management) |
-| `anthropic/messages` | Anthropic · `x-api-key: <key>` + `anthropic-version` | `POST /v1/messages` | `/messages` | chat | yes (SSE) | metered | `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` → `InputTokens` (cache-create 1.25× premium ignored); `cache_read` also → `CachedInputTokens`; stream merges `message_start…usage` (input) + `message_delta.usage` (output) |
-| `anthropic/models` | Anthropic · `x-api-key: <key>` + `anthropic-version` | `GET /v1/models` | `/models` | — | no | zero-cost | not parsed (management) |
-| `volc/tts` | Volcengine · `x-api-key: <key>` | `POST /api/v3/tts/unidirectional` | `/tts/unidirectional` | tts | yes (NDJSON) | metered | `usage.text_words` → `Chars` (per-char); only when client sets `X-Control-Require-Usage-Tokens-Return`, else coarse/unknown |
-| `volc/voice-clone` | Volcengine · `x-api-key: <key>` | `POST /api/v3/tts/voice_clone`, `GET /api/v3/tts/get_voice` | `/tts/voice_clone`, `/tts/get_voice` | tts (mgmt) | no | zero-cost | not parsed; slot fee billed out-of-band on first synthesis |
-| `volc/asr` | Volcengine · `x-api-key: <key>` | `POST /api/v3/auc/bigmodel/submit`, `POST /api/v3/auc/bigmodel/query` | `/auc/bigmodel/submit`, `/auc/bigmodel/query` | stt | no | metered on `query` | `audio_info.duration` (ms) → `Seconds` (per-second); `submit` ack has no `audio_info` (meters zero), `query` poll bills |
+| Endpoint | Wire | Providers (examples) | Routing |
+|---|---|---|---|
+| `POST /v1`**`/chat/completions`** | `openai/chat` | OpenAI, Azure, DeepSeek, MiniMax, … | exact `model` |
+| `POST /v1`**`/completions`** | `openai/completions` | OpenAI (legacy), … | exact `model` |
+| `POST /v1`**`/embeddings`** | `openai/embeddings` | OpenAI, Azure, … | exact `model` |
+| `POST /v1`**`/responses`** | `openai/responses` | OpenAI | exact `model` |
+| `GET /v1`**`/models`** | `openai/models` | any OpenAI-compatible | header · default |
+| `POST /v1`**`/messages`** | `anthropic/messages` | Anthropic | exact `model` |
+| `GET /v1`**`/models`** | `anthropic/models` | Anthropic | header · default |
+| `POST /api/v3`**`/tts/unidirectional`** | `volc/tts` | Volcengine | header · default |
+| `POST /api/v3`**`/tts/voice_clone`** · `GET /api/v3`**`/tts/get_voice`** | `volc/voice-clone` | Volcengine | header · default |
+| `POST /api/v3`**`/auc/bigmodel/submit`** · `POST /api/v3`**`/auc/bigmodel/query`** | `volc/asr` | Volcengine | header · default |
 
 Volcengine speech is model-less: it's reached at its **native Volcengine path** (`/api/v3/...`) and the provider comes from `X-Songguo-Provider` (or the wire default). The suffix is what the wire matches. For `volc/asr`, send the same `X-Songguo-Provider` on both `submit` and `query` so the poll lands on the provider that issued the task.
 
 All wires normalize into one canonical view: `{ InputTokens, OutputTokens, CachedInputTokens, Calls, Images, Seconds, Chars }`. Raw vendor usage is logged verbatim alongside.
 
-## Metering notes
+## Metering
 
-Per-wire usage fields live in the **Usage read** column above. Two cross-cutting points: some OpenAI-family vendors only emit streaming usage when the client sets `stream_options.include_usage`; and if a usage shape isn't recognized the call still succeeds with coarse/unknown metering — parsing never blocks traffic.
+Read-only by design: if a usage shape isn't recognized the call still succeeds with coarse/unknown metering — parsing never blocks traffic. Per-wire fields the meter sniffs:
+
+- **`openai/chat`, `openai/completions`, `openai/embeddings`** — top-level `usage`: `prompt_tokens`/`input_tokens` + `completion_tokens`/`output_tokens`. Cached input per quirk: default `prompt_tokens_details.cached_tokens`, DeepSeek `prompt_cache_hit_tokens`, MiniMax `cached_tokens`. Streaming usage rides the final SSE chunk (some vendors only when the client sets `stream_options.include_usage`); embeddings is input-only, no stream.
+- **`openai/responses`** — `usage.input_tokens` + `output_tokens` + `input_tokens_details.cached_tokens`; streaming usage rides the `response.completed` event under `response.usage`.
+- **`anthropic/messages`** — `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` folded into `InputTokens` (cache-create's 1.25× premium ignored, by design); `cache_read` also recorded as `CachedInputTokens`. Streaming merges `message_start.message.usage` (input) with `message_delta.usage` (output).
+- **`volc/tts`** — `usage.text_words` → `Chars` (per-char); streamed as NDJSON, and only returned when the client sets `X-Control-Require-Usage-Tokens-Return`, else coarse/unknown.
+- **`volc/asr`** — `audio_info.duration` (ms) → `Seconds` (per-second); the `submit` ack has no `audio_info` (meters zero), the `query` poll bills.
+- **`openai/models`, `anthropic/models`, `volc/voice-clone`** — zero-cost management endpoints, not parsed. (Voice-clone's slot fee is billed out-of-band on first synthesis.)
 
 ## Auth adapters
 
