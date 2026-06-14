@@ -18,9 +18,6 @@ const ServiceDetailPage = lazy(() =>
 );
 const ProvidersPage = lazy(() => import('./pages/Providers').then((m) => ({ default: m.ProvidersPage })));
 const VendorAddPage = lazy(() => import('./pages/VendorAdd').then((m) => ({ default: m.VendorAddPage })));
-const ProviderNewPage = lazy(() =>
-  import('./pages/ProviderNew').then((m) => ({ default: m.ProviderNewPage })),
-);
 const ProviderEditPage = lazy(() =>
   import('./pages/ProviderEdit').then((m) => ({ default: m.ProviderEditPage })),
 );
@@ -138,8 +135,9 @@ export function App() {
               <Route path="providers" element={<ProvidersPage />} />
               <Route path="providers/add" element={<Navigate to="/providers" replace />} />
               <Route path="providers/add/:vendorId" element={<VendorAddPage />} />
-              <Route path="providers/new" element={<Navigate to="/providers/new/openai" replace />} />
-              <Route path="providers/new/:kind" element={<ProviderNewPage />} />
+              {/* The old custom-provider routes are now the "custom" catalog vendor. */}
+              <Route path="providers/new" element={<Navigate to="/providers/add/custom" replace />} />
+              <Route path="providers/new/:kind" element={<Navigate to="/providers/add/custom" replace />} />
               <Route path="providers/:id/edit" element={<ProviderEditPage />} />
               <Route path="users" element={<UsersPage />} />
               <Route path="users/new" element={<UserNewPage />} />

@@ -1,6 +1,6 @@
 import { useMemo, type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Check, Wrench } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { api } from '../api/client';
 import type { CatalogVendor, Provider } from '../api/types';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -9,14 +9,6 @@ import { Skeleton } from '../components/Skeleton';
 import { useFetch } from '../lib/useFetch';
 import { BrandIcon, providerBrand } from '../lib/modelBrand';
 import styles from './Providers.module.css';
-
-// The three custom-provider entry points. `kind` routes to the simplified add
-// form; `brand` (when set) renders the vendor glyph, otherwise the wrench.
-const CUSTOM_TILES: { kind: string; label: string; brand: string | null }[] = [
-  { kind: 'openai', label: 'Custom OpenAI', brand: 'OpenAI' },
-  { kind: 'anthropic', label: 'Custom Anthropic', brand: 'Anthropic' },
-  { kind: 'any', label: 'Custom Any', brand: null },
-];
 
 export function ProvidersPage() {
   const providers = useFetch(() => api.providers(), []);
@@ -70,29 +62,9 @@ export function ProvidersPage() {
               <VendorTile
                 key={vendor.id}
                 vendor={vendor}
-                added={addedVendorIds.has(vendor.id)}
+                added={!vendor.custom && addedVendorIds.has(vendor.id)}
                 onOpen={() => navigate(`/providers/add/${encodeURIComponent(vendor.id)}`)}
               />
-            ))}
-            {CUSTOM_TILES.map((tile) => (
-              <button
-                key={tile.kind}
-                className={`card ${styles.entry} ${styles.custom}`}
-                onClick={() => navigate(`/providers/new/${tile.kind}`)}
-              >
-                <div className={styles.entryHead}>
-                  <span className={styles.vendorTitle}>
-                    {tile.brand ? (
-                      <BrandIcon brand={providerBrand(tile.brand, [])} label={tile.brand} size={20} />
-                    ) : (
-                      <span className={styles.customIcon}>
-                        <Wrench size={16} />
-                      </span>
-                    )}
-                    <span className={styles.serviceName}>{tile.label}</span>
-                  </span>
-                </div>
-              </button>
             ))}
           </div>
         </>
