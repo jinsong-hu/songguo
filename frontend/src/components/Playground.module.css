@@ -200,6 +200,26 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* TTS playback. */
+.audio {
+  display: block;
+  width: 100%;
+  height: 40px;
+}
+
+.download {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--accent);
+}
+
+.download:hover {
+  color: var(--accent-hover);
+}
+
 /* Fallback panel for wires with no interactive test. */
 .unsupported {
   display: flex;

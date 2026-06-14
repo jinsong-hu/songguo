@@ -523,7 +523,6 @@ function TtsPanel({
         <div className={styles.result}>
           {result.ok ? (
             <>
-              {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
               <audio className={styles.audio} src={result.audioUrl} controls autoPlay />
               <a className={styles.download} href={result.audioUrl} download={`speech.${result.ext}`}>
                 <Download size={13} /> Download
@@ -559,8 +558,19 @@ function TtsMeta({ result }: { result: TtsResult }) {
 
 // --- Fallback panel for wires without an interactive test ------------------
 
-function UnsupportedPanel({ test, model }: { test: WireTest; model: string }) {
-  const snippet = curlFor(test.wire, model);
+function UnsupportedPanel({
+  test,
+  model,
+  apiKey,
+  providerId,
+}: {
+  test: WireTest;
+  model: string;
+  apiKey: string;
+  /** Pinned provider id under explicit routing; undefined under Auto. */
+  providerId?: string;
+}) {
+  const snippet = curlFor(model, apiKey.trim(), providerId);
   return (
     <div className={styles.unsupported}>
       <p className={styles.hint}>
@@ -579,20 +589,21 @@ function UnsupportedPanel({ test, model }: { test: WireTest; model: string }) {
   );
 }
 
-function curlFor(wire: string, model: string): string {
+/**
+ * A copy-pasteable curl for a wire with no interactive panel. The signed-in key
+ * is filled in for the bearer token, and the X-Songguo-Provider header mirrors
+ * the routing selector: pinned under explicit routing, omitted under Auto (the
+ * gateway picks).
+ */
+function curlFor(model: string, token: string, providerId?: string): string {
   const origin = window.location.origin;
-  if (wire === 'volc/tts-unidirectional') {
-    return `curl ${origin}/api/v3/tts/unidirectional \\
-  -H "Authorization: Bearer $SONGGUO_TOKEN" \\
-  -H "X-Songguo-Provider: <provider-id>" \\
-  -H "X-Api-Resource-Id: volc.service_type.10029" \\
-  -H "Content-Type: application/json" \\
-  -d '{ "req_params": { "text": "你好，世界" } }'`;
-  }
+  const headers = [
+    `-H "Authorization: Bearer ${token || '$SONGGUO_TOKEN'}"`,
+    ...(providerId ? [`-H "X-Songguo-Provider: ${providerId}"`] : []),
+    `-H "Content-Type: application/json"`,
+  ];
   return `curl ${origin}/<vendor-path> \\
-  -H "Authorization: Bearer $SONGGUO_TOKEN" \\
-  -H "X-Songguo-Provider: <provider-id>" \\
-  -H "Content-Type: application/json" \\
+  ${headers.join(' \\\n  ')} \\
   -d '{ "model": "${model}", "…": "…" }'`;
 }
 
