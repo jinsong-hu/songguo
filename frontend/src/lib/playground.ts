@@ -77,6 +77,136 @@ export function wireTests(wires: string[]): WireTest[] {
   return tests.sort((a, b) => rank[a.kind] - rank[b.kind]);
 }
 
+// --- Snippet examples (single source for the "Try it" card and the playground
+//     fallback) --------------------------------------------------------------
+
+/** Default TTS voice — shared by the synthesis panel and its snippet. */
+export const DEFAULT_TTS_VOICE = 'zh_female_vv_jupiter_bigtts';
+
+export interface SnippetOpts {
+  /** Model id (model-routed bodies and the default placeholder). */
+  model: string;
+  /** Gateway origin, e.g. window.location.origin. */
+  origin: string;
+  /** Consumer key to fill the bearer token; falls back to $SONGGUO_TOKEN when absent. */
+  token?: string;
+  /** Pinned provider id; omitted under Auto for model-routed HTTP, shown as a
+   *  placeholder for WebSocket and the submit→poll ASR-file wire. */
+  providerId?: string;
+}
+
+/**
+ * A copy-pasteable example for a wire. Both the service "Try it" card and the
+ * playground's non-interactive fallback render this, so there is one source of
+ * truth: the bearer token is filled from the signed-in key, and
+ * X-Songguo-Provider follows the transport — model-routed HTTP omits it under
+ * Auto, while WebSocket and the submit→poll ASR-file wire always show it (they
+ * can't be model-routed / need provider affinity).
+ */
+export function snippetFor(wire: string, opts: SnippetOpts): string {
+  const endpoint = TEST_ENDPOINT[wire] ?? '';
+  if (endpoint.startsWith('WS ')) return wsSnippet(endpoint.slice(3), opts);
+  switch (wire) {
+    case 'volc/asr-file':
+      return asrFileSnippet(opts);
+    case 'volc/tts-unidirectional':
+      return ttsSnippet(opts);
+    case 'openai/embeddings':
+    case 'anthropic/messages':
+    case 'openai/responses':
+    case 'openai/completions':
+    case 'openai/chat':
+      return modelRoutedSnippet(wire, opts);
+    default:
+      return defaultSnippet(opts);
+  }
+}
+
+function bearer(token?: string): string {
+  return `-H "Authorization: Bearer ${token || '$SONGGUO_TOKEN'}"`;
+}
+
+/** Provider header lines: pinned id, a placeholder when required, else nothing. */
+function providerLines(providerId: string | undefined, required: boolean): string[] {
+  if (providerId) return [`-H "X-Songguo-Provider: ${providerId}"`];
+  if (required) return [`-H "X-Songguo-Provider: <provider-id>"`];
+  return [];
+}
+
+function modelRoutedSnippet(wire: string, { model, origin, token, providerId }: SnippetOpts): string {
+  const prompt = wire === 'openai/embeddings' ? 'The quick brown fox' : 'Hello!';
+  const req = buildTestRequest(model, wire, prompt);
+  const headers = [bearer(token), ...providerLines(providerId, false), `-H "Content-Type: application/json"`];
+  return `curl ${origin}${req.path} \\
+  ${headers.join(' \\\n  ')} \\
+  -d '${JSON.stringify(req.body, null, 2)}'`;
+}
+
+function ttsSnippet({ model, origin, token, providerId }: SnippetOpts): string {
+  const headers = [
+    bearer(token),
+    ...providerLines(providerId, false),
+    `-H "X-Api-Resource-Id: ${model}"`,
+    `-H "X-Control-Require-Usage-Tokens-Return: true"`,
+    `-H "Content-Type: application/json"`,
+  ];
+  const body = {
+    user: { uid: 'me' },
+    req_params: {
+      text: '你好，世界',
+      speaker: DEFAULT_TTS_VOICE,
+      audio_params: { format: 'mp3', sample_rate: 24000 },
+    },
+  };
+  return `curl ${origin}/api/v3/tts/unidirectional \\
+  ${headers.join(' \\\n  ')} \\
+  -d '${JSON.stringify(body, null, 2)}'`;
+}
+
+function asrFileSnippet({ origin, token, providerId }: SnippetOpts): string {
+  const pin = providerId || '<provider-id>';
+  const auth = bearer(token);
+  return `# 1. Submit a recording (audio fetched by URL)
+curl ${origin}/api/v3/auc/bigmodel/submit \\
+  ${auth} \\
+  -H "X-Songguo-Provider: ${pin}" \\
+  -H "X-Api-Resource-Id: volc.seedasr.auc" \\
+  -H "X-Api-Request-Id: $REQUEST_ID" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "user": {"uid":"me"}, "audio": {"url":"https://…/audio.wav","format":"wav"},
+        "request": {"model_name":"bigmodel"} }'
+
+# 2. Poll for the transcript with the same provider pin and X-Api-Request-Id
+curl ${origin}/api/v3/auc/bigmodel/query \\
+  ${auth} \\
+  -H "X-Songguo-Provider: ${pin}" \\
+  -H "X-Api-Resource-Id: volc.seedasr.auc" \\
+  -H "X-Api-Request-Id: $REQUEST_ID" -d '{}'`;
+}
+
+function wsSnippet(path: string, { origin, token, providerId }: SnippetOpts): string {
+  const wsOrigin = origin.replace(/^http/, 'ws');
+  const headers = [
+    bearer(token),
+    `-H "X-Songguo-Provider: ${providerId || '<provider-id>'}"`,
+    `-H "X-Api-Resource-Id: <x-api-resource-id>"`,
+  ];
+  return `# WebSocket upgrade — curl (≥ 7.86) sets the auth headers a browser can't.
+# This opens the authenticated stream; the audio/text frames that follow use
+# Volcengine's binary, gzip-framed protocol, so drive them from a script.
+curl --include --no-buffer \\
+  ${headers.join(' \\\n  ')} \\
+  "${wsOrigin}${path}"`;
+}
+
+function defaultSnippet({ model, origin, token, providerId }: SnippetOpts): string {
+  const headers = [bearer(token), ...providerLines(providerId, false), `-H "Content-Type: application/json"`];
+  return `# ${model} is served over a model-less wire — call the native vendor path directly:
+curl ${origin}/<vendor-path> \\
+  ${headers.join(' \\\n  ')} \\
+  -d '{ "model": "${model}", "…": "…" }'`;
+}
+
 // --- Chat / embedding transport (model-routed /v1) -------------------------
 
 export interface TestRequest {

@@ -4,9 +4,11 @@ import type { Provider } from '../api/types';
 import { getAdminKey } from '../api/client';
 import {
   buildTestRequest,
+  DEFAULT_TTS_VOICE,
   runAsr,
   runTest,
   runTts,
+  snippetFor,
   wireTests,
   type AsrResult,
   type TestResult,
@@ -426,7 +428,7 @@ function TtsPanel({
   model: string;
 }) {
   const [text, setText] = useState('你好，欢迎使用松果语音合成。');
-  const [voice, setVoice] = useState('zh_female_vv_jupiter_bigtts');
+  const [voice, setVoice] = useState(DEFAULT_TTS_VOICE);
   const [format, setFormat] = useState('mp3');
   const [resourceId, setResourceId] = useState(model);
   const [running, setRunning] = useState(false);
@@ -570,12 +572,33 @@ function UnsupportedPanel({
   /** Pinned provider id under explicit routing; undefined under Auto. */
   providerId?: string;
 }) {
-  const snippet = curlFor(model, apiKey.trim(), providerId);
+  // The endpoint label carries the transport: "WS …" wires are WebSocket
+  // streaming, which the browser can't drive (see below); the rest are HTTP.
+  const isWs = test.endpoint.startsWith('WS ');
+  const snippet = snippetFor(test.wire, {
+    model,
+    origin: window.location.origin,
+    token: apiKey.trim(),
+    providerId,
+  });
+
   return (
     <div className={styles.unsupported}>
       <p className={styles.hint}>
-        Interactive testing for the <strong>{test.label}</strong> wire (<code>{test.wire}</code>)
-        isn’t available in the dashboard yet. Call it directly through the gateway:
+        {isWs ? (
+          <>
+            The <strong>{test.label}</strong> wire (<code>{test.wire}</code>) is a WebSocket
+            streaming API, so it can’t be exercised from the dashboard: a browser’s WebSocket can’t
+            attach the <code>Authorization</code>, <code>X-Songguo-Provider</code>, and{' '}
+            <code>X-Api-Resource-Id</code> headers the gateway requires, and the session speaks
+            Volcengine’s binary frame protocol. Use a client that can set headers — curl can:
+          </>
+        ) : (
+          <>
+            Interactive testing for the <strong>{test.label}</strong> wire (<code>{test.wire}</code>)
+            isn’t available in the dashboard yet. Call it directly through the gateway:
+          </>
+        )}
       </p>
       {snippet && (
         <div className={styles.snippetBlock}>
@@ -587,24 +610,6 @@ function UnsupportedPanel({
       )}
     </div>
   );
-}
-
-/**
- * A copy-pasteable curl for a wire with no interactive panel. The signed-in key
- * is filled in for the bearer token, and the X-Songguo-Provider header mirrors
- * the routing selector: pinned under explicit routing, omitted under Auto (the
- * gateway picks).
- */
-function curlFor(model: string, token: string, providerId?: string): string {
-  const origin = window.location.origin;
-  const headers = [
-    `-H "Authorization: Bearer ${token || '$SONGGUO_TOKEN'}"`,
-    ...(providerId ? [`-H "X-Songguo-Provider: ${providerId}"`] : []),
-    `-H "Content-Type: application/json"`,
-  ];
-  return `curl ${origin}/<vendor-path> \\
-  ${headers.join(' \\\n  ')} \\
-  -d '{ "model": "${model}", "…": "…" }'`;
 }
 
 // --- shared ----------------------------------------------------------------

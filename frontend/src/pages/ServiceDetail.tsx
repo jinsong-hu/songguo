@@ -1,7 +1,7 @@
 import { useEffect, useRef, type CSSProperties } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { ArrowLeft, Layers } from 'lucide-react';
-import { api } from '../api/client';
+import { api, getAdminKey } from '../api/client';
 import type { Catalog, Provider, Service } from '../api/types';
 import { CopyButton } from '../components/CopyButton';
 import { EmptyState } from '../components/EmptyState';
@@ -10,7 +10,7 @@ import { Page } from '../components/Layout';
 import { Playground } from '../components/Playground';
 import { Skeleton } from '../components/Skeleton';
 import { useFetch } from '../lib/useFetch';
-import { wireTests } from '../lib/playground';
+import { snippetFor, wireTests } from '../lib/playground';
 import { contextLabel, indexCatalog, MODALITY_LABEL, type CatalogInfo } from '../lib/catalogIndex';
 import { ModelIcon, modelMeta } from '../lib/modelBrand';
 import { int, ms, percent } from '../lib/format';
@@ -174,9 +174,14 @@ function Hero({ model, info }: { model: string; info?: CatalogInfo }) {
 }
 
 function QuickStart({ model, wires }: { model: string; wires: string[] }) {
-  const origin = window.location.origin;
-  const kind = wireTests(wires)[0]?.kind ?? 'unsupported';
-  const snippet = quickStartSnippet(origin, model, kind);
+  // The primary wire (interactive panels first) gets a representative example —
+  // the same generator the playground fallback uses, so they never drift.
+  const wire = wireTests(wires)[0]?.wire ?? '';
+  const snippet = snippetFor(wire, {
+    model,
+    origin: window.location.origin,
+    token: getAdminKey(),
+  });
 
   return (
     <div className={`card ${styles.section}`}>
@@ -185,58 +190,12 @@ function QuickStart({ model, wires }: { model: string; wires: string[] }) {
         <CopyButton value={snippet} label="Copy" />
       </div>
       <p className={styles.sectionHint}>
-        Point your client at this gateway and use the model ID as-is. Create a key on the{' '}
-        <Link to="/users">Users</Link> page.
+        Point your client at this gateway and use the model ID as-is. The bearer token below is your
+        signed-in key — manage keys on the <Link to="/users">Users</Link> page.
       </p>
       <pre className={styles.snippet}>{snippet}</pre>
     </div>
   );
-}
-
-/** A representative curl for the service's primary wire kind. */
-function quickStartSnippet(origin: string, model: string, kind: string): string {
-  switch (kind) {
-    case 'embedding':
-      return `curl ${origin}/v1/embeddings \\
-  -H "Authorization: Bearer $SONGGUO_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "${model}",
-    "input": "The quick brown fox"
-  }'`;
-    case 'asr':
-      return `# 1. Submit a recording (audio fetched by URL)
-curl ${origin}/api/v3/auc/bigmodel/submit \\
-  -H "Authorization: Bearer $SONGGUO_TOKEN" \\
-  -H "X-Songguo-Provider: <provider-id>" \\
-  -H "X-Api-Resource-Id: volc.seedasr.auc" \\
-  -H "X-Api-Request-Id: $REQUEST_ID" \\
-  -H "Content-Type: application/json" \\
-  -d '{ "user": {"uid":"me"}, "audio": {"url":"https://…/audio.wav","format":"wav"},
-        "request": {"model_name":"bigmodel"} }'
-
-# 2. Poll for the transcript with the same provider pin and X-Api-Request-Id
-curl ${origin}/api/v3/auc/bigmodel/query \\
-  -H "Authorization: Bearer $SONGGUO_TOKEN" \\
-  -H "X-Songguo-Provider: <provider-id>" \\
-  -H "X-Api-Resource-Id: volc.seedasr.auc" \\
-  -H "X-Api-Request-Id: $REQUEST_ID" -d '{}'`;
-    case 'chat':
-      return `curl ${origin}/v1/chat/completions \\
-  -H "Authorization: Bearer $SONGGUO_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "${model}",
-    "messages": [{ "role": "user", "content": "Hello!" }]
-  }'`;
-    default:
-      return `# ${model} is served over a model-less wire — call the native vendor path directly:
-curl ${origin}/<vendor-path> \\
-  -H "Authorization: Bearer $SONGGUO_TOKEN" \\
-  -H "X-Songguo-Provider: <provider-id>" \\
-  -H "Content-Type: application/json" \\
-  -d '{ "model": "${model}" }'`;
-  }
 }
 
 function Usage({
