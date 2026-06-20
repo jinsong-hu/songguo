@@ -236,3 +236,60 @@
   justify-content: flex-end;
   margin-bottom: 6px;
 }
+
+/* Code samples (curl / Claude Code / Python tabs). */
+.codeIntro {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.codeIntroTitle {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.codeIntroHint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.code {
+  margin-top: 10px;
+}
+
+.codeTabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.codeTab {
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: none;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+
+.codeTab:hover {
+  color: var(--text);
+}
+
+.codeTabActive {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.codeCopy {
+  margin-left: auto;
+}

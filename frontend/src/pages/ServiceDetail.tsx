@@ -1,7 +1,7 @@
 import { useEffect, useRef, type CSSProperties } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { ArrowLeft, Layers } from 'lucide-react';
-import { api, getAdminKey } from '../api/client';
+import { api } from '../api/client';
 import type { Catalog, Provider, Service } from '../api/types';
 import { CopyButton } from '../components/CopyButton';
 import { EmptyState } from '../components/EmptyState';
@@ -10,7 +10,6 @@ import { Page } from '../components/Layout';
 import { Playground } from '../components/Playground';
 import { Skeleton } from '../components/Skeleton';
 import { useFetch } from '../lib/useFetch';
-import { snippetFor, wireTests } from '../lib/playground';
 import { contextLabel, indexCatalog, MODALITY_LABEL, type CatalogInfo } from '../lib/catalogIndex';
 import { ModelIcon, modelMeta } from '../lib/modelBrand';
 import { int, ms, percent } from '../lib/format';
@@ -60,7 +59,6 @@ export function ServiceDetailPage() {
         <div className={styles.stack}>
           <Hero model={model} info={info} />
           <TestSection model={model} wires={wires} providers={serving} />
-          <QuickStart model={model} wires={wires} />
           <Usage
             requests={service.stats.requests}
             errors={service.stats.errors}
@@ -169,31 +167,6 @@ function Hero({ model, info }: { model: string; info?: CatalogInfo }) {
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-function QuickStart({ model, wires }: { model: string; wires: string[] }) {
-  // The primary wire (interactive panels first) gets a representative example —
-  // the same generator the playground fallback uses, so they never drift.
-  const wire = wireTests(wires)[0]?.wire ?? '';
-  const snippet = snippetFor(wire, {
-    model,
-    origin: window.location.origin,
-    token: getAdminKey(),
-  });
-
-  return (
-    <div className={`card ${styles.section}`}>
-      <div className={styles.sectionHead}>
-        <h3 className={styles.sectionTitle}>Try it</h3>
-        <CopyButton value={snippet} label="Copy" />
-      </div>
-      <p className={styles.sectionHint}>
-        Point your client at this gateway and use the model ID as-is. The bearer token below is your
-        signed-in key — manage keys on the <Link to="/users">Users</Link> page.
-      </p>
-      <pre className={styles.snippet}>{snippet}</pre>
     </div>
   );
 }

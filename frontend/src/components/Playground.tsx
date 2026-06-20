@@ -4,13 +4,15 @@ import type { Provider } from '../api/types';
 import { getAdminKey } from '../api/client';
 import {
   buildTestRequest,
+  codeTabsFor,
   DEFAULT_TTS_VOICE,
   runAsr,
   runTest,
   runTts,
-  snippetFor,
+  wireNeedsProviderPin,
   wireTests,
   type AsrResult,
+  type CodeTab,
   type TestResult,
   type TtsResult,
   type WireTest,
@@ -78,6 +80,15 @@ export function Playground({ model, wires, providers }: PlaygroundProps) {
   const [active, setActive] = useState(0);
   const test = tests[Math.min(active, tests.length - 1)];
 
+  // Provider id that fills the snippet placeholders: the pinned provider, or —
+  // for wires that can't be model-routed (ASR file/stream, TTS) — the first
+  // servable provider that serves this wire, so <provider-id> is never left raw.
+  // Model-routed wires under Auto stay unpinned (the gateway picks).
+  const snippetProvider =
+    provider ?? servable.find((p) => p.endpoints.some((e) => e.wire === test?.wire));
+  const snippetProviderId =
+    test && wireNeedsProviderPin(test.wire) ? snippetProvider?.id : provider?.id;
+
   if (servable.length === 0 || !test) {
     return (
       <div className={`card ${styles.section}`}>
@@ -140,6 +151,47 @@ export function Playground({ model, wires, providers }: PlaygroundProps) {
       </div>
 
       <Panel test={test} model={model} apiKey={apiKey} provider={provider} providers={servable} />
+
+      <div className={styles.codeIntro}>
+        <span className={styles.codeIntroTitle}>Call it from your code</span>
+        <span className={styles.codeIntroHint}>
+          Filled with your signed-in key and routing — copy and run as-is.
+        </span>
+      </div>
+      <CodeTabs
+        key={`${test.wire}:${snippetProviderId ?? 'auto'}`}
+        tabs={codeTabsFor(test.wire, {
+          model,
+          origin: window.location.origin,
+          token: apiKey,
+          providerId: snippetProviderId,
+        })}
+      />
+    </div>
+  );
+}
+
+/** Tabbed copy-runnable code samples (curl / Claude Code / Python) for a wire. */
+function CodeTabs({ tabs }: { tabs: CodeTab[] }) {
+  const [active, setActive] = useState(tabs[0]?.id);
+  const current = tabs.find((t) => t.id === active) ?? tabs[0];
+  if (!current) return null;
+  return (
+    <div className={styles.code}>
+      <div className={styles.codeTabs}>
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={`${styles.codeTab} ${t.id === current.id ? styles.codeTabActive : ''}`}
+            onClick={() => setActive(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+        <CopyButton value={current.code} label="Copy" className={styles.codeCopy} />
+      </div>
+      <pre className={styles.raw}>{current.code}</pre>
     </div>
   );
 }
@@ -176,9 +228,7 @@ function Panel({
       return <TtsPanel apiKey={apiKey} providerId={p?.id ?? ''} model={model} />;
     }
     default:
-      return (
-        <UnsupportedPanel test={test} model={model} apiKey={apiKey} providerId={provider?.id} />
-      );
+      return <UnsupportedPanel test={test} />;
   }
 }
 
@@ -560,55 +610,30 @@ function TtsMeta({ result }: { result: TtsResult }) {
 
 // --- Fallback panel for wires without an interactive test ------------------
 
-function UnsupportedPanel({
-  test,
-  model,
-  apiKey,
-  providerId,
-}: {
-  test: WireTest;
-  model: string;
-  apiKey: string;
-  /** Pinned provider id under explicit routing; undefined under Auto. */
-  providerId?: string;
-}) {
+function UnsupportedPanel({ test }: { test: WireTest }) {
   // The endpoint label carries the transport: "WS …" wires are WebSocket
-  // streaming, which the browser can't drive (see below); the rest are HTTP.
+  // streaming, which the browser can't drive; the rest are HTTP. Either way the
+  // copy-runnable samples below cover it.
   const isWs = test.endpoint.startsWith('WS ');
-  const snippet = snippetFor(test.wire, {
-    model,
-    origin: window.location.origin,
-    token: apiKey.trim(),
-    providerId,
-  });
 
   return (
-    <div className={styles.unsupported}>
-      <p className={styles.hint}>
-        {isWs ? (
-          <>
-            The <strong>{test.label}</strong> wire (<code>{test.wire}</code>) is a WebSocket
-            streaming API, so it can’t be exercised from the dashboard: a browser’s WebSocket can’t
-            attach the <code>Authorization</code>, <code>X-Songguo-Provider</code>, and{' '}
-            <code>X-Api-Resource-Id</code> headers the gateway requires, and the session speaks
-            Volcengine’s binary frame protocol. Use a client that can set headers — curl can:
-          </>
-        ) : (
-          <>
-            Interactive testing for the <strong>{test.label}</strong> wire (<code>{test.wire}</code>)
-            isn’t available in the dashboard yet. Call it directly through the gateway:
-          </>
-        )}
-      </p>
-      {snippet && (
-        <div className={styles.snippetBlock}>
-          <div className={styles.snippetHead}>
-            <CopyButton value={snippet} label="Copy" />
-          </div>
-          <pre className={styles.raw}>{snippet}</pre>
-        </div>
+    <p className={styles.hint}>
+      {isWs ? (
+        <>
+          The <strong>{test.label}</strong> wire (<code>{test.wire}</code>) is a WebSocket streaming
+          API, so it can’t be exercised from the dashboard: a browser’s WebSocket can’t attach the{' '}
+          <code>Authorization</code>, <code>X-Songguo-Provider</code>, and{' '}
+          <code>X-Api-Resource-Id</code> headers the gateway requires, and the session speaks
+          Volcengine’s binary frame protocol. Use a client that can set headers — see the samples
+          below.
+        </>
+      ) : (
+        <>
+          Interactive testing for the <strong>{test.label}</strong> wire (<code>{test.wire}</code>)
+          isn’t available in the dashboard yet — use the samples below to call it through the gateway.
+        </>
       )}
-    </div>
+    </p>
   );
 }
 

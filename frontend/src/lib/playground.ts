@@ -105,7 +105,7 @@ export interface SnippetOpts {
  */
 export function snippetFor(wire: string, opts: SnippetOpts): string {
   const endpoint = TEST_ENDPOINT[wire] ?? '';
-  if (endpoint.startsWith('WS ')) return wsSnippet(endpoint.slice(3), opts);
+  if (endpoint.startsWith('WS ')) return wsSnippet(wire, endpoint.slice(3), opts);
   switch (wire) {
     case 'volc/asr-file':
       return asrFileSnippet(opts);
@@ -166,17 +166,20 @@ function ttsSnippet({ model, origin, token, providerId }: SnippetOpts): string {
 function asrFileSnippet({ origin, token, providerId }: SnippetOpts): string {
   const pin = providerId || '<provider-id>';
   const auth = bearer(token);
-  return `# 1. Submit a recording (audio fetched by URL)
+  // REQUEST_ID is generated once and reused across submit→poll, so the block
+  // runs as-is; only the audio URL is genuine user input.
+  return `# 1. Submit a recording (audio fetched by URL).
+REQUEST_ID=$(uuidgen)
 curl ${origin}/api/v3/auc/bigmodel/submit \\
   ${auth} \\
   -H "X-Songguo-Provider: ${pin}" \\
   -H "X-Api-Resource-Id: volc.seedasr.auc" \\
   -H "X-Api-Request-Id: $REQUEST_ID" \\
   -H "Content-Type: application/json" \\
-  -d '{ "user": {"uid":"me"}, "audio": {"url":"https://…/audio.wav","format":"wav"},
+  -d '{ "user": {"uid":"me"}, "audio": {"url":"https://example.com/audio.wav","format":"wav"},
         "request": {"model_name":"bigmodel"} }'
 
-# 2. Poll for the transcript with the same provider pin and X-Api-Request-Id
+# 2. Poll for the transcript with the same provider pin and X-Api-Request-Id.
 curl ${origin}/api/v3/auc/bigmodel/query \\
   ${auth} \\
   -H "X-Songguo-Provider: ${pin}" \\
@@ -184,12 +187,12 @@ curl ${origin}/api/v3/auc/bigmodel/query \\
   -H "X-Api-Request-Id: $REQUEST_ID" -d '{}'`;
 }
 
-function wsSnippet(path: string, { origin, token, providerId }: SnippetOpts): string {
+function wsSnippet(wire: string, path: string, { model, origin, token, providerId }: SnippetOpts): string {
   const wsOrigin = origin.replace(/^http/, 'ws');
   const headers = [
     bearer(token),
     `-H "X-Songguo-Provider: ${providerId || '<provider-id>'}"`,
-    `-H "X-Api-Resource-Id: <x-api-resource-id>"`,
+    `-H "X-Api-Resource-Id: ${resourceIdFor(wire, model)}"`,
   ];
   return `# WebSocket upgrade — curl (≥ 7.86) sets the auth headers a browser can't.
 # This opens the authenticated stream; the audio/text frames that follow use
@@ -205,6 +208,243 @@ function defaultSnippet({ model, origin, token, providerId }: SnippetOpts): stri
 curl ${origin}/<vendor-path> \\
   ${headers.join(' \\\n  ')} \\
   -d '{ "model": "${model}", "…": "…" }'`;
+}
+
+/** The X-Api-Resource-Id a Volcengine streaming wire bills under, for snippets. */
+function resourceIdFor(wire: string, model: string): string {
+  if (wire.startsWith('volc/tts')) return model; // TTS selects the model by its id
+  if (wire.startsWith('volc/asr')) return 'volc.bigasr.sauc'; // streaming ASR billing class
+  return '';
+}
+
+// Wires that route by model id alone; everything else (Volcengine speech) is a
+// model-less passthrough that needs an explicit provider pin.
+const MODEL_ROUTED_WIRES = new Set([
+  'openai/chat',
+  'openai/completions',
+  'openai/responses',
+  'openai/embeddings',
+  'anthropic/messages',
+]);
+
+/** Whether a wire needs an explicit X-Songguo-Provider pin (vs. model routing). */
+export function wireNeedsProviderPin(wire: string): boolean {
+  return !MODEL_ROUTED_WIRES.has(wire);
+}
+
+// --- Code-sample tabs (curl / Claude Code / Python) ------------------------
+
+export interface CodeTab {
+  id: 'curl' | 'claude-code' | 'python';
+  label: string;
+  /** Language hint (display only). */
+  lang: string;
+  code: string;
+}
+
+/**
+ * The copy-runnable samples for a wire, in tab order: curl, Claude Code (only
+ * for chat wires it can actually drive), then Python. Every gateway-known
+ * placeholder — provider pin, bearer token, resource id — is filled from opts,
+ * so the code runs as-is; only genuine user input (e.g. an audio URL) is left.
+ */
+export function codeTabsFor(wire: string, opts: SnippetOpts): CodeTab[] {
+  const tabs: CodeTab[] = [
+    { id: 'curl', label: 'curl', lang: 'bash', code: snippetFor(wire, opts) },
+  ];
+  if (wireKind(wire) === 'chat') {
+    tabs.push({ id: 'claude-code', label: 'Claude Code', lang: 'bash', code: claudeCodeSnippet(opts) });
+  }
+  tabs.push({ id: 'python', label: 'Python', lang: 'python', code: pythonSnippetFor(wire, opts) });
+  return tabs;
+}
+
+/** Point the Claude Code CLI at the gateway's Anthropic-compatible endpoint. */
+function claudeCodeSnippet({ model, origin, token }: SnippetOpts): string {
+  return `# Point Claude Code at this gateway, then start it.
+export ANTHROPIC_BASE_URL="${origin}"
+export ANTHROPIC_AUTH_TOKEN="${token || '<your-songguo-key>'}"
+export ANTHROPIC_MODEL="${model}"
+claude`;
+}
+
+// --- Python (requests) snippets — mirror the curl examples per wire ---------
+
+/** The bearer value for a Python snippet; a clear placeholder when no key. */
+function pyToken(token?: string): string {
+  return token || '<your-songguo-key>';
+}
+
+/** Header dict lines (8-space indented) from key/value pairs. */
+function pyHeaders(pairs: Array<[string, string]>): string {
+  return pairs.map(([k, v]) => `        ${JSON.stringify(k)}: ${JSON.stringify(v)},`).join('\n');
+}
+
+/** Render a JSON-able value as a Python literal (True/False/None, dicts, lists). */
+function pyValue(v: unknown, indent: number): string {
+  const pad = ' '.repeat(indent);
+  const pad2 = ' '.repeat(indent + 4);
+  if (v === null) return 'None';
+  if (typeof v === 'boolean') return v ? 'True' : 'False';
+  if (typeof v === 'number') return String(v);
+  if (typeof v === 'string') return JSON.stringify(v);
+  if (Array.isArray(v)) {
+    if (v.length === 0) return '[]';
+    const items = v.map((x) => `${pad2}${pyValue(x, indent + 4)}`);
+    return `[\n${items.join(',\n')},\n${pad}]`;
+  }
+  if (typeof v === 'object') {
+    const entries = Object.entries(v as Record<string, unknown>);
+    if (entries.length === 0) return '{}';
+    const items = entries.map(([k, val]) => `${pad2}${JSON.stringify(k)}: ${pyValue(val, indent + 4)}`);
+    return `{\n${items.join(',\n')},\n${pad}}`;
+  }
+  return 'None';
+}
+
+function pythonSnippetFor(wire: string, opts: SnippetOpts): string {
+  const endpoint = TEST_ENDPOINT[wire] ?? '';
+  if (endpoint.startsWith('WS ')) return pyWsSnippet(wire, endpoint.slice(3), opts);
+  switch (wire) {
+    case 'volc/asr-file':
+      return pyAsrFileSnippet(opts);
+    case 'volc/tts-unidirectional':
+      return pyTtsSnippet(opts);
+    case 'openai/embeddings':
+    case 'anthropic/messages':
+    case 'openai/responses':
+    case 'openai/completions':
+    case 'openai/chat':
+      return pyModelRoutedSnippet(wire, opts);
+    default:
+      return pyDefaultSnippet(opts);
+  }
+}
+
+function pyProviderPair(providerId?: string): Array<[string, string]> {
+  return providerId ? [['X-Songguo-Provider', providerId]] : [];
+}
+
+function pyModelRoutedSnippet(wire: string, { model, origin, token, providerId }: SnippetOpts): string {
+  const prompt = wire === 'openai/embeddings' ? 'The quick brown fox' : 'Hello!';
+  const req = buildTestRequest(model, wire, prompt);
+  const headers = pyHeaders([
+    ['Authorization', `Bearer ${pyToken(token)}`],
+    ...pyProviderPair(providerId),
+    ['Content-Type', 'application/json'],
+  ]);
+  return `import requests
+
+resp = requests.post(
+    "${origin}${req.path}",
+    headers={
+${headers}
+    },
+    json=${pyValue(req.body, 4)},
+)
+print(resp.json())`;
+}
+
+function pyTtsSnippet({ model, origin, token, providerId }: SnippetOpts): string {
+  const headers = pyHeaders([
+    ['Authorization', `Bearer ${pyToken(token)}`],
+    ...pyProviderPair(providerId),
+    ['X-Api-Resource-Id', model],
+    ['X-Control-Require-Usage-Tokens-Return', 'true'],
+    ['Content-Type', 'application/json'],
+  ]);
+  const body = {
+    user: { uid: 'me' },
+    req_params: {
+      text: '你好，世界',
+      speaker: DEFAULT_TTS_VOICE,
+      audio_params: { format: 'mp3', sample_rate: 24000 },
+    },
+  };
+  return `import requests
+
+resp = requests.post(
+    "${origin}/api/v3/tts/unidirectional",
+    headers={
+${headers}
+    },
+    json=${pyValue(body, 4)},
+)
+# Newline-delimited JSON: each line carries a base64 audio chunk in "data".
+print(resp.text)`;
+}
+
+function pyAsrFileSnippet({ origin, token, providerId }: SnippetOpts): string {
+  const pin = providerId || '<provider-id>';
+  return `import time
+import uuid
+import requests
+
+base = "${origin}/api/v3/auc/bigmodel"
+request_id = str(uuid.uuid4())
+headers = {
+    "Authorization": "Bearer ${pyToken(token)}",
+    "X-Songguo-Provider": "${pin}",
+    "X-Api-Resource-Id": "volc.seedasr.auc",
+    "X-Api-Request-Id": request_id,
+    "Content-Type": "application/json",
+}
+
+# 1. Submit a recording (audio fetched by URL).
+requests.post(f"{base}/submit", headers={**headers, "X-Api-Sequence": "-1"}, json={
+    "user": {"uid": "me"},
+    "audio": {"url": "https://example.com/audio.wav", "format": "wav"},
+    "request": {"model_name": "bigmodel", "enable_itn": True, "enable_punc": True},
+})
+
+# 2. Poll for the transcript with the same X-Api-Request-Id.
+while True:
+    r = requests.post(f"{base}/query", headers=headers, json={})
+    if r.headers.get("X-Api-Status-Code") in ("20000001", "20000002"):
+        time.sleep(1.5)
+        continue
+    print(r.json())
+    break`;
+}
+
+function pyWsSnippet(wire: string, path: string, { model, origin, token, providerId }: SnippetOpts): string {
+  const wsOrigin = origin.replace(/^http/, 'ws');
+  const pin = providerId || '<provider-id>';
+  return `import asyncio
+import websockets  # pip install websockets
+
+async def main():
+    async with websockets.connect(
+        "${wsOrigin}${path}",
+        additional_headers={
+            "Authorization": "Bearer ${pyToken(token)}",
+            "X-Songguo-Provider": "${pin}",
+            "X-Api-Resource-Id": "${resourceIdFor(wire, model)}",
+        },
+    ) as ws:
+        # Frames use Volcengine's binary, gzip-framed protocol — send/receive bytes here.
+        ...
+
+asyncio.run(main())`;
+}
+
+function pyDefaultSnippet({ model, origin, token, providerId }: SnippetOpts): string {
+  const headers = pyHeaders([
+    ['Authorization', `Bearer ${pyToken(token)}`],
+    ...pyProviderPair(providerId),
+    ['Content-Type', 'application/json'],
+  ]);
+  return `import requests
+
+# ${model} is served over a model-less wire — call the native vendor path directly.
+resp = requests.post(
+    "${origin}/<vendor-path>",
+    headers={
+${headers}
+    },
+    json={"model": ${JSON.stringify(model)}, "...": "..."},
+)
+print(resp.json())`;
 }
 
 // --- Chat / embedding transport (model-routed /v1) -------------------------
