@@ -100,7 +100,9 @@ export interface User {
   revoked_at: string | null;
   spent: number;
   active: boolean;
-  /** Plaintext key, present only in the POST /users response. */
+  /** RFC3339 timestamp of the user's most recent call, or null if never used. */
+  last_seen: string | null;
+  /** Plaintext key. Empty for users created before key storage existed. */
   key?: string;
 }
 

@@ -171,6 +171,17 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [users]
+      summary: Delete a user (the admin user cannot be deleted)
+      operationId: deleteUser
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: User deleted }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/users/{id}/revoke:
     post:
       tags: [users]
@@ -524,7 +535,8 @@ components:
         revoked_at: { type: [string, "null"], format: date-time }
         spent: { type: number }
         active: { type: boolean }
-        key: { type: string, description: "Plaintext key; present only in the create response." }
+        last_seen: { type: [string, "null"], format: date-time, description: "Timestamp of the user's most recent call, or null if never used." }
+        key: { type: string, description: "Plaintext key. Empty for users created before key storage existed." }
     CreateUser:
       type: object
       required: [name]

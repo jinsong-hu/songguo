@@ -155,8 +155,8 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  revokeUser: (id: string) =>
-    request<User>(`/users/${encodeURIComponent(id)}/revoke`, { method: 'POST' }),
+  deleteUser: (id: string) =>
+    request<void>(`/users/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   vendors: () => request<Vendor[]>('/vendors'),
 

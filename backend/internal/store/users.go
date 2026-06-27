@@ -24,6 +24,7 @@ type User struct {
 	ID        string
 	Name      string
 	KeyPrefix string
+	KeyFull   string   // plaintext key; empty for rows created before key_full existed
 	Budget    *float64 // nil = unlimited
 	Scope     []string // empty = all allowed
 	RPM       int      // 0 = unlimited
@@ -109,9 +110,9 @@ func (s *Store) CreateUser(nu NewUser) (User, string, error) {
 	createdAt := time.Now()
 
 	_, err = s.db.Exec(
-		`INSERT INTO users (id, name, key_hash, key_prefix, budget, scope, rpm, capture, created_at, revoked_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-		id, nu.Name, HashKey(key), prefix, nu.Budget, string(scopeJSON), nu.RPM, boolPtrToNull(nu.Capture), createdAt.Unix(),
+		`INSERT INTO users (id, name, key_hash, key_prefix, key_full, budget, scope, rpm, capture, created_at, revoked_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+		id, nu.Name, HashKey(key), prefix, key, nu.Budget, string(scopeJSON), nu.RPM, boolPtrToNull(nu.Capture), createdAt.Unix(),
 	)
 	if err != nil {
 		return User{}, "", fmt.Errorf("store: create user: %w", err)
@@ -121,6 +122,7 @@ func (s *Store) CreateUser(nu NewUser) (User, string, error) {
 		ID:        id,
 		Name:      nu.Name,
 		KeyPrefix: prefix,
+		KeyFull:   key,
 		Budget:    nu.Budget,
 		Scope:     scope,
 		RPM:       nu.RPM,
@@ -137,8 +139,9 @@ const AdminUserID = "admin"
 // EnsureAdminUser seeds (or refreshes) the admin user whose API key is the
 // admin key, so that one key works for both management and service calls. The
 // admin user has an unlimited budget and no scope restrictions. It is
-// idempotent and re-points the key hash if the admin key changed; an empty key
-// is a no-op (the admin API runs unprotected, so there is no key to mirror).
+// idempotent and, on every startup, re-aligns the stored name, key hash,
+// prefix, and full key to the current admin key from .env; an empty key is a
+// no-op (the admin API runs unprotected, so there is no key to mirror).
 func (s *Store) EnsureAdminUser(plaintext string) error {
 	if plaintext == "" {
 		return nil
@@ -148,13 +151,15 @@ func (s *Store) EnsureAdminUser(plaintext string) error {
 		prefix = prefix[:keyPrefixLen]
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO users (id, name, key_hash, key_prefix, budget, scope, rpm, capture, created_at, revoked_at)
-		 VALUES (?, ?, ?, ?, NULL, '[]', 0, NULL, ?, NULL)
+		`INSERT INTO users (id, name, key_hash, key_prefix, key_full, budget, scope, rpm, capture, created_at, revoked_at)
+		 VALUES (?, ?, ?, ?, ?, NULL, '[]', 0, NULL, ?, NULL)
 		 ON CONFLICT(id) DO UPDATE SET
+		   name = excluded.name,
 		   key_hash = excluded.key_hash,
 		   key_prefix = excluded.key_prefix,
+		   key_full = excluded.key_full,
 		   revoked_at = NULL`,
-		AdminUserID, "Admin", HashKey(plaintext), prefix, time.Now().Unix(),
+		AdminUserID, "admin", HashKey(plaintext), prefix, plaintext, time.Now().Unix(),
 	)
 	if err != nil {
 		return fmt.Errorf("store: ensure admin user: %w", err)
@@ -163,7 +168,7 @@ func (s *Store) EnsureAdminUser(plaintext string) error {
 }
 
 // userSelect is the shared column list for scanning a User.
-const userSelect = `SELECT id, name, key_prefix, budget, scope, rpm, capture, created_at, revoked_at FROM users`
+const userSelect = `SELECT id, name, key_prefix, key_full, budget, scope, rpm, capture, created_at, revoked_at FROM users`
 
 // scanUser reads a single User row from a *sql.Row or *sql.Rows.
 func scanUser(sc interface{ Scan(...any) error }) (User, error) {
@@ -175,7 +180,7 @@ func scanUser(sc interface{ Scan(...any) error }) (User, error) {
 		createdAt int64
 		revokedAt sql.NullInt64
 	)
-	if err := sc.Scan(&u.ID, &u.Name, &u.KeyPrefix, &budget, &scopeJSON, &u.RPM, &capture, &createdAt, &revokedAt); err != nil {
+	if err := sc.Scan(&u.ID, &u.Name, &u.KeyPrefix, &u.KeyFull, &budget, &scopeJSON, &u.RPM, &capture, &createdAt, &revokedAt); err != nil {
 		return User{}, err
 	}
 	if budget.Valid {
@@ -316,6 +321,32 @@ func (s *Store) RevokeUser(id string) error {
 		return fmt.Errorf("store: user %q: %w", id, ErrNotFound)
 	}
 	return nil
+}
+
+// DeleteUser permanently removes a user. An unknown id yields ErrNotFound.
+func (s *Store) DeleteUser(id string) error {
+	res, err := s.db.Exec(`DELETE FROM users WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("store: delete user: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("store: user %q: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+// LastSeenByUser returns the timestamp of the user's most recent call, or nil
+// if the user has never made a call.
+func (s *Store) LastSeenByUser(userID string) (*time.Time, error) {
+	var ms sql.NullInt64
+	if err := s.db.QueryRow(`SELECT MAX(ts) FROM calls WHERE user_id = ?`, userID).Scan(&ms); err != nil {
+		return nil, fmt.Errorf("store: last seen by user: %w", err)
+	}
+	if !ms.Valid {
+		return nil, nil
+	}
+	t := time.UnixMilli(ms.Int64)
+	return &t, nil
 }
 
 // boolPtrToNull converts a *bool into a value suitable for a nullable INTEGER

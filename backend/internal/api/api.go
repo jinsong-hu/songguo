@@ -106,6 +106,7 @@ var adminRoutes = []adminRoute{
 	{"GET", "/api/users", (*api).handleListUsers},
 	{"POST", "/api/users", (*api).handleCreateUser},
 	{"PATCH", "/api/users/{id}", (*api).handlePatchUser},
+	{"DELETE", "/api/users/{id}", (*api).handleDeleteUser},
 	{"POST", "/api/users/{id}/revoke", (*api).handleRevokeUser},
 	{"GET", "/api/vendors", (*api).handleListVendors},
 	{"POST", "/api/vendors/{name}/test", (*api).handleTestVendor},

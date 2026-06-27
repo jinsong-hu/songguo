@@ -226,6 +226,9 @@ func (s *Store) migrate() error {
 		{"providers", "quirks", "TEXT NOT NULL DEFAULT '{}'"},
 		{"providers", "api_key", "TEXT NOT NULL DEFAULT ''"},
 		{"provider_models", "cached_input", "REAL NOT NULL DEFAULT 0"},
+		// key_full stores the plaintext key so the dashboard can display and copy
+		// it after creation. Empty for rows created before this column existed.
+		{"users", "key_full", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, a := range adds {
 		if err := s.addColumn(a.table, a.col, a.decl); err != nil {

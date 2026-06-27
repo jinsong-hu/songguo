@@ -381,7 +381,16 @@ func (a *api) usersData() ([]userView, error) {
 		if err != nil {
 			return nil, err
 		}
-		views = append(views, newUserView(u, spent))
+		v := newUserView(u, spent)
+		lastSeen, err := a.store.LastSeenByUser(u.ID)
+		if err != nil {
+			return nil, err
+		}
+		if lastSeen != nil {
+			s := lastSeen.UTC().Format(time.RFC3339)
+			v.LastSeen = &s
+		}
+		views = append(views, v)
 	}
 	return views, nil
 }
@@ -512,6 +521,31 @@ func (a *api) revokeUserData(id string) (userView, error) {
 		return userView{}, err
 	}
 	return newUserView(usr, spent), nil
+}
+
+// handleDeleteUser permanently deletes a user. The seeded admin user cannot be
+// deleted (it mirrors the admin key and is re-created on startup anyway).
+func (a *api) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	if err := a.deleteUserData(r.PathValue("id")); err != nil {
+		a.writeDataErr(w, "delete user", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteUserData deletes a user. Deleting the admin user is a *apiError (400);
+// an unknown id is a *apiError (404).
+func (a *api) deleteUserData(id string) error {
+	if id == store.AdminUserID {
+		return badRequestErr("the admin user cannot be deleted")
+	}
+	if err := a.store.DeleteUser(id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return notFoundErr("user not found")
+		}
+		return err
+	}
+	return nil
 }
 
 // handleListVendors returns vendors (without secrets) plus per-vendor stats.

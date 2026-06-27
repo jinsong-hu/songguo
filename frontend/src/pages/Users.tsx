@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { KeyRound, Pencil, Plus } from 'lucide-react';
 import { api } from '../api/client';
 import type { User } from '../api/types';
+import { CopyButton } from '../components/CopyButton';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
@@ -12,24 +13,27 @@ import { useFetch } from '../lib/useFetch';
 import { dateTime, money } from '../lib/format';
 import styles from './Users.module.css';
 
+/** The seeded admin user mirrors the .env admin key and cannot be deleted. */
+const ADMIN_ID = 'admin';
+
 export function UsersPage() {
   const users = useFetch(() => api.users(), []);
-  /** id of the user whose Revoke button is awaiting inline confirmation. */
-  const [confirmingRevoke, setConfirmingRevoke] = useState<string | null>(null);
-  const [revokeBusy, setRevokeBusy] = useState(false);
+  /** id of the user whose Delete button is awaiting inline confirmation. */
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const toast = useToast();
 
-  const onRevoke = async (user: User) => {
-    setRevokeBusy(true);
+  const onDelete = async (user: User) => {
+    setDeleteBusy(true);
     try {
-      await api.revokeUser(user.id);
+      await api.deleteUser(user.id);
       users.refetch();
-      toast.success(`Revoked "${user.name}".`);
+      toast.success(`Deleted "${user.name}".`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Revoke failed.');
+      toast.error(e instanceof Error ? e.message : 'Delete failed.');
     } finally {
-      setConfirmingRevoke(null);
-      setRevokeBusy(false);
+      setConfirmingDelete(null);
+      setDeleteBusy(false);
     }
   };
 
@@ -63,11 +67,9 @@ export function UsersPage() {
               <thead>
                 <tr>
                   <th>Name</th>
-                  <th>Key prefix</th>
+                  <th>Key</th>
                   <th>Spent / Budget</th>
-                  <th>Scope</th>
-                  <th className="num">RPM</th>
-                  <th>Created</th>
+                  <th>Last Seen</th>
                   <th>Status</th>
                   <th style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
@@ -81,16 +83,14 @@ export function UsersPage() {
                         <CaptureBadge capture={u.capture} />
                       </span>
                     </td>
-                    <td className="mono">{u.key_prefix}</td>
+                    <td>
+                      <KeyCell user={u} />
+                    </td>
                     <td>
                       <UsageCell spent={u.spent} budget={u.budget} />
                     </td>
-                    <td>
-                      <ScopeChips scope={u.scope} />
-                    </td>
-                    <td className="num">{u.rpm > 0 ? u.rpm : '—'}</td>
                     <td className="mono" style={{ color: 'var(--text-muted)' }}>
-                      {dateTime(u.created_at)}
+                      {u.last_seen ? dateTime(u.last_seen) : '—'}
                     </td>
                     <td>
                       <span className={u.active ? styles.statusActive : styles.statusRevoked}>
@@ -99,38 +99,39 @@ export function UsersPage() {
                     </td>
                     <td>
                       <div className={styles.rowActions}>
-                        {u.active &&
-                          (confirmingRevoke === u.id ? (
-                            <>
+                        {confirmingDelete === u.id ? (
+                          <>
+                            <button
+                              className="btn btn-sm btn-danger"
+                              disabled={deleteBusy}
+                              title="This permanently removes the user and its key. This cannot be undone."
+                              onClick={() => onDelete(u)}
+                            >
+                              {deleteBusy ? 'Deleting…' : 'Confirm delete'}
+                            </button>
+                            <button
+                              className="btn btn-sm"
+                              disabled={deleteBusy}
+                              onClick={() => setConfirmingDelete(null)}
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <Link to={`/users/${u.id}/edit`} className="btn btn-sm">
+                              <Pencil size={12} /> Edit
+                            </Link>
+                            {u.id !== ADMIN_ID && (
                               <button
                                 className="btn btn-sm btn-danger"
-                                disabled={revokeBusy}
-                                title="Any SDK using this key stops working immediately. This cannot be undone."
-                                onClick={() => onRevoke(u)}
+                                onClick={() => setConfirmingDelete(u.id)}
                               >
-                                {revokeBusy ? 'Revoking…' : 'Confirm revoke'}
+                                Delete
                               </button>
-                              <button
-                                className="btn btn-sm"
-                                disabled={revokeBusy}
-                                onClick={() => setConfirmingRevoke(null)}
-                              >
-                                Cancel
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <Link to={`/users/${u.id}/edit`} className="btn btn-sm">
-                                <Pencil size={12} /> Edit
-                              </Link>
-                              <button
-                                className="btn btn-sm btn-danger"
-                                onClick={() => setConfirmingRevoke(u.id)}
-                              >
-                                Revoke
-                              </button>
-                            </>
-                          ))}
+                            )}
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -141,6 +142,24 @@ export function UsersPage() {
         </div>
       )}
     </Page>
+  );
+}
+
+/** Masks a plaintext key for display, e.g. "sg-abc***def". */
+function maskKey(key: string): string {
+  if (key.length <= 9) return key;
+  return `${key.slice(0, 6)}***${key.slice(-3)}`;
+}
+
+/** Renders a masked key with a copy button for the full key. */
+function KeyCell({ user }: { user: User }) {
+  const full = user.key ?? '';
+  const display = full ? maskKey(full) : `${user.key_prefix}…`;
+  return (
+    <div className={styles.keyCell}>
+      <span className="mono">{display}</span>
+      {full && <CopyButton value={full} className={styles.keyCopy} />}
+    </div>
   );
 }
 
@@ -182,24 +201,5 @@ function CaptureBadge({ capture }: { capture: boolean | null }) {
     <span className={`chip ${capture ? styles.captureOn : styles.captureOff}`}>
       capture: {capture ? 'on' : 'off'}
     </span>
-  );
-}
-
-function ScopeChips({ scope }: { scope: string[] }) {
-  if (!scope || scope.length === 0) {
-    return <span className="muted">all models</span>;
-  }
-  const shown = scope.slice(0, 3);
-  return (
-    <div className={styles.scopeChips}>
-      {shown.map((s) => (
-        <span key={s} className="chip chip-mono">
-          {s}
-        </span>
-      ))}
-      {scope.length > shown.length && (
-        <span className="chip">+{scope.length - shown.length}</span>
-      )}
-    </div>
   );
 }

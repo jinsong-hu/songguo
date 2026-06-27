@@ -24,7 +24,11 @@ type userView struct {
 	RevokedAt *string  `json:"revoked_at"`
 	Spent     float64  `json:"spent"`
 	Active    bool     `json:"active"`
-	// Key carries the plaintext key, set ONLY on creation. Omitted otherwise.
+	// LastSeen is the RFC3339 timestamp of the user's most recent call, or nil
+	// if the user has never made one.
+	LastSeen *string `json:"last_seen"`
+	// Key carries the plaintext key. Empty for users created before key storage
+	// existed; omitted in that case.
 	Key string `json:"key,omitempty"`
 }
 
@@ -45,6 +49,7 @@ func newUserView(u store.User, spent float64) userView {
 		CreatedAt: u.CreatedAt.UTC().Format(time.RFC3339),
 		Spent:     spent,
 		Active:    u.RevokedAt == nil,
+		Key:       u.KeyFull,
 	}
 	if u.RevokedAt != nil {
 		s := u.RevokedAt.UTC().Format(time.RFC3339)

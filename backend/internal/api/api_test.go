@@ -204,9 +204,9 @@ func TestUserCreateListPatchRevoke(t *testing.T) {
 	if list[0].Spent != 3.25 {
 		t.Errorf("list spent = %v, want 3.25", list[0].Spent)
 	}
-	// List must NOT include the plaintext key.
-	if strings.Contains(rec.Body.String(), plaintext) {
-		t.Error("list leaked the plaintext key")
+	// List exposes the full plaintext key so the dashboard can display/copy it.
+	if list[0].Key != plaintext {
+		t.Errorf("list key = %q, want %q", list[0].Key, plaintext)
 	}
 
 	// Patch name + rpm; budget unchanged.

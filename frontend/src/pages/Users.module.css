@@ -43,11 +43,14 @@
   background: var(--danger);
 }
 
-.scopeChips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  max-width: 220px;
+.keyCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.keyCopy {
+  padding: 2px 6px;
 }
 
 .nameCell {
