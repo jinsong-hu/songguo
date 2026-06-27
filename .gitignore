@@ -9,6 +9,8 @@
 # Real config (only the example is committed)
 /config.yaml
 
+/.env
+
 # Frontend build artifacts (backend/web/dist is committed so the binary builds without Node)
 frontend/node_modules/
 frontend/*.tsbuildinfo
