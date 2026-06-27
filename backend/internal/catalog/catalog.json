@@ -6,7 +6,7 @@
       "homepage": "https://openai.com",
       "models": {
         "gpt-5.5": { "input": 5.0, "output": 30.0, "cached_input": 0.5, "unit": "per_1m_tokens", "context": 1050000, "modalities": ["text", "image"] },
-        "gpt-5.4": { "input": 2.5, "output": 15.0, "cached_input": 0.25, "unit": "per_1m_tokens", "context": 400000, "modalities": ["text", "image"] },
+        "gpt-5.4": { "input": 2.5, "output": 15.0, "cached_input": 0.25, "unit": "per_1m_tokens", "context": 1050000, "modalities": ["text", "image"] },
         "gpt-5.4-mini": { "input": 0.75, "output": 4.5, "cached_input": 0.075, "unit": "per_1m_tokens", "context": 400000, "modalities": ["text", "image"] },
         "gpt-5.4-nano": { "input": 0.2, "output": 1.25, "cached_input": 0.02, "unit": "per_1m_tokens", "context": 400000, "modalities": ["text"] },
         "gpt-5-mini": { "input": 0.25, "output": 2.0, "cached_input": 0.025, "unit": "per_1m_tokens", "context": 400000, "modalities": ["text", "image"] },
@@ -42,13 +42,11 @@
       "homepage": "https://deepseek.com",
       "quirks": { "cache_tokens": "deepseek" },
       "models": {
-        "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cached_input": 0.0028, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] },
-        "deepseek-v4-pro": { "input": 0.435, "output": 0.87, "cached_input": 0.003625, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] },
-        "deepseek-chat": { "input": 0.27, "output": 1.1, "cached_input": 0.07, "unit": "per_1m_tokens", "context": 64000, "modalities": ["text"] },
-        "deepseek-reasoner": { "input": 0.55, "output": 2.19, "cached_input": 0.14, "unit": "per_1m_tokens", "context": 64000, "modalities": ["text"] }
+        "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cached_input": 0.0028, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text"] },
+        "deepseek-v4-pro": { "input": 0.435, "output": 0.87, "cached_input": 0.003625, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text"] }
       },
       "endpoints": [
-        { "wire": "openai/chat", "endpoint": "https://api.deepseek.com/chat/completions", "adapter": "openai-compatible", "docs": "https://api-docs.deepseek.com", "note": "Context caching is automatic; cache hits are billed at the cached_input rate (reported via prompt_cache_hit_tokens).", "models": ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"] },
+        { "wire": "openai/chat", "endpoint": "https://api.deepseek.com/chat/completions", "adapter": "openai-compatible", "docs": "https://api-docs.deepseek.com", "note": "Context caching is automatic; cache hits are billed at the cached_input rate (reported via prompt_cache_hit_tokens).", "models": ["deepseek-v4-flash", "deepseek-v4-pro"] },
         { "wire": "openai/models", "endpoint": "https://api.deepseek.com", "adapter": "openai-compatible" },
         { "wire": "anthropic/messages", "endpoint": "https://api.deepseek.com/anthropic/messages", "adapter": "anthropic-compatible", "docs": "https://api-docs.deepseek.com/guides/anthropic_api", "note": "Same models, Anthropic wire format (for Claude Code and Anthropic SDKs). Claude model aliases map server-side to DeepSeek models.", "models": ["deepseek-v4-flash", "deepseek-v4-pro"] },
         { "wire": "anthropic/models", "endpoint": "https://api.deepseek.com/anthropic", "adapter": "anthropic-compatible" }
@@ -60,13 +58,13 @@
       "homepage": "https://www.volcengine.com/product/ark",
       "models": {
         "doubao-seed-2-0-pro-260215": { "input": 0.44, "output": 2.22, "cached_input": 0.089, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] },
-        "doubao-seed-2-0-lite-260428": { "input": 0.083, "output": 0.5, "cached_input": 0.017, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] },
-        "doubao-seed-2-0-mini-260428": { "input": 0.028, "output": 0.28, "cached_input": 0.006, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text"] },
+        "doubao-seed-2-0-lite-260215": { "input": 0.083, "output": 0.5, "cached_input": 0.017, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] },
+        "doubao-seed-2-0-mini-260215": { "input": 0.028, "output": 0.28, "cached_input": 0.006, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text"] },
         "doubao-seed-1-6-251015": { "input": 0.11, "output": 1.11, "cached_input": 0.022, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] }
       },
       "endpoints": [
-        { "wire": "openai/chat", "endpoint": "https://ark.cn-beijing.volces.com/api/v3/chat/completions", "adapter": "openai-compatible", "docs": "https://www.volcengine.com/docs/82379/1302010", "note": "OpenAI-compatible base is /api/v3. Pricing is tiered by input length; defaults are the ≤32k tier (CNY ÷ 7.2). Cached tokens reported under prompt_tokens_details.", "models": ["doubao-seed-2-0-pro-260215", "doubao-seed-2-0-lite-260428", "doubao-seed-2-0-mini-260428", "doubao-seed-1-6-251015"] },
-        { "wire": "openai/responses", "endpoint": "https://ark.cn-beijing.volces.com/api/v3/responses", "adapter": "openai-compatible", "docs": "https://www.volcengine.com/docs/82379/1585135", "note": "Ark's recommended API for doubao-seed-1.6+ — OpenAI Responses format with stateful multi-turn and explicit caching. Same prices as Chat Completions.", "models": ["doubao-seed-2-0-pro-260215", "doubao-seed-2-0-lite-260428", "doubao-seed-1-6-251015"] },
+        { "wire": "openai/chat", "endpoint": "https://ark.cn-beijing.volces.com/api/v3/chat/completions", "adapter": "openai-compatible", "docs": "https://www.volcengine.com/docs/82379/1302010", "note": "OpenAI-compatible base is /api/v3. Pricing is tiered by input length; defaults are the ≤32k tier (CNY ÷ 7.2). Cached tokens reported under prompt_tokens_details.", "models": ["doubao-seed-2-0-pro-260215", "doubao-seed-2-0-lite-260215", "doubao-seed-2-0-mini-260215", "doubao-seed-1-6-251015"] },
+        { "wire": "openai/responses", "endpoint": "https://ark.cn-beijing.volces.com/api/v3/responses", "adapter": "openai-compatible", "docs": "https://www.volcengine.com/docs/82379/1585135", "note": "Ark's recommended API for doubao-seed-1.6+ — OpenAI Responses format with stateful multi-turn and explicit caching. Same prices as Chat Completions.", "models": ["doubao-seed-2-0-pro-260215", "doubao-seed-2-0-lite-260215", "doubao-seed-1-6-251015"] },
         { "wire": "openai/completions", "endpoint": "https://ark.cn-beijing.volces.com/api/v3/completions", "adapter": "openai-compatible" },
         { "wire": "openai/models", "endpoint": "https://ark.cn-beijing.volces.com/api/v3", "adapter": "openai-compatible" }
       ]
@@ -83,7 +81,7 @@
         "minimax-m3": { "input": 0.29, "output": 1.17, "cached_input": 0.058, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text", "image"] },
         "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cached_input": 0.0028, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] },
         "deepseek-v4-pro": { "input": 0.435, "output": 0.87, "cached_input": 0.003625, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] },
-        "glm-5.2": { "input": 0.83, "output": 3.33, "cached_input": 0.18, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
+        "glm-5.2": { "input": 1.11, "output": 3.89, "cached_input": 0.28, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text"] },
         "kimi-k2.6": { "input": 0.9, "output": 3.75, "cached_input": 0.15, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text", "image"] },
         "doubao-embedding-vision": { "input": 0.07, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text", "image"] },
         "doubao-seedance-2.0": { "input": 1.0, "output": 0.0, "unit": "per_call", "modalities": ["text", "image"] },
@@ -131,9 +129,9 @@
       "name": "Alibaba DashScope",
       "homepage": "https://www.aliyun.com/product/bailian",
       "models": {
-        "qwen-plus": { "input": 0.4, "output": 1.2, "unit": "per_1m_tokens", "context": 131072, "modalities": ["text"] },
-        "qwen-turbo": { "input": 0.05, "output": 0.2, "unit": "per_1m_tokens", "context": 131072, "modalities": ["text"] },
-        "qwen-max": { "input": 1.6, "output": 6.4, "unit": "per_1m_tokens", "context": 32768, "modalities": ["text"] },
+        "qwen-plus": { "input": 0.4, "output": 1.2, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text"] },
+        "qwen-turbo": { "input": 0.05, "output": 0.2, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text"] },
+        "qwen-max": { "input": 1.6, "output": 6.4, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] },
         "text-embedding-v3": { "input": 0.07, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] },
         "text-embedding-v4": { "input": 0.07, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] },
         "qwen3-max": { "input": 1.6, "output": 6.4, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text"] },
@@ -174,13 +172,12 @@
         "glm-5-turbo": { "input": 0.69, "output": 3.06, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
         "glm-4.7": { "input": 0.28, "output": 1.11, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
         "glm-4.7-flash": { "input": 0.0, "output": 0.0, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
-        "glm-4.5-air": { "input": 0.056, "output": 0.14, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] },
         "embedding-3": { "input": 0.07, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] }
       },
       "endpoints": [
-        { "wire": "openai/chat", "endpoint": "https://open.bigmodel.cn/api/paas/v4/chat/completions", "adapter": "openai-compatible", "docs": "https://docs.bigmodel.cn/cn/api/introduction", "note": "No /models listing endpoint. Implicit caching; cached tokens under prompt_tokens_details. Prices are CNY list ÷ 7.2 — verify at bigmodel.cn/pricing (Zhipu repriced several times in 2026).", "models": ["glm-5.1", "glm-5", "glm-4.7", "glm-4.7-flash", "glm-4.5-air"] },
+        { "wire": "openai/chat", "endpoint": "https://open.bigmodel.cn/api/paas/v4/chat/completions", "adapter": "openai-compatible", "docs": "https://docs.bigmodel.cn/cn/api/introduction", "note": "No /models listing endpoint. Implicit caching; cached tokens under prompt_tokens_details. Prices are CNY list ÷ 7.2 — verify at bigmodel.cn/pricing (Zhipu repriced several times in 2026).", "models": ["glm-5.1", "glm-5", "glm-4.7", "glm-4.7-flash"] },
         { "wire": "openai/embeddings", "endpoint": "https://open.bigmodel.cn/api/paas/v4/embeddings", "adapter": "openai-compatible", "docs": "https://docs.bigmodel.cn/cn/guide/models/embedding/embedding-3.md", "models": ["embedding-3"] },
-        { "wire": "anthropic/messages", "endpoint": "https://open.bigmodel.cn/api/anthropic/messages", "adapter": "anthropic-compatible", "docs": "https://docs.bigmodel.cn/cn/guide/develop/claude/introduction.md", "note": "Same GLM models, Anthropic wire format. Claude Code aliases map server-side: Opus → glm-5.1, Sonnet → glm-5-turbo, Haiku → glm-4.5-air.", "models": ["glm-5.1", "glm-5-turbo", "glm-4.5-air"] },
+        { "wire": "anthropic/messages", "endpoint": "https://open.bigmodel.cn/api/anthropic/messages", "adapter": "anthropic-compatible", "docs": "https://docs.bigmodel.cn/cn/guide/develop/claude/introduction.md", "note": "Same GLM models, Anthropic wire format. Claude Code aliases map server-side: Opus → glm-5.1, Sonnet → glm-5-turbo, Haiku → glm-4.7-flash.", "models": ["glm-5.1", "glm-5-turbo", "glm-4.7-flash"] },
         { "wire": "anthropic/models", "endpoint": "https://open.bigmodel.cn/api/anthropic", "adapter": "anthropic-compatible" }
       ]
     },
@@ -206,7 +203,7 @@
       "name": "Azure OpenAI",
       "homepage": "https://azure.microsoft.com/products/ai-services/openai-service",
       "models": {
-        "gpt-5.4": { "input": 2.5, "output": 15.0, "cached_input": 0.25, "unit": "per_1m_tokens", "context": 400000, "modalities": ["text", "image"] },
+        "gpt-5.4": { "input": 2.5, "output": 15.0, "cached_input": 0.25, "unit": "per_1m_tokens", "context": 1050000, "modalities": ["text", "image"] },
         "gpt-5.4-mini": { "input": 0.75, "output": 4.5, "cached_input": 0.075, "unit": "per_1m_tokens", "context": 400000, "modalities": ["text", "image"] }
       },
       "endpoints": [
