@@ -3,6 +3,7 @@ import { Download, Send } from 'lucide-react';
 import type { Catalog, Provider, Service } from '../api/types';
 import { getAdminKey } from '../api/client';
 import { modelMeta } from '../lib/modelBrand';
+import { wireFullName } from '../lib/wires';
 import {
   buildTestRequest,
   codeTabsFor,
@@ -82,6 +83,11 @@ function wiresOf(providers: Provider[], serving: Set<string>): string[] {
 /** The wires a single provider exposes that actually serve the model. */
 function providerWires(p: Provider, modelWires: string[]): string[] {
   return p.endpoints.map((e) => e.wire).filter((w) => modelWires.includes(w));
+}
+
+/** The proxy path for an endpoint option, sans method ("POST /v1/x" → "/v1/x"). */
+function endpointPath(test: WireTest): string {
+  return test.endpoint.replace(/^[A-Z]+\s+/, '') || test.wire;
 }
 
 /**
@@ -164,52 +170,66 @@ export function Playground({ services, providers, catalog, defaultModel }: Playg
 
   if (models.length === 0) return null;
 
+  // Shared across both states so the model stays switchable even when the
+  // selected model has no testable endpoint.
+  const modelRow = (
+    <div className={styles.selectorRow}>
+      <span className={styles.selectorLabel}>Model</span>
+      <Select value={selModel} onValueChange={changeModel}>
+        <SelectTrigger className={styles.selectorSelect} aria-label="Model to test">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {models.map((m) => (
+            <SelectItem key={m} value={m}>
+              {modelMeta(m).name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+
   return (
     <div className={`card ${styles.section}`}>
       <div className={styles.head}>
         <h3 className={styles.title}>Test</h3>
       </div>
 
-      <div className={styles.selectorRow}>
-        <span className={styles.selectorLabel}>Model</span>
-        <Select value={selModel} onValueChange={changeModel}>
-          <SelectTrigger className={styles.selectorSelect} aria-label="Model to test">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {models.map((m) => (
-              <SelectItem key={m} value={m}>
-                {modelMeta(m).name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
       {!test ? (
-        <p className={styles.hint}>
-          No provider serving this model exposes a model-serving wire to test interactively.
-        </p>
+        <>
+          {modelRow}
+          <p className={styles.hint}>
+            No provider serving this model exposes a model-serving wire to test interactively.
+          </p>
+        </>
       ) : (
         <>
           <div className={styles.selectorRow}>
-            <span className={styles.selectorLabel}>API</span>
+            <span className={styles.selectorLabel}>Endpoint</span>
             <Select
               value={test.wire}
               onValueChange={(w) => setActive(tests.findIndex((t) => t.wire === w))}
             >
-              <SelectTrigger className={styles.selectorSelect} aria-label="API to test">
+              <SelectTrigger className={styles.selectorSelect} aria-label="Endpoint to test">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 {tests.map((t) => (
                   <SelectItem key={t.wire} value={t.wire}>
-                    {t.label}
+                    {endpointPath(t)}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
+
+          <div className={styles.selectorRow}>
+            <span className={styles.selectorLabel}>Wire</span>
+            <span className={styles.selectorValue}>{wireFullName(test.wire)}</span>
+          </div>
+
+          {modelRow}
 
           <div className={styles.selectorRow}>
             <span className={styles.selectorLabel}>Routing</span>

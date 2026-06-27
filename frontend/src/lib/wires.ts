@@ -43,6 +43,15 @@ export function wireName(wire: string, vendorId?: string): string {
   return owned ? base : `${owner.name} - ${base}`;
 }
 
+// wireFullName always owner-qualifies a wire ("openai/chat" → "OpenAI Chat
+// Completions"), unlike wireName which prefixes only compatible vendors. Used
+// where the wire stands alone (e.g. the test card) and must read in full.
+export function wireFullName(wire: string): string {
+  const base = WIRE_NAMES[wire] ?? wire;
+  const owner = WIRE_OWNER[wire.split('/')[0]];
+  return owner ? `${owner.name} ${base}` : base;
+}
+
 // Coarse kind per wire, used to label models and pick the playground request
 // shape. Management wires (model listings) report "" — they serve no models.
 const WIRE_KIND: Record<string, string> = {
