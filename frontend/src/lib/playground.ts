@@ -47,12 +47,15 @@ const TEST_ENDPOINT: Record<string, string> = {
   'openai/responses': 'POST /v1/responses',
   'anthropic/messages': 'POST /v1/messages',
   'openai/embeddings': 'POST /v1/embeddings',
+  'openai/images': 'POST /v1/images/generations',
+  'ark/video': 'POST /api/v3/contents/generations/tasks',
   'volc/asr-file': 'POST /api/v3/auc/bigmodel/submit',
   'volc/asr-stream-async': 'WS /api/v3/sauc/bigmodel_async',
   'volc/asr-stream-nostream': 'WS /api/v3/sauc/bigmodel_nostream',
   'volc/tts-unidirectional': 'POST /api/v3/tts/unidirectional',
   'volc/tts-unidirectional-stream': 'WS /api/v3/tts/unidirectional-stream',
   'volc/tts-bidirectional': 'WS /api/v3/tts/bidirection',
+  'volc/voice-clone': 'POST /api/v3/tts/voice_clone',
 };
 
 /**
@@ -72,10 +75,31 @@ export function wireTests(wires: string[]): WireTest[] {
       endpoint: TEST_ENDPOINT[wire] ?? '',
     });
   }
-  // Stable, useful order: real interactive panels first, fallbacks last.
-  const rank: Record<TestKind, number> = { chat: 0, embedding: 1, asr: 2, tts: 3, unsupported: 4 };
-  return tests.sort((a, b) => rank[a.kind] - rank[b.kind]);
+  // Group by modality so every wire family stays together (text first, then
+  // the media families, with speech — TTS then ASR — last and adjacent). Within
+  // a family, interactively-testable wires lead, then by id for stability. The
+  // Endpoint and Wire selectors both render this list, so they share one order.
+  return tests.sort((a, b) => {
+    const ra = MODALITY_RANK[wireKind(a.wire)] ?? 99;
+    const rb = MODALITY_RANK[wireKind(b.wire)] ?? 99;
+    if (ra !== rb) return ra - rb;
+    const ta = a.kind === 'unsupported' ? 1 : 0;
+    const tb = b.kind === 'unsupported' ? 1 : 0;
+    if (ta !== tb) return ta - tb;
+    return a.wire.localeCompare(b.wire);
+  });
 }
+
+// Display order of the wire families (from wireKind). Text wires lead; speech —
+// TTS then ASR — comes last so the two stay grouped together.
+const MODALITY_RANK: Record<string, number> = {
+  chat: 0,
+  embedding: 1,
+  image: 2,
+  video: 3,
+  tts: 4,
+  stt: 5,
+};
 
 // --- Snippet examples (single source for the "Try it" card and the playground
 //     fallback) --------------------------------------------------------------

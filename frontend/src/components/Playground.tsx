@@ -80,9 +80,12 @@ function wiresOf(providers: Provider[], serving: Set<string>): string[] {
   return [...wires];
 }
 
-/** The proxy path for an endpoint option, sans method ("POST /v1/x" → "/v1/x"). */
+/** The proxy path for an endpoint option, sans method ("POST /v1/x" → "/v1/x").
+ *  Always normalized to a leading "/"; a wire without a mapped endpoint shows
+ *  its id under one ("/openai/images") rather than a bare, odd-one-out label. */
 function endpointPath(test: WireTest): string {
-  return test.endpoint.replace(/^[A-Z]+\s+/, '') || test.wire;
+  const path = test.endpoint.replace(/^[A-Z]+\s+/, '') || test.wire;
+  return path.startsWith('/') ? path : `/${path}`;
 }
 
 /** A model's testable wires and the providers that serve each. */
