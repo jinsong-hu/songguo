@@ -1,0 +1,22 @@
+# Git / CI
+.git
+.github
+.gitignore
+
+# Docs & local files
+*.md
+docs/
+.env
+.env.example
+*.log
+
+# Build artifacts and local DB (rebuilt inside the image)
+/songguo
+/songguo-*
+*.db
+*.db-*
+frontend/node_modules
+frontend/dist
+backend/web/dist
+config.yaml
+.DS_Store
