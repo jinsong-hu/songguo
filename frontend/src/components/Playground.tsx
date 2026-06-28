@@ -9,14 +9,18 @@ import {
   codeTabsFor,
   DEFAULT_TTS_VOICE,
   runAsr,
+  runImage,
   runTest,
   runTts,
+  runVideo,
   wireNeedsProviderPin,
   wireTests,
   type AsrResult,
   type CodeTab,
+  type ImageResult,
   type TestResult,
   type TtsResult,
+  type VideoResult,
   type WireTest,
 } from '../lib/playground';
 import { int, ms } from '../lib/format';
@@ -314,7 +318,13 @@ export function Playground({ services, providers, catalog, defaultModel }: Playg
         </p>
       ) : (
         <>
-          <Panel test={test} model={model} apiKey={apiKey} provider={provider} />
+          <Panel
+            test={test}
+            model={model}
+            apiKey={apiKey}
+            provider={provider}
+            pinnedProviderId={snippetProviderId}
+          />
 
           <div className={styles.codeIntro}>
             <span className={styles.codeIntroTitle}>Call it from your code</span>
@@ -366,17 +376,21 @@ function CodeTabs({ tabs }: { tabs: CodeTab[] }) {
  * Dispatch to the panel for the active wire's kind. provider is the pinned
  * provider, or undefined under Auto routing — where the gateway routes by
  * endpoint, so ASR/TTS send no provider pin (empty id) just like chat.
+ * pinnedProviderId is the resolved affinity provider for wires that can't be
+ * Auto-routed (video): the pinned one, else the first serving the wire.
  */
 function Panel({
   test,
   model,
   apiKey,
   provider,
+  pinnedProviderId,
 }: {
   test: WireTest;
   model: string;
   apiKey: string;
   provider?: Provider;
+  pinnedProviderId?: string;
 }) {
   switch (test.kind) {
     case 'chat':
@@ -386,6 +400,10 @@ function Panel({
       return <AsrPanel apiKey={apiKey} providerId={provider?.id ?? ''} />;
     case 'tts':
       return <TtsPanel apiKey={apiKey} providerId={provider?.id ?? ''} model={model} />;
+    case 'image':
+      return <ImagePanel apiKey={apiKey} providerId={provider?.id} model={model} />;
+    case 'video':
+      return <VideoPanel apiKey={apiKey} providerId={pinnedProviderId ?? ''} model={model} />;
     default:
       return <UnsupportedPanel test={test} />;
   }
@@ -480,6 +498,194 @@ function ResultMeta({ result }: { result: TestResult }) {
         </span>
       )}
     </span>
+  );
+}
+
+// --- Image panel (OpenAI-compatible image generation) ----------------------
+
+// Sizes valid for Doubao Seedream (≥ 3,686,400 px). DALL·E-scale 1024² is
+// rejected by Seedream, so the defaults are 2K-class and up.
+const IMAGE_SIZES = ['2048x2048', '2304x1728', '1728x2304', '2560x1440', '1440x2560'];
+
+function ImagePanel({
+  apiKey,
+  providerId,
+  model,
+}: {
+  apiKey: string;
+  providerId?: string;
+  model: string;
+}) {
+  const [prompt, setPrompt] = useState('A red panda coding on a laptop, warm studio lighting');
+  const [size, setSize] = useState(IMAGE_SIZES[0]);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<ImageResult | null>(null);
+  const [showRaw, setShowRaw] = useState(false);
+
+  const canSend = apiKey.trim() !== '' && prompt.trim() !== '' && !running;
+
+  const send = async () => {
+    if (!canSend) return;
+    setRunning(true);
+    setShowRaw(false);
+    const res = await runImage(apiKey.trim(), model, prompt.trim(), size, providerId);
+    setResult(res);
+    setRunning(false);
+  };
+
+  return (
+    <>
+      <p className={styles.hint}>
+        Generate an image with the model’s OpenAI-compatible image endpoint. The result renders
+        below — click an image to open it full size.
+      </p>
+
+      <div className={styles.fieldGrid}>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Size</span>
+          <select className="select" value={size} onChange={(e) => setSize(e.target.value)}>
+            {IMAGE_SIZES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <textarea
+        className={styles.prompt}
+        rows={3}
+        placeholder="Describe the image to generate"
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            send();
+          }
+        }}
+      />
+
+      <div className={styles.actions}>
+        <button type="button" className="btn btn-primary" onClick={send} disabled={!canSend}>
+          {running ? <span className="spinner" /> : <Send size={14} />}
+          {running ? 'Generating…' : 'Generate'}
+        </button>
+        {result && !running && (
+          <span className={styles.meta}>
+            <span className={`pill ${result.ok ? 'pill-ok' : 'pill-err'}`}>
+              <span className="dot" />
+              {result.status || 'network error'}
+            </span>
+            <span className={styles.metaItem}>{ms(result.latencyMs)}</span>
+          </span>
+        )}
+      </div>
+
+      {result && !running && (
+        <div className={styles.result}>
+          {result.ok ? (
+            <div className={styles.imageGrid}>
+              {result.images.map((src, i) => (
+                <a key={i} href={src} target="_blank" rel="noreferrer">
+                  <img className={styles.image} src={src} alt={`Generated result ${i + 1}`} />
+                </a>
+              ))}
+            </div>
+          ) : (
+            <pre className={`${styles.resultText} ${styles.resultError}`}>{result.errorMessage}</pre>
+          )}
+          <RawToggle raw={result.raw} show={showRaw} onToggle={() => setShowRaw((v) => !v)} />
+        </div>
+      )}
+    </>
+  );
+}
+
+// --- Video panel (Volcengine Ark async task generation) --------------------
+
+function VideoPanel({
+  apiKey,
+  providerId,
+  model,
+}: {
+  apiKey: string;
+  /** Resolved provider pin — video can't be Auto-routed; empty means none serve it. */
+  providerId: string;
+  model: string;
+}) {
+  const [prompt, setPrompt] = useState('A red panda surfing a wave at sunset, cinematic');
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<VideoResult | null>(null);
+  const [showRaw, setShowRaw] = useState(false);
+
+  const canSend = apiKey.trim() !== '' && prompt.trim() !== '' && providerId !== '' && !running;
+
+  const send = async () => {
+    if (!canSend) return;
+    setRunning(true);
+    setShowRaw(false);
+    const res = await runVideo(apiKey.trim(), model, prompt.trim(), providerId);
+    setResult(res);
+    setRunning(false);
+  };
+
+  return (
+    <>
+      <p className={styles.hint}>
+        Generate a video with the model’s Ark task API. This submits the job and polls until it’s
+        ready (up to ~3 min), then plays the result below.
+        {providerId === '' && ' Select a routing provider above first — video can’t be Auto-routed.'}
+      </p>
+
+      <textarea
+        className={styles.prompt}
+        rows={3}
+        placeholder="Describe the video to generate"
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            send();
+          }
+        }}
+      />
+
+      <div className={styles.actions}>
+        <button type="button" className="btn btn-primary" onClick={send} disabled={!canSend}>
+          {running ? <span className="spinner" /> : <Send size={14} />}
+          {running ? 'Generating…' : 'Generate'}
+        </button>
+        {result && !running && (
+          <span className={styles.meta}>
+            <span className={`pill ${result.ok ? 'pill-ok' : 'pill-err'}`}>
+              <span className="dot" />
+              {result.status || 'network error'}
+            </span>
+            <span className={styles.metaItem}>{ms(result.latencyMs)}</span>
+            {result.taskStatus && <span className={styles.metaItem}>{result.taskStatus}</span>}
+          </span>
+        )}
+      </div>
+
+      {result && !running && (
+        <div className={styles.result}>
+          {result.ok && result.videoUrl ? (
+            <>
+              <video className={styles.video} src={result.videoUrl} controls autoPlay loop />
+              <a className={styles.download} href={result.videoUrl} target="_blank" rel="noreferrer">
+                <Download size={13} /> Open video
+              </a>
+            </>
+          ) : (
+            <pre className={`${styles.resultText} ${styles.resultError}`}>{result.errorMessage}</pre>
+          )}
+          <RawToggle raw={result.raw} show={showRaw} onToggle={() => setShowRaw((v) => !v)} />
+        </div>
+      )}
+    </>
   );
 }
 

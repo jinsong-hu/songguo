@@ -452,8 +452,12 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 				}
 			}
 			// allow_unmatched, or a matched wire whose endpoint is origin-only:
-			// forward the inbound path verbatim to the vendor origin.
-			return joinQuery(strings.TrimRight(t.Vendor.Origin, "/")+r.URL.Path, r.URL.RawQuery)
+			// forward the inbound path to the vendor origin — but a child path
+			// under a known collection endpoint inherits that endpoint's rewritten
+			// base (e.g. the video task-status GET .../tasks/{id} under the
+			// ark/video submit endpoint .../api/plan/v3/.../tasks), so a vendor
+			// that rewrites the path prefix doesn't drop it and 404 on the child.
+			return passthroughURL(t.Vendor, r.URL.Path, r.URL.RawQuery)
 		},
 	}, true
 }
@@ -563,6 +567,54 @@ func joinQuery(u, rawQuery string) string {
 func buildUpstreamURL(endpoint, model, inboundQuery string) string {
 	u := strings.ReplaceAll(endpoint, "{model}", url.PathEscape(model))
 	return mergeQuery(u, inboundQuery)
+}
+
+// passthroughURL builds the upstream URL for a request that no wire fully
+// matched (an allow_unmatched passthrough). It forwards to the vendor origin,
+// except when the inbound path is a child of one of the vendor's collection
+// endpoints — then it inherits that endpoint's rewritten base plus the child
+// tail. This is what lets the video task-status GET (.../tasks/{id}) reach the
+// same .../api/plan/v3/... base its submit (.../tasks) was rewritten to, instead
+// of being forwarded to the bare origin with the prefix dropped.
+func passthroughURL(v config.Vendor, inboundPath, rawQuery string) string {
+	if ep, tail, ok := stemEndpoint(v, inboundPath); ok {
+		base, epQuery, hasQuery := strings.Cut(ep, "?")
+		u := strings.TrimRight(base, "/") + tail
+		if hasQuery {
+			u += "?" + epQuery
+		}
+		return mergeQuery(u, rawQuery)
+	}
+	return joinQuery(strings.TrimRight(v.Origin, "/")+inboundPath, rawQuery)
+}
+
+// stemEndpoint finds the vendor's path-bearing wire endpoint that is the parent
+// "collection" of inboundPath, returning that endpoint and the child tail. It
+// matches the LONGEST wire suffix that appears in inboundPath immediately before
+// a "/<tail>" boundary, mirroring wire.Resolve's longest-suffix rule. A bare
+// match (the suffix at the very end, no child tail) is left to the normal
+// matched-wire path and not handled here.
+func stemEndpoint(v config.Vendor, inboundPath string) (endpoint, tail string, ok bool) {
+	lower := strings.ToLower(inboundPath)
+	bestLen := -1
+	for _, name := range v.Wires {
+		ep, has := v.Endpoints[name]
+		if !has || !endpointHasPath(ep) {
+			continue
+		}
+		w, exists := wire.Get(name)
+		if !exists {
+			continue
+		}
+		for _, suf := range w.Suffixes {
+			idx := strings.Index(lower, strings.ToLower(suf)+"/")
+			if idx < 0 || len(suf) <= bestLen {
+				continue
+			}
+			endpoint, tail, ok, bestLen = ep, inboundPath[idx+len(suf):], true, len(suf)
+		}
+	}
+	return endpoint, tail, ok
 }
 
 // endpointHasPath reports whether a configured endpoint carries a path beyond

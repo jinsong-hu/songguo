@@ -12,7 +12,7 @@ import { wireKind, wireName } from './wires';
 // --- Per-wire test profiles ------------------------------------------------
 
 /** Which interactive panel a wire's test renders. */
-export type TestKind = 'chat' | 'embedding' | 'asr' | 'tts' | 'unsupported';
+export type TestKind = 'chat' | 'embedding' | 'asr' | 'tts' | 'image' | 'video' | 'unsupported';
 
 export interface WireTest {
   /** Wire id, e.g. "openai/chat". */
@@ -33,6 +33,8 @@ const TEST_KIND: Record<string, TestKind> = {
   'openai/responses': 'chat',
   'anthropic/messages': 'chat',
   'openai/embeddings': 'embedding',
+  'openai/images': 'image',
+  'ark/video': 'video',
   'volc/asr-file': 'asr',
   // Only the HTTP unidirectional TTS is fetch-drivable; the WebSocket stream and
   // bidirectional variants stay on the curl fallback.
@@ -58,6 +60,11 @@ const TEST_ENDPOINT: Record<string, string> = {
   'volc/voice-clone': 'POST /api/v3/tts/voice_clone',
 };
 
+// Wires deliberately kept off the test card. Voice cloning trains a billed
+// voice slot and has no safe, side-effect-free test shape, so it is omitted
+// until it gets a real, opt-in flow rather than shown as a dead snippet.
+const UNTESTED_WIRES = new Set<string>(['volc/voice-clone']);
+
 /**
  * Build the list of testable profiles for a model's enabled wires. Pure
  * management wires (model listings) are dropped — they serve no model, so
@@ -68,6 +75,7 @@ export function wireTests(wires: string[]): WireTest[] {
   const tests: WireTest[] = [];
   for (const wire of wires) {
     if (wireKind(wire) === '') continue; // model-listing / management wire
+    if (UNTESTED_WIRES.has(wire)) continue; // deliberately omitted (see above)
     tests.push({
       wire,
       label: wireName(wire),
@@ -135,6 +143,10 @@ export function snippetFor(wire: string, opts: SnippetOpts): string {
       return asrFileSnippet(opts);
     case 'volc/tts-unidirectional':
       return ttsSnippet(opts);
+    case 'openai/images':
+      return imageSnippet(opts);
+    case 'ark/video':
+      return videoSnippet(opts);
     case 'openai/embeddings':
     case 'anthropic/messages':
     case 'openai/responses':
@@ -185,6 +197,38 @@ function ttsSnippet({ model, origin, token, providerId }: SnippetOpts): string {
   return `curl ${origin}/api/v3/tts/unidirectional \\
   ${headers.join(' \\\n  ')} \\
   -d '${JSON.stringify(body, null, 2)}'`;
+}
+
+/** The shared image-generation request body, so the snippets and the panel agree. */
+const IMAGE_PROMPT = 'A red panda coding on a laptop, warm studio lighting';
+const IMAGE_SIZE = '2048x2048';
+
+function imageSnippet({ model, origin, token, providerId }: SnippetOpts): string {
+  const headers = [bearer(token), ...providerLines(providerId, false), `-H "Content-Type: application/json"`];
+  const body = { model, prompt: IMAGE_PROMPT, size: IMAGE_SIZE };
+  return `curl ${origin}/v1/images/generations \\
+  ${headers.join(' \\\n  ')} \\
+  -d '${JSON.stringify(body, null, 2)}'`;
+}
+
+/** The shared video-generation prompt, so the snippet and the panel agree. */
+const VIDEO_PROMPT = 'A red panda surfing a wave at sunset, cinematic';
+
+function videoSnippet({ model, origin, token, providerId }: SnippetOpts): string {
+  // Video is a submit→poll task API; the model isn't Auto-routable and the task
+  // id is provider-specific, so both calls pin the same provider.
+  const pin = `-H "X-Songguo-Provider: ${providerId || '<provider-id>'}"`;
+  const submit = [bearer(token), pin, `-H "Content-Type: application/json"`];
+  const poll = [bearer(token), pin];
+  const body = { model, content: [{ type: 'text', text: VIDEO_PROMPT }] };
+  return `# 1. Submit a generation task; the response carries a task "id".
+TASK_ID=$(curl -s ${origin}/api/v3/contents/generations/tasks \\
+  ${submit.join(' \\\n  ')} \\
+  -d '${JSON.stringify(body, null, 2)}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
+
+# 2. Poll until status is "succeeded"; content.video_url holds the result.
+curl ${origin}/api/v3/contents/generations/tasks/$TASK_ID \\
+  ${poll.join(' \\\n  ')}`;
 }
 
 function asrFileSnippet({ origin, token, providerId }: SnippetOpts): string {
@@ -243,11 +287,14 @@ function resourceIdFor(wire: string, model: string): string {
 
 /**
  * Whether a wire still needs an explicit X-Songguo-Provider pin. The gateway
- * routes every HTTP wire by endpoint under Auto — model-routed and model-less
- * (ASR file, TTS) alike — so those never need a pin. Only WebSocket wires,
- * which can't be Auto-routed, still require one.
+ * routes most HTTP wires by endpoint under Auto — model-routed and model-less
+ * (ASR file, TTS) alike — so those never need a pin. Two cases still require
+ * one: WebSocket wires (can't be Auto-routed), and ark/video, whose models the
+ * vendor doesn't expose to Auto and whose submit→poll lifecycle must stay on one
+ * provider (the task id is provider-specific).
  */
 export function wireNeedsProviderPin(wire: string): boolean {
+  if (wire === 'ark/video') return true;
   return (TEST_ENDPOINT[wire] ?? '').startsWith('WS ');
 }
 
@@ -329,6 +376,10 @@ function pythonSnippetFor(wire: string, opts: SnippetOpts): string {
       return pyAsrFileSnippet(opts);
     case 'volc/tts-unidirectional':
       return pyTtsSnippet(opts);
+    case 'openai/images':
+      return pyImageSnippet(opts);
+    case 'ark/video':
+      return pyVideoSnippet(opts);
     case 'openai/embeddings':
     case 'anthropic/messages':
     case 'openai/responses':
@@ -391,6 +442,51 @@ ${headers}
 )
 # Newline-delimited JSON: each line carries a base64 audio chunk in "data".
 print(resp.text)`;
+}
+
+function pyImageSnippet({ model, origin, token, providerId }: SnippetOpts): string {
+  const headers = pyHeaders([
+    ['Authorization', `Bearer ${pyToken(token)}`],
+    ...pyProviderPair(providerId),
+    ['Content-Type', 'application/json'],
+  ]);
+  const body = { model, prompt: IMAGE_PROMPT, size: IMAGE_SIZE };
+  return `import requests
+
+resp = requests.post(
+    "${origin}/v1/images/generations",
+    headers={
+${headers}
+    },
+    json=${pyValue(body, 4)},
+)
+# Each data[] item carries an image "url" or base64 "b64_json".
+print(resp.json())`;
+}
+
+function pyVideoSnippet({ model, origin, token, providerId }: SnippetOpts): string {
+  const pin = providerId || '<provider-id>';
+  const body = { model, content: [{ type: 'text', text: VIDEO_PROMPT }] };
+  return `import time
+import requests
+
+base = "${origin}/api/v3/contents/generations/tasks"
+headers = {
+    "Authorization": "Bearer ${pyToken(token)}",
+    "X-Songguo-Provider": "${pin}",
+    "Content-Type": "application/json",
+}
+
+# 1. Submit a generation task; the response carries a task "id".
+task_id = requests.post(base, headers=headers, json=${pyValue(body, 4)}).json()["id"]
+
+# 2. Poll until the task finishes; content.video_url holds the result.
+while True:
+    task = requests.get(f"{base}/{task_id}", headers=headers).json()
+    if task.get("status") in ("succeeded", "failed", "cancelled"):
+        print(task)
+        break
+    time.sleep(3)`;
 }
 
 function pyAsrFileSnippet({ origin, token, providerId }: SnippetOpts): string {
@@ -576,6 +672,283 @@ export async function runTest(
 
   const { text, usage } = summarize(json);
   return { ok: true, status: res.status, latencyMs, text, usage, raw };
+}
+
+// --- Image transport (OpenAI-compatible image generation) ------------------
+
+export interface ImageResult {
+  ok: boolean;
+  /** HTTP status; 0 for a network failure. */
+  status: number;
+  latencyMs: number;
+  /** Renderable image sources (an http(s) url or a data: URI), one per image. */
+  images: string[];
+  errorMessage?: string;
+  /** Pretty-printed response (base64 image data elided to stay readable). */
+  raw: string;
+}
+
+/**
+ * Generate an image via the OpenAI-compatible /v1/images/generations wire. The
+ * call is model-routed (the model rides in the body), so under Auto it omits the
+ * provider pin just like chat; pass providerId to pin one. The response carries
+ * each image as a "url" or base64 "b64_json" — both are turned into a src the
+ * panel can render.
+ */
+export async function runImage(
+  key: string,
+  model: string,
+  prompt: string,
+  size: string,
+  providerId?: string,
+): Promise<ImageResult> {
+  const start = performance.now();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${key}`,
+  };
+  if (providerId) headers['X-Songguo-Provider'] = providerId;
+  const body: Record<string, unknown> = { model, prompt };
+  if (size) body.size = size;
+
+  let res: Response;
+  try {
+    res = await fetch('/v1/images/generations', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    return {
+      ok: false,
+      status: 0,
+      latencyMs: elapsed(start),
+      images: [],
+      errorMessage: e instanceof Error ? e.message : 'Network error',
+      raw: '',
+    };
+  }
+
+  const latencyMs = elapsed(start);
+  const bodyText = await res.text();
+  const json = tryParse(bodyText);
+  const raw = json !== null ? JSON.stringify(elideImageData(json), null, 2) : bodyText;
+
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      latencyMs,
+      images: [],
+      errorMessage: errorMessageOf(json) ?? `Request failed (${res.status})`,
+      raw,
+    };
+  }
+
+  const images = imageSrcs(json);
+  if (images.length === 0) {
+    return { ok: false, status: res.status, latencyMs, images: [], errorMessage: 'No image returned.', raw };
+  }
+  return { ok: true, status: res.status, latencyMs, images, raw };
+}
+
+/** Pull renderable srcs from an images response: data[].url or data[].b64_json. */
+function imageSrcs(json: unknown): string[] {
+  if (typeof json !== 'object' || json === null) return [];
+  const data = (json as { data?: unknown }).data;
+  if (!Array.isArray(data)) return [];
+  const out: string[] = [];
+  for (const item of data) {
+    if (typeof item !== 'object' || item === null) continue;
+    const o = item as { url?: unknown; b64_json?: unknown };
+    if (typeof o.url === 'string' && o.url !== '') out.push(o.url);
+    else if (typeof o.b64_json === 'string' && o.b64_json !== '') out.push(`data:image/png;base64,${o.b64_json}`);
+  }
+  return out;
+}
+
+/** Replace long base64 image payloads with a short placeholder for the raw view. */
+function elideImageData(json: unknown): unknown {
+  if (typeof json !== 'object' || json === null) return json;
+  const o = json as { data?: unknown };
+  if (!Array.isArray(o.data)) return json;
+  return {
+    ...o,
+    data: o.data.map((item) => {
+      if (item && typeof item === 'object') {
+        const b = (item as { b64_json?: unknown }).b64_json;
+        if (typeof b === 'string' && b.length > 24) {
+          return { ...(item as object), b64_json: `…${b.length} base64 chars` };
+        }
+      }
+      return item;
+    }),
+  };
+}
+
+// --- Video transport (Volcengine Ark async task generation) ----------------
+
+export interface VideoResult {
+  ok: boolean;
+  /** Last HTTP status from the gateway; 0 for a network failure. */
+  status: number;
+  /** Terminal task status, e.g. "succeeded" | "failed" | "cancelled". */
+  taskStatus?: string;
+  /** Result video URL, when the task succeeded. */
+  videoUrl?: string;
+  latencyMs: number;
+  errorMessage?: string;
+  /** Pretty-printed last response body. */
+  raw: string;
+}
+
+/**
+ * Run an Ark video-generation test: submit the task, then poll the task-status
+ * GET (.../tasks/{id}) until it reaches a terminal state. Both calls pin the
+ * same provider — the model isn't Auto-routable and the task id is
+ * provider-specific, so submit and poll must stay on one upstream (the gateway
+ * rewrites the unmatched poll path to the same base its submit went to). The
+ * provider serving video must allow unmatched passthrough for the poll to reach
+ * upstream.
+ */
+export async function runVideo(
+  key: string,
+  model: string,
+  prompt: string,
+  providerId: string,
+): Promise<VideoResult> {
+  const start = performance.now();
+  const base = '/api/v3/contents/generations/tasks';
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${key}`,
+  };
+  if (providerId) headers['X-Songguo-Provider'] = providerId;
+
+  // 1. Submit the task.
+  let submit: Response;
+  try {
+    submit = await fetch(base, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model, content: [{ type: 'text', text: prompt }] }),
+    });
+  } catch (e) {
+    return videoNetworkError(start, e);
+  }
+  const submitText = await submit.text();
+  const submitJson = tryParse(submitText);
+  if (!submit.ok) {
+    return {
+      ok: false,
+      status: submit.status,
+      latencyMs: elapsed(start),
+      errorMessage: errorMessageOf(submitJson) ?? `Submit failed (${submit.status})`,
+      raw: pretty(submitJson, submitText),
+    };
+  }
+  const taskId = videoTaskId(submitJson);
+  if (!taskId) {
+    return {
+      ok: false,
+      status: submit.status,
+      latencyMs: elapsed(start),
+      errorMessage: 'Submit returned no task id.',
+      raw: pretty(submitJson, submitText),
+    };
+  }
+
+  // 2. Poll until a terminal status or timeout (~3 min — video is slow).
+  const deadline = performance.now() + 180_000;
+  while (performance.now() < deadline) {
+    await sleep(3000);
+    let q: Response;
+    try {
+      q = await fetch(`${base}/${encodeURIComponent(taskId)}`, { method: 'GET', headers });
+    } catch (e) {
+      return videoNetworkError(start, e);
+    }
+    const text = await q.text();
+    const json = tryParse(text);
+    const raw = pretty(json, text);
+    if (!q.ok) {
+      return {
+        ok: false,
+        status: q.status,
+        latencyMs: elapsed(start),
+        errorMessage: errorMessageOf(json) ?? `Poll failed (${q.status})`,
+        raw,
+      };
+    }
+    const status = videoStatus(json);
+    if (status === 'succeeded') {
+      const videoUrl = videoUrlOf(json);
+      return {
+        ok: videoUrl !== '',
+        status: q.status,
+        taskStatus: status,
+        videoUrl: videoUrl || undefined,
+        latencyMs: elapsed(start),
+        errorMessage: videoUrl ? undefined : 'Task succeeded but no video URL was returned.',
+        raw,
+      };
+    }
+    if (status === 'failed' || status === 'cancelled') {
+      return {
+        ok: false,
+        status: q.status,
+        taskStatus: status,
+        latencyMs: elapsed(start),
+        errorMessage: errorMessageOf(json) ?? `Task ${status}.`,
+        raw,
+      };
+    }
+    // queued / running / unknown → keep polling.
+  }
+
+  return {
+    ok: false,
+    status: 0,
+    latencyMs: elapsed(start),
+    errorMessage: 'Timed out waiting for the video (3 min).',
+    raw: '',
+  };
+}
+
+function videoNetworkError(start: number, e: unknown): VideoResult {
+  return {
+    ok: false,
+    status: 0,
+    latencyMs: elapsed(start),
+    errorMessage: e instanceof Error ? e.message : 'Network error',
+    raw: '',
+  };
+}
+
+/** The task id from a submit response (top-level "id"). */
+function videoTaskId(json: unknown): string {
+  if (typeof json !== 'object' || json === null) return '';
+  const id = (json as { id?: unknown }).id;
+  return typeof id === 'string' ? id : '';
+}
+
+/** The lowercased task status from a poll response. */
+function videoStatus(json: unknown): string {
+  if (typeof json !== 'object' || json === null) return '';
+  const s = (json as { status?: unknown }).status;
+  return typeof s === 'string' ? s.toLowerCase() : '';
+}
+
+/** The result video URL: content.video_url, or any nested video_url field. */
+function videoUrlOf(json: unknown): string {
+  if (typeof json !== 'object' || json === null) return '';
+  const content = (json as { content?: unknown }).content;
+  if (typeof content === 'object' && content !== null) {
+    const u = (content as { video_url?: unknown }).video_url;
+    if (typeof u === 'string' && u !== '') return u;
+  }
+  const top = (json as { video_url?: unknown }).video_url;
+  return typeof top === 'string' ? top : '';
 }
 
 // --- ASR transport (Volcengine bigmodel file recognition) ------------------
