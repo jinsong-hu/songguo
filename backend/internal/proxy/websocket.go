@@ -16,6 +16,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -46,6 +47,68 @@ var wsHandshakeHeaders = map[string]struct{}{
 	"Sec-Websocket-Version":    {},
 	"Sec-Websocket-Protocol":   {},
 	"Sec-Websocket-Extensions": {},
+}
+
+// wsAuthSubprotocols map a Sec-WebSocket-Protocol token prefix to the request
+// header it stands in for. A browser's WebSocket API cannot set headers, so the
+// dashboard test playground smuggles the gateway credentials as subprotocol
+// tokens (the one handshake channel a browser controls). The value after each
+// prefix is base64url-encoded — base64url's alphabet is all valid subprotocol
+// token characters, so any key/id survives the round trip.
+var wsAuthSubprotocols = []struct {
+	prefix string
+	header string
+	bearer bool // wrap the decoded value as "Bearer <value>"
+}{
+	{"songguo.auth.", "Authorization", true},
+	{"songguo.provider.", "X-Songguo-Provider", false},
+	{"songguo.resource.", "X-Api-Resource-Id", false},
+}
+
+// applyWSSubprotocolAuth lifts songguo.* credential tokens from the request's
+// Sec-WebSocket-Protocol header into the equivalent request headers (never
+// overwriting an explicitly set header), then rewrites the subprotocol list to
+// drop those tokens so they are never replayed upstream. It is a no-op when no
+// such tokens are present, so a non-browser client that sets real headers is
+// unaffected. Call it only for WebSocket upgrades, before auth.
+func applyWSSubprotocolAuth(r *http.Request) {
+	const header = "Sec-Websocket-Protocol"
+	raw := r.Header.Get(header)
+	if raw == "" {
+		return
+	}
+	var kept []string
+	for _, part := range strings.Split(raw, ",") {
+		tok := strings.TrimSpace(part)
+		if tok == "" {
+			continue
+		}
+		matched := false
+		for _, p := range wsAuthSubprotocols {
+			if !strings.HasPrefix(tok, p.prefix) {
+				continue
+			}
+			matched = true
+			val, err := base64.RawURLEncoding.DecodeString(tok[len(p.prefix):])
+			if err != nil || len(val) == 0 || r.Header.Get(p.header) != "" {
+				break
+			}
+			v := string(val)
+			if p.bearer {
+				v = "Bearer " + v
+			}
+			r.Header.Set(p.header, v)
+			break
+		}
+		if !matched {
+			kept = append(kept, tok)
+		}
+	}
+	if len(kept) == 0 {
+		r.Header.Del(header)
+	} else {
+		r.Header.Set(header, strings.Join(kept, ", "))
+	}
 }
 
 // isWebSocketUpgrade reports whether r is a WebSocket upgrade request: the

@@ -238,6 +238,18 @@
   background: var(--surface-2);
 }
 
+/* Audio file picker (streaming ASR). */
+.fileButton {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 8px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
 /* Video generation playback. */
 .video {
   display: block;

@@ -424,3 +424,62 @@ func TestWebSocketScopeRejected(t *testing.T) {
 		t.Errorf("upstream dialed despite scope rejection")
 	}
 }
+
+// b64 is base64url-no-pad, matching how the browser playground encodes credential
+// values into Sec-WebSocket-Protocol tokens.
+func b64(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+
+// TestApplyWSSubprotocolAuth covers lifting songguo.* credential tokens out of
+// the Sec-WebSocket-Protocol header into real headers, and stripping them so
+// they are never replayed upstream.
+func TestApplyWSSubprotocolAuth(t *testing.T) {
+	t.Run("lifts all three credentials and clears the header", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/api/v3/sauc/bigmodel_async", nil)
+		r.Header.Set("Sec-WebSocket-Protocol", strings.Join([]string{
+			"songguo.auth." + b64("sk-user-key"),
+			"songguo.provider." + b64("volc-speech"),
+			"songguo.resource." + b64("volc.seedasr.sauc.duration"),
+		}, ", "))
+
+		applyWSSubprotocolAuth(r)
+
+		if got := r.Header.Get("Authorization"); got != "Bearer sk-user-key" {
+			t.Errorf("Authorization = %q, want %q", got, "Bearer sk-user-key")
+		}
+		if got := r.Header.Get("X-Songguo-Provider"); got != "volc-speech" {
+			t.Errorf("X-Songguo-Provider = %q, want %q", got, "volc-speech")
+		}
+		if got := r.Header.Get("X-Api-Resource-Id"); got != "volc.seedasr.sauc.duration" {
+			t.Errorf("X-Api-Resource-Id = %q, want %q", got, "volc.seedasr.sauc.duration")
+		}
+		if got := r.Header.Get("Sec-WebSocket-Protocol"); got != "" {
+			t.Errorf("Sec-WebSocket-Protocol = %q, want empty (all tokens consumed)", got)
+		}
+	})
+
+	t.Run("keeps non-songguo subprotocols and does not overwrite explicit headers", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/ws", nil)
+		r.Header.Set("Authorization", "Bearer explicit")
+		r.Header.Set("Sec-WebSocket-Protocol", strings.Join([]string{
+			"songguo.auth." + b64("smuggled"),
+			"realtime.v1",
+		}, ", "))
+
+		applyWSSubprotocolAuth(r)
+
+		if got := r.Header.Get("Authorization"); got != "Bearer explicit" {
+			t.Errorf("Authorization = %q, want explicit header preserved", got)
+		}
+		if got := r.Header.Get("Sec-WebSocket-Protocol"); got != "realtime.v1" {
+			t.Errorf("Sec-WebSocket-Protocol = %q, want %q", got, "realtime.v1")
+		}
+	})
+
+	t.Run("no-op without the header", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/ws", nil)
+		applyWSSubprotocolAuth(r)
+		if r.Header.Get("Authorization") != "" {
+			t.Errorf("Authorization should stay empty")
+		}
+	})
+}

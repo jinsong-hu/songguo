@@ -151,6 +151,14 @@ func defaultHTTPClient() *http.Client {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// 0. A browser WebSocket can't set headers, so the dashboard playground
+	// smuggles the gateway credentials as Sec-WebSocket-Protocol tokens; lift
+	// them into headers before auth so a browser-driven upgrade authenticates
+	// (and pins its provider) exactly like a header-setting client.
+	if isWebSocketUpgrade(r) {
+		applyWSSubprotocolAuth(r)
+	}
+
 	// 1. Auth.
 	key := bearerToken(r.Header.Get("Authorization"))
 	if key == "" {

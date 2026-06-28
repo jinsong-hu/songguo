@@ -23,6 +23,7 @@ import {
   type VideoResult,
   type WireTest,
 } from '../lib/playground';
+import { runAsrStream, type AsrStreamResult } from '../lib/playgroundStreaming';
 import { int, ms } from '../lib/format';
 import { CopyButton } from './CopyButton';
 import {
@@ -398,6 +399,10 @@ function Panel({
       return <PromptPanel test={test} model={model} apiKey={apiKey} providerId={provider?.id} />;
     case 'asr':
       return <AsrPanel apiKey={apiKey} providerId={provider?.id ?? ''} />;
+    case 'asrstream':
+      return (
+        <AsrStreamPanel apiKey={apiKey} providerId={pinnedProviderId ?? ''} path={endpointPath(test)} />
+      );
     case 'tts':
       return <TtsPanel apiKey={apiKey} providerId={provider?.id ?? ''} model={model} />;
     case 'image':
@@ -825,6 +830,153 @@ function Utterances({ utterances }: { utterances: AsrResult['utterances'] }) {
         </div>
       ))}
     </div>
+  );
+}
+
+// --- Streaming ASR panel (Volcengine sauc bigmodel over WebSocket) ----------
+
+const ASR_RATES = [16000, 8000, 24000, 48000];
+
+function AsrStreamPanel({
+  apiKey,
+  providerId,
+  path,
+}: {
+  apiKey: string;
+  /** Resolved provider pin — WS can't be Auto-routed; empty means none serve it. */
+  providerId: string;
+  /** Gateway WS path for this wire, e.g. "/api/v3/sauc/bigmodel_async". */
+  path: string;
+}) {
+  const [audio, setAudio] = useState<Uint8Array | null>(null);
+  const [fileName, setFileName] = useState('');
+  const [format, setFormat] = useState('wav');
+  const [rate, setRate] = useState(16000);
+  const [modelName, setModelName] = useState('bigmodel');
+  const [resourceId, setResourceId] = useState('volc.seedasr.sauc.duration');
+  const [running, setRunning] = useState(false);
+  const [partial, setPartial] = useState('');
+  const [result, setResult] = useState<AsrStreamResult | null>(null);
+  const [showRaw, setShowRaw] = useState(false);
+
+  const onPick = async (file: File | undefined) => {
+    if (!file) return;
+    const buf = await file.arrayBuffer();
+    setAudio(new Uint8Array(buf));
+    setFileName(file.name);
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    if (ext && ASR_FORMATS.includes(ext)) setFormat(ext);
+  };
+
+  const canSend =
+    apiKey.trim() !== '' && providerId !== '' && audio !== null && !running;
+
+  const send = async () => {
+    if (!canSend || !audio) return;
+    setRunning(true);
+    setShowRaw(false);
+    setPartial('');
+    setResult(null);
+    const res = await runAsrStream({
+      key: apiKey.trim(),
+      providerId,
+      resourceId: resourceId.trim() || 'volc.seedasr.sauc.duration',
+      path,
+      audio,
+      format,
+      rate,
+      modelName: modelName.trim() || 'bigmodel',
+      onPartial: setPartial,
+    });
+    setResult(res);
+    setRunning(false);
+  };
+
+  return (
+    <>
+      <p className={styles.hint}>
+        Transcribe a recording over the real streaming WebSocket — the audio is uploaded from your
+        browser and streamed in frames, with partial transcripts appearing live.
+        {providerId === '' && ' Select a routing provider above first — streaming can’t be Auto-routed.'}
+      </p>
+
+      <div className={styles.fieldGrid}>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Format</span>
+          <select className="select" value={format} onChange={(e) => setFormat(e.target.value)}>
+            {ASR_FORMATS.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Sample rate</span>
+          <select className="select" value={rate} onChange={(e) => setRate(Number(e.target.value))}>
+            {ASR_RATES.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Model name</span>
+          <input className="input mono" value={modelName} onChange={(e) => setModelName(e.target.value)} />
+        </label>
+        <label className={styles.field}>
+          <span className={styles.fieldLabel}>Resource id</span>
+          <input
+            className="input mono"
+            value={resourceId}
+            onChange={(e) => setResourceId(e.target.value)}
+            placeholder="volc.seedasr.sauc.duration"
+          />
+        </label>
+      </div>
+
+      <label className={`btn ${styles.fileButton}`}>
+        {fileName || 'Choose audio file…'}
+        <input
+          type="file"
+          accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.pcm"
+          hidden
+          onChange={(e) => onPick(e.target.files?.[0])}
+        />
+      </label>
+
+      <div className={styles.actions}>
+        <button type="button" className="btn btn-primary" onClick={send} disabled={!canSend}>
+          {running ? <span className="spinner" /> : <Send size={14} />}
+          {running ? 'Transcribing…' : 'Transcribe'}
+        </button>
+        {result && !running && (
+          <span className={styles.meta}>
+            <span className={`pill ${result.ok ? 'pill-ok' : 'pill-err'}`}>
+              <span className="dot" />
+              {result.ok ? 'ok' : 'error'}
+            </span>
+            <span className={styles.metaItem}>{ms(result.latencyMs)}</span>
+            <span className={styles.metaItem}>{(result.bytesUp / 1024).toFixed(1)} KB up</span>
+          </span>
+        )}
+      </div>
+
+      {(partial || result) && (
+        <div className={styles.result}>
+          {result && !result.ok ? (
+            <pre className={`${styles.resultText} ${styles.resultError}`}>{result.errorMessage}</pre>
+          ) : (
+            <pre className={styles.resultText}>
+              {(result?.text || partial) || '(listening…)'}
+            </pre>
+          )}
+          {result?.ok && <Utterances utterances={result.utterances} />}
+          {result && <RawToggle raw={result.raw} show={showRaw} onToggle={() => setShowRaw((v) => !v)} />}
+        </div>
+      )}
+    </>
   );
 }
 

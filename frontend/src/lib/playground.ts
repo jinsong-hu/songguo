@@ -12,7 +12,15 @@ import { wireKind, wireName } from './wires';
 // --- Per-wire test profiles ------------------------------------------------
 
 /** Which interactive panel a wire's test renders. */
-export type TestKind = 'chat' | 'embedding' | 'asr' | 'tts' | 'image' | 'video' | 'unsupported';
+export type TestKind =
+  | 'chat'
+  | 'embedding'
+  | 'asr'
+  | 'asrstream'
+  | 'tts'
+  | 'image'
+  | 'video'
+  | 'unsupported';
 
 export interface WireTest {
   /** Wire id, e.g. "openai/chat". */
@@ -36,6 +44,8 @@ const TEST_KIND: Record<string, TestKind> = {
   'openai/images': 'image',
   'ark/video': 'video',
   'volc/asr-file': 'asr',
+  'volc/asr-stream-async': 'asrstream',
+  'volc/asr-stream-nostream': 'asrstream',
   // Only the HTTP unidirectional TTS is fetch-drivable; the WebSocket stream and
   // bidirectional variants stay on the curl fallback.
   'volc/tts-unidirectional': 'tts',
