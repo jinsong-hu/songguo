@@ -25,11 +25,9 @@ const UsersPage = lazy(() => import('./pages/Users').then((m) => ({ default: m.U
 const UserNewPage = lazy(() => import('./pages/UserNew').then((m) => ({ default: m.UserNewPage })));
 const UserEditPage = lazy(() => import('./pages/UserEdit').then((m) => ({ default: m.UserEditPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
+const DocsHomePage = lazy(() => import('./pages/DocsHome').then((m) => ({ default: m.DocsHomePage })));
 const DocsApiPage = lazy(() => import('./pages/DocsApi').then((m) => ({ default: m.DocsApiPage })));
 const DocsMcpPage = lazy(() => import('./pages/DocsMcp').then((m) => ({ default: m.DocsMcpPage })));
-const DocsQuickstartPage = lazy(() =>
-  import('./pages/DocsQuickstart').then((m) => ({ default: m.DocsQuickstartPage })),
-);
 
 type Phase =
   | { kind: 'loading' }
@@ -152,8 +150,7 @@ export function App() {
               <Route path="users/new" element={<UserNewPage />} />
               <Route path="users/:id/edit" element={<UserEditPage />} />
               <Route path="settings" element={<SettingsPage />} />
-              <Route path="docs" element={<Navigate to="/docs/quickstart" replace />} />
-              <Route path="docs/quickstart" element={<DocsQuickstartPage />} />
+              <Route path="docs" element={<DocsHomePage />} />
               <Route path="docs/api" element={<DocsApiPage />} />
               <Route path="docs/mcp" element={<DocsMcpPage />} />
               <Route path="*" element={<OverviewPage />} />

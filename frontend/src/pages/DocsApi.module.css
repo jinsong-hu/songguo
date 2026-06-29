@@ -46,11 +46,15 @@
 }
 
 /* Scalar manages its own internal sidebar + scroll; give it the rest of the
-   main area and let it own the overflow. */
+   main area and let it own the overflow. Override Scalar's bundled Inter /
+   JetBrains Mono so the reference renders in the app's own typography instead of
+   visibly switching fonts on this page. */
 .scalar {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  --scalar-font: var(--font-sans);
+  --scalar-font-code: var(--font-mono);
 }
 
 @media (max-width: 900px) {

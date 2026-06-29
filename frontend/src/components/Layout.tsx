@@ -1,18 +1,16 @@
 import { Suspense, type ReactNode } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
-import { Activity, Boxes, Braces, Layers, Plug, Rocket, Settings, Users } from 'lucide-react';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Activity, BookOpen, Boxes, Braces, Layers, Plug, Settings, Users } from 'lucide-react';
 import styles from './Layout.module.css';
 
-const NAV = [
+const NAV_TOP = [
   { to: '/', label: 'Overview', icon: Activity, end: true },
   { to: '/services', label: 'Services', icon: Layers, end: false },
   { to: '/providers', label: 'Providers', icon: Plug, end: false },
   { to: '/users', label: 'Users', icon: Users, end: false },
-  { to: '/settings', label: 'Settings', icon: Settings, end: false },
 ] as const;
 
-const DOCS_NAV = [
-  { to: '/docs/quickstart', label: 'Quickstart', icon: Rocket },
+const DOCS_SUB = [
   { to: '/docs/api', label: 'API', icon: Braces },
   { to: '/docs/mcp', label: 'MCP', icon: Boxes },
 ] as const;
@@ -20,7 +18,17 @@ const DOCS_NAV = [
 const navItemClass = ({ isActive }: { isActive: boolean }) =>
   isActive ? `${styles.navItem} ${styles.navItemActive}` : styles.navItem;
 
+const subNavItemClass = ({ isActive }: { isActive: boolean }) =>
+  isActive
+    ? `${styles.navItem} ${styles.subNavItem} ${styles.navItemActive}`
+    : `${styles.navItem} ${styles.subNavItem}`;
+
 export function Layout() {
+  // The Docs item is collapsed until any /docs route is active, then it expands
+  // to reveal its second-level pages.
+  const { pathname } = useLocation();
+  const docsActive = pathname === '/docs' || pathname.startsWith('/docs/');
+
   return (
     <div className={styles.shell}>
       <aside className={styles.sidebar}>
@@ -29,21 +37,32 @@ export function Layout() {
           <span className={styles.wordmark}>Songguo</span>
         </div>
         <nav className={styles.nav}>
-          {NAV.map(({ to, label, icon: Icon, end }) => (
+          {NAV_TOP.map(({ to, label, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end} className={navItemClass}>
               <Icon size={16} />
               <span>{label}</span>
             </NavLink>
           ))}
-          <div className={styles.navGroup}>
-            <span className={styles.navGroupLabel}>Docs</span>
-            {DOCS_NAV.map(({ to, label, icon: Icon }) => (
-              <NavLink key={to} to={to} className={navItemClass}>
-                <Icon size={16} />
-                <span>{label}</span>
-              </NavLink>
-            ))}
-          </div>
+
+          <NavLink to="/docs" className={navItemClass}>
+            <BookOpen size={16} />
+            <span>Docs</span>
+          </NavLink>
+          {docsActive ? (
+            <div className={styles.subNav}>
+              {DOCS_SUB.map(({ to, label, icon: Icon }) => (
+                <NavLink key={to} to={to} className={subNavItemClass}>
+                  <Icon size={16} />
+                  <span>{label}</span>
+                </NavLink>
+              ))}
+            </div>
+          ) : null}
+
+          <NavLink to="/settings" className={navItemClass}>
+            <Settings size={16} />
+            <span>Settings</span>
+          </NavLink>
         </nav>
       </aside>
       <main className={styles.main}>

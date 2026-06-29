@@ -68,20 +68,18 @@
   color: var(--accent);
 }
 
-.navGroup {
+.subNav {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-top: 12px;
 }
 
-.navGroupLabel {
-  padding: 4px 10px 2px;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-muted);
+/* Second-level items sit under the Docs parent, indented to line their icons up
+   past the parent's icon. */
+.subNavItem {
+  padding-left: 30px;
+  height: 32px;
+  font-size: 13px;
 }
 
 .main {
@@ -172,13 +170,15 @@
     padding: 0;
   }
 
-  /* The Docs group flattens into the icon row; its caption is dropped. */
-  .navGroup {
+  /* The Docs sub-pages flatten into the icon row; the indent is dropped. */
+  .subNav {
     display: contents;
   }
 
-  .navGroupLabel {
-    display: none;
+  .subNavItem {
+    padding-left: 0;
+    width: 36px;
+    height: 36px;
   }
 
   .toolbar {
