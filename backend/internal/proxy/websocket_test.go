@@ -36,6 +36,7 @@ func wsAccept(key string) string {
 // a pure byte echo, matching the proxy's pure byte relay.
 type wsMockUpstream struct {
 	refuseStatus int    // if non-zero, refuse the upgrade with this status
+	script       []byte // if set, written downstream after 101 (instead of echo)
 	lastAuth     string // Authorization observed on the handshake
 	lastPath     string // request-target observed on the handshake
 }
@@ -80,6 +81,23 @@ func (m *wsMockUpstream) handler() http.HandlerFunc {
 		}
 		if err := rw.Flush(); err != nil {
 			return
+		}
+
+		// Scripted mode: push fixed downstream bytes, then drain the client until
+		// it closes (no echo). Used to exercise downstream metering.
+		if len(m.script) > 0 {
+			if _, err := rw.Write(m.script); err != nil {
+				return
+			}
+			if err := rw.Flush(); err != nil {
+				return
+			}
+			buf := make([]byte, 4096)
+			for {
+				if _, err := rw.Read(buf); err != nil {
+					return
+				}
+			}
 		}
 
 		// Echo raw bytes until the client closes.

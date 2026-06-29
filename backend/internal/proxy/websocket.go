@@ -28,8 +28,10 @@ import (
 
 	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/config"
+	"github.com/songguo/songguo/internal/pricing"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/store"
+	"github.com/songguo/songguo/internal/wire"
 )
 
 // wsHandshakeTimeout bounds the upstream dial + handshake. The established pipe
@@ -63,6 +65,19 @@ func isWebSocketUpgrade(r *http.Request) bool {
 func headerContainsToken(value, token string) bool {
 	for _, part := range strings.Split(value, ",") {
 		if strings.EqualFold(strings.TrimSpace(part), token) {
+			return true
+		}
+	}
+	return false
+}
+
+// wsCompressionNegotiated reports whether the upstream 101 accepted a
+// permessage-deflate extension. When it did, frame payloads are DEFLATE-
+// compressed and the volc binary protocol can't be read off the raw stream, so
+// metering must stand down rather than mis-decode.
+func wsCompressionNegotiated(h http.Header) bool {
+	for _, v := range h.Values("Sec-WebSocket-Extensions") {
+		if strings.Contains(strings.ToLower(v), "permessage-deflate") {
 			return true
 		}
 	}
@@ -120,7 +135,13 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 		return
 	}
 
-	model := r.URL.Query().Get("model") // best-effort; realtime model often in query
+	// Billing model: ByteDance openspeech names the billed class in the
+	// X-Api-Resource-Id header (mirroring the HTTP path, proxy.go); fall back to
+	// the query model. This is what we meter/price as, never used for routing.
+	billingModel := r.Header.Get("X-Api-Resource-Id")
+	if billingModel == "" {
+		billingModel = r.URL.Query().Get("model")
+	}
 
 	// 3. Try each candidate until one yields 101. Each target carries its own
 	// origin (the provider's per-wire host), so the dial target is per-attempt.
@@ -185,12 +206,12 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 	// 4a. No 101 from any credential: relay the last upstream response verbatim
 	// over the normal ResponseWriter (we have NOT hijacked yet) and record it.
 	if upConn == nil {
-		h.relayFailedHandshake(w, upResp, user.ID, model, chosen.Vendor.Name, chosen, attempt, handshake)
+		h.relayFailedHandshake(w, upResp, user.ID, billingModel, chosen.Vendor.Name, chosen, attempt, handshake)
 		return
 	}
 
 	// 4b. Got 101: hijack the client conn and pipe raw bytes both directions.
-	h.pipeWebSocket(w, r, upConn, upReader, upResp, user.ID, model, chosen.Vendor.Name, chosen, attempt, handshake)
+	h.pipeWebSocket(w, r, upConn, upReader, upResp, user.ID, billingModel, chosen.Vendor.Name, wireMap[chosen.Vendor.Name], chosen, attempt, handshake)
 }
 
 // dialWSUpstream dials the upstream (TLS for wss), writes the replayed
@@ -326,10 +347,12 @@ func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Respons
 // pipeWebSocket hijacks the client conn, completes its handshake by writing the
 // upstream's 101 response back, then bidirectionally relays raw bytes until
 // either side closes. It meters bytes each way and the session duration, and
-// records a single realtime call row at close.
+// records a single realtime call row at close. For eligible Volcengine speech
+// wires it also tees the downstream bytes into an async wsMeter to recover real
+// usage and price the session; the relay itself is never blocked by metering.
 func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 	upConn net.Conn, upReader *bufio.Reader, upResp *http.Response,
-	userID, model, vendorName string, t router.Target, attempt int, handshake time.Duration) {
+	userID, billingModel, vendorName string, rw resolvedWire, t router.Target, attempt int, handshake time.Duration) {
 	defer upConn.Close()
 	defer upResp.Body.Close()
 
@@ -356,6 +379,16 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 	sessionStart := h.now()
 	var bytesUp, bytesDown atomic.Int64
 
+	// Eligible Volcengine speech sessions get an async usage meter: the matched
+	// non-zero-cost wire's extractor, fed off the relay's hot path. WS-layer
+	// permessage-deflate would garble the volc frames, so skip metering when it
+	// was negotiated rather than mis-decode.
+	var meter *wsMeter
+	if rw.matched && !rw.wire.ZeroCost && rw.wire.Extract != nil &&
+		t.Vendor.Adapter == config.AdapterVolcSpeech && !wsCompressionNegotiated(upResp.Header) {
+		meter = newWSMeter(rw.wire.Extract, wire.Quirks(t.Vendor.Quirks))
+	}
+
 	// One goroutine per direction. Reading from the BUFFERED readers (not the raw
 	// conns) is essential: ReadResponse and the hijack may have already pulled
 	// post-handshake bytes into those buffers, which would otherwise be lost.
@@ -372,10 +405,16 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 		_ = clientConn.Close()
 	}()
 
-	// upstream -> client
+	// upstream -> client (tee'd into the meter when present). Teeing the READER
+	// keeps the existing unbuffered relay fast path (bufio.ReadFrom delegates to
+	// the conn), while the sink — which never blocks or errors — sees every byte.
 	go func() {
 		defer wg.Done()
-		n, _ := io.Copy(clientRW.Writer, upReader)
+		var src io.Reader = upReader
+		if meter != nil {
+			src = io.TeeReader(upReader, wsMeterSink{meter})
+		}
+		n, _ := io.Copy(clientRW.Writer, src)
 		bytesDown.Add(n)
 		_ = clientRW.Writer.Flush()
 		_ = clientConn.Close()
@@ -400,14 +439,38 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 	duration := h.now().Sub(sessionStart)
 	bu, bd := bytesUp.Load(), bytesDown.Load()
 
+	// Drain the meter (no-op when nil): decode ran concurrently during the
+	// session, so this only waits on the buffered tail. Price the recovered usage
+	// against the billing model's table entry; unknown/absent usage stays $0.
+	usage := map[string]any{
+		"bytes_up":    bu,
+		"bytes_down":  bd,
+		"duration_ms": duration.Milliseconds(),
+	}
+	cost := 0.0
+	var confidence calls.Confidence
+	if meter != nil {
+		ext := meter.finish()
+		confidence = ext.Confidence
+		if len(ext.Raw) > 0 {
+			usage["usage"] = ext.Raw
+		}
+		if snap := h.snapshot(); snap != nil {
+			if price, ok := snap.PriceFor(vendorName, billingModel); ok {
+				cost = pricing.Cost(price, ext.Norm)
+			}
+		}
+	}
+
 	// The access log only sees the 101 handshake; this is the only record of how
 	// the realtime session actually went. A session that relayed no upstream
 	// bytes is almost always an application-level rejection the raw byte pipe
 	// can't decode (bad config, post-upgrade auth failure), so flag it loudly.
 	args := []any{
-		"vendor", vendorName, "model", model, "credential", t.Credential.ID,
+		"vendor", vendorName, "model", billingModel, "credential", t.Credential.ID,
 		"attempt", attempt, "handshake_ms", handshake.Milliseconds(),
 		"bytes_up", bu, "bytes_down", bd, "duration_ms", duration.Milliseconds(),
+		"cost", cost,
 	}
 	if bd == 0 {
 		h.logger.Warn("websocket session closed with no upstream data", args...)
@@ -418,20 +481,17 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 	h.append(calls.Entry{
 		TS:           h.now(),
 		UserID:       userID,
-		Model:        model,
+		Model:        billingModel,
 		Modality:     calls.ModalityRealtime,
 		Vendor:       vendorName,
 		CredentialID: t.Credential.ID,
+		Confidence:   confidence,
 		Attempt:      attempt,
 		Status:       http.StatusSwitchingProtocols,
-		Usage: map[string]any{
-			"bytes_up":    bu,
-			"bytes_down":  bd,
-			"duration_ms": duration.Milliseconds(),
-		},
-		Cost:      0, // realtime pricing deferred
-		LatencyMS: handshake.Milliseconds(),
-		Stream:    true,
+		Usage:        usage,
+		Cost:         cost,
+		LatencyMS:    handshake.Milliseconds(),
+		Stream:       true,
 	})
 }
 
