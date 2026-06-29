@@ -408,9 +408,7 @@ func (a *api) handleWires(w http.ResponseWriter, r *http.Request) {
 }
 
 type patchSettingsReq struct {
-	Capture         *bool `json:"capture,omitempty"`
-	CaptureMaxBytes *int  `json:"capture_max_bytes,omitempty"`
-	CaptureRetain   *int  `json:"capture_retain,omitempty"`
+	Capture *bool `json:"capture,omitempty"`
 }
 
 // handlePatchSettings updates the gateway settings singleton and reloads.
@@ -428,8 +426,8 @@ func (a *api) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, view)
 }
 
-// updateSettingsData applies a subset of capture settings to the singleton,
-// reloads the live config, and returns the resulting (non-secret) settings view.
+// updateSettingsData applies the capture setting to the singleton, reloads the
+// live config, and returns the resulting (non-secret) settings view.
 func (a *api) updateSettingsData(req patchSettingsReq) (settingsView, error) {
 	cur, err := a.store.GetAppSettings()
 	if err != nil {
@@ -437,12 +435,6 @@ func (a *api) updateSettingsData(req patchSettingsReq) (settingsView, error) {
 	}
 	if req.Capture != nil {
 		cur.Capture = *req.Capture
-	}
-	if req.CaptureMaxBytes != nil && *req.CaptureMaxBytes > 0 {
-		cur.CaptureMaxBytes = *req.CaptureMaxBytes
-	}
-	if req.CaptureRetain != nil && *req.CaptureRetain > 0 {
-		cur.CaptureRetain = *req.CaptureRetain
 	}
 	if err := a.store.UpdateAppSettings(cur); err != nil {
 		return settingsView{}, err

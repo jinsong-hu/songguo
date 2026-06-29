@@ -80,7 +80,6 @@ export function UsersPage() {
                     <td>
                       <span className={styles.nameCell}>
                         {u.name}
-                        <CaptureBadge capture={u.capture} />
                       </span>
                     </td>
                     <td>
@@ -192,14 +191,5 @@ function UsageCell({ spent, budget }: { spent: number; budget: number | null }) 
         <div className={`${styles.usageFill} ${fillClass}`} style={{ width: `${pct}%` }} />
       </div>
     </div>
-  );
-}
-
-function CaptureBadge({ capture }: { capture: boolean | null }) {
-  if (capture == null) return null;
-  return (
-    <span className={`chip ${capture ? styles.captureOn : styles.captureOff}`}>
-      capture: {capture ? 'on' : 'off'}
-    </span>
   );
 }

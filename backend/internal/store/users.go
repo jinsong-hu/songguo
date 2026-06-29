@@ -28,28 +28,25 @@ type User struct {
 	Budget    *float64 // nil = unlimited
 	Scope     []string // empty = all allowed
 	RPM       int      // 0 = unlimited
-	Capture   *bool    // nil = inherit global, false = off, true = on
 	CreatedAt time.Time
 	RevokedAt *time.Time // nil = active
 }
 
 // NewUser describes a user to create.
 type NewUser struct {
-	Name    string
-	Budget  *float64
-	Scope   []string
-	RPM     int
-	Capture *bool
+	Name   string
+	Budget *float64
+	Scope  []string
+	RPM    int
 }
 
 // UserUpdate carries optional field updates; nil pointers leave a field
 // unchanged.
 type UserUpdate struct {
-	Name    *string
-	Budget  *float64
-	Scope   *[]string
-	RPM     *int
-	Capture *bool
+	Name   *string
+	Budget *float64
+	Scope  *[]string
+	RPM    *int
 }
 
 // HashKey returns the lowercase hex sha256 of a plaintext key. The proxy auth
@@ -110,9 +107,9 @@ func (s *Store) CreateUser(nu NewUser) (User, string, error) {
 	createdAt := time.Now()
 
 	_, err = s.db.Exec(
-		`INSERT INTO users (id, name, key_hash, key_prefix, key_full, budget, scope, rpm, capture, created_at, revoked_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-		id, nu.Name, HashKey(key), prefix, key, nu.Budget, string(scopeJSON), nu.RPM, boolPtrToNull(nu.Capture), createdAt.Unix(),
+		`INSERT INTO users (id, name, key_hash, key_prefix, key_full, budget, scope, rpm, created_at, revoked_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+		id, nu.Name, HashKey(key), prefix, key, nu.Budget, string(scopeJSON), nu.RPM, createdAt.Unix(),
 	)
 	if err != nil {
 		return User{}, "", fmt.Errorf("store: create user: %w", err)
@@ -126,7 +123,6 @@ func (s *Store) CreateUser(nu NewUser) (User, string, error) {
 		Budget:    nu.Budget,
 		Scope:     scope,
 		RPM:       nu.RPM,
-		Capture:   nu.Capture,
 		CreatedAt: createdAt.Truncate(time.Second),
 	}, key, nil
 }
@@ -151,8 +147,8 @@ func (s *Store) EnsureAdminUser(plaintext string) error {
 		prefix = prefix[:keyPrefixLen]
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO users (id, name, key_hash, key_prefix, key_full, budget, scope, rpm, capture, created_at, revoked_at)
-		 VALUES (?, ?, ?, ?, ?, NULL, '[]', 0, NULL, ?, NULL)
+		`INSERT INTO users (id, name, key_hash, key_prefix, key_full, budget, scope, rpm, created_at, revoked_at)
+		 VALUES (?, ?, ?, ?, ?, NULL, '[]', 0, ?, NULL)
 		 ON CONFLICT(id) DO UPDATE SET
 		   name = excluded.name,
 		   key_hash = excluded.key_hash,
@@ -168,7 +164,7 @@ func (s *Store) EnsureAdminUser(plaintext string) error {
 }
 
 // userSelect is the shared column list for scanning a User.
-const userSelect = `SELECT id, name, key_prefix, key_full, budget, scope, rpm, capture, created_at, revoked_at FROM users`
+const userSelect = `SELECT id, name, key_prefix, key_full, budget, scope, rpm, created_at, revoked_at FROM users`
 
 // scanUser reads a single User row from a *sql.Row or *sql.Rows.
 func scanUser(sc interface{ Scan(...any) error }) (User, error) {
@@ -176,20 +172,15 @@ func scanUser(sc interface{ Scan(...any) error }) (User, error) {
 		u         User
 		budget    sql.NullFloat64
 		scopeJSON string
-		capture   sql.NullInt64
 		createdAt int64
 		revokedAt sql.NullInt64
 	)
-	if err := sc.Scan(&u.ID, &u.Name, &u.KeyPrefix, &u.KeyFull, &budget, &scopeJSON, &u.RPM, &capture, &createdAt, &revokedAt); err != nil {
+	if err := sc.Scan(&u.ID, &u.Name, &u.KeyPrefix, &u.KeyFull, &budget, &scopeJSON, &u.RPM, &createdAt, &revokedAt); err != nil {
 		return User{}, err
 	}
 	if budget.Valid {
 		b := budget.Float64
 		u.Budget = &b
-	}
-	if capture.Valid {
-		c := capture.Int64 != 0
-		u.Capture = &c
 	}
 	if err := json.Unmarshal([]byte(scopeJSON), &u.Scope); err != nil {
 		return User{}, fmt.Errorf("store: decode scope: %w", err)
@@ -285,10 +276,6 @@ func (s *Store) UpdateUser(id string, upd UserUpdate) (User, error) {
 		sets = append(sets, "rpm = ?")
 		args = append(args, *upd.RPM)
 	}
-	if upd.Capture != nil {
-		sets = append(sets, "capture = ?")
-		args = append(args, boolToInt(*upd.Capture))
-	}
 
 	if len(sets) > 0 {
 		query := "UPDATE users SET " + sets[0]
@@ -347,13 +334,4 @@ func (s *Store) LastSeenByUser(userID string) (*time.Time, error) {
 	}
 	t := time.UnixMilli(ms.Int64)
 	return &t, nil
-}
-
-// boolPtrToNull converts a *bool into a value suitable for a nullable INTEGER
-// column: nil yields a SQL NULL, otherwise 0/1.
-func boolPtrToNull(b *bool) any {
-	if b == nil {
-		return nil
-	}
-	return boolToInt(*b)
 }

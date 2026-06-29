@@ -378,12 +378,6 @@
   color: var(--text);
 }
 
-.truncatedChip {
-  background: var(--amber-weak);
-  border-color: color-mix(in srgb, var(--amber) 40%, var(--border));
-  color: var(--amber);
-}
-
 .binaryChip {
   background: var(--accent-weak);
   border-color: color-mix(in srgb, var(--accent) 35%, var(--border));

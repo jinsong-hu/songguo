@@ -33,14 +33,12 @@ func TestPayloadRoundTrip(t *testing.T) {
 		ReqHeaders:      map[string]string{"Content-Type": "application/json", "X-Trace": "1"},
 		ReqBody:         reqBody,
 		ReqContentType:  "application/json",
-		ReqTruncated:    true,
 		RespHeaders:     map[string]string{"Content-Type": "application/json"},
 		RespBody:        respBody,
 		RespContentType: "application/json",
-		RespTruncated:   false,
 		CreatedAt:       time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC),
 	}
-	if err := s.SavePayload(in, 0); err != nil {
+	if err := s.SavePayload(in); err != nil {
 		t.Fatalf("SavePayload: %v", err)
 	}
 
@@ -57,12 +55,6 @@ func TestPayloadRoundTrip(t *testing.T) {
 	if !bytes.Equal(got.RespBody, respBody) {
 		t.Errorf("RespBody = %q, want %q", got.RespBody, respBody)
 	}
-	if !got.ReqTruncated {
-		t.Error("ReqTruncated = false, want true")
-	}
-	if got.RespTruncated {
-		t.Error("RespTruncated = true, want false")
-	}
 	if got.ReqContentType != "application/json" {
 		t.Errorf("ReqContentType = %q", got.ReqContentType)
 	}
@@ -78,7 +70,7 @@ func TestPayloadRoundTrip(t *testing.T) {
 
 	// INSERT OR REPLACE: a second save for the same call_id overwrites in place.
 	in.RespContentType = "text/plain"
-	if err := s.SavePayload(in, 0); err != nil {
+	if err := s.SavePayload(in); err != nil {
 		t.Fatalf("SavePayload (replace): %v", err)
 	}
 	got2, err := s.GetPayload(callID)
@@ -97,55 +89,11 @@ func TestGetPayloadNotFound(t *testing.T) {
 	}
 }
 
-func TestPayloadRetentionKeepsNewest(t *testing.T) {
-	s := openTestStore(t)
-
-	// Insert 5 payloads, retaining only the newest 2 on each save.
-	const retain = 2
-	var ids []int64
-	for i := 0; i < 5; i++ {
-		id := appendBareCall(t, s)
-		ids = append(ids, id)
-		if err := s.SavePayload(Payload{CallID: id, ReqBody: []byte("x")}, retain); err != nil {
-			t.Fatalf("SavePayload[%d]: %v", i, err)
-		}
-	}
-
-	// The two newest (highest call_id) must survive; older ones pruned.
-	newest := ids[len(ids)-2:]
-	for _, id := range newest {
-		if _, err := s.GetPayload(id); err != nil {
-			t.Errorf("expected newest payload %d to survive, got %v", id, err)
-		}
-	}
-	for _, id := range ids[:len(ids)-2] {
-		if _, err := s.GetPayload(id); !errors.Is(err, ErrNotFound) {
-			t.Errorf("expected old payload %d pruned, got err %v", id, err)
-		}
-	}
-
-	// retain <= 0 disables pruning: a fresh store keeps everything.
-	s2 := openTestStore(t)
-	var keepAll []int64
-	for i := 0; i < 4; i++ {
-		id := appendBareCall(t, s2)
-		keepAll = append(keepAll, id)
-		if err := s2.SavePayload(Payload{CallID: id}, 0); err != nil {
-			t.Fatalf("SavePayload (no prune)[%d]: %v", i, err)
-		}
-	}
-	for _, id := range keepAll {
-		if _, err := s2.GetPayload(id); err != nil {
-			t.Errorf("retain=0 should keep payload %d, got %v", id, err)
-		}
-	}
-}
-
 func TestHasPayloads(t *testing.T) {
 	s := openTestStore(t)
 	withTrace := appendBareCall(t, s)
 	without := appendBareCall(t, s)
-	if err := s.SavePayload(Payload{CallID: withTrace, ReqBody: []byte("x")}, 0); err != nil {
+	if err := s.SavePayload(Payload{CallID: withTrace, ReqBody: []byte("x")}); err != nil {
 		t.Fatalf("SavePayload: %v", err)
 	}
 
@@ -170,61 +118,5 @@ func TestHasPayloads(t *testing.T) {
 	}
 	if empty == nil || len(empty) != 0 {
 		t.Errorf("HasPayloads(nil) = %v, want empty map", empty)
-	}
-}
-
-func TestUserCaptureOverride(t *testing.T) {
-	s := openTestStore(t)
-
-	// Default: capture is nil (inherit global).
-	inherit, _, err := s.CreateUser(NewUser{Name: "inherit"})
-	if err != nil {
-		t.Fatalf("CreateUser(inherit): %v", err)
-	}
-	if inherit.Capture != nil {
-		t.Errorf("default Capture = %v, want nil (inherit)", *inherit.Capture)
-	}
-	got, err := s.GetUser(inherit.ID)
-	if err != nil {
-		t.Fatalf("GetUser: %v", err)
-	}
-	if got.Capture != nil {
-		t.Errorf("GetUser Capture = %v, want nil", *got.Capture)
-	}
-
-	// Create with explicit capture=true.
-	on := true
-	created, _, err := s.CreateUser(NewUser{Name: "on", Capture: &on})
-	if err != nil {
-		t.Fatalf("CreateUser(on): %v", err)
-	}
-	if created.Capture == nil || !*created.Capture {
-		t.Errorf("created Capture = %v, want true", created.Capture)
-	}
-	reloaded, err := s.GetUser(created.ID)
-	if err != nil {
-		t.Fatalf("GetUser(on): %v", err)
-	}
-	if reloaded.Capture == nil || !*reloaded.Capture {
-		t.Errorf("reloaded Capture = %v, want true", reloaded.Capture)
-	}
-
-	// Update to capture=false on the inherit token.
-	off := false
-	upd, err := s.UpdateUser(inherit.ID, UserUpdate{Capture: &off})
-	if err != nil {
-		t.Fatalf("UpdateUser: %v", err)
-	}
-	if upd.Capture == nil || *upd.Capture {
-		t.Errorf("after update Capture = %v, want false", upd.Capture)
-	}
-
-	// Updating a different field must leave capture unchanged.
-	upd2, err := s.UpdateUser(created.ID, UserUpdate{Name: ptrS("renamed")})
-	if err != nil {
-		t.Fatalf("UpdateUser(name only): %v", err)
-	}
-	if upd2.Capture == nil || !*upd2.Capture {
-		t.Errorf("capture changed by unrelated update: %v", upd2.Capture)
 	}
 }

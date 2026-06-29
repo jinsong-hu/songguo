@@ -70,7 +70,6 @@ export interface TraceSide {
   /** True when `body` is base64-encoded binary rather than UTF-8 text. */
   body_base64?: boolean;
   content_type: string;
-  truncated: boolean;
 }
 
 export interface CallTrace {
@@ -94,8 +93,6 @@ export interface User {
   budget: number | null;
   scope: string[];
   rpm: number;
-  /** Per-user capture override: null = inherit global, true = on, false = off. */
-  capture: boolean | null;
   created_at: string;
   revoked_at: string | null;
   spent: number;
@@ -111,12 +108,10 @@ export interface CreateUserBody {
   budget?: number | null;
   scope?: string[];
   rpm?: number;
-  /** null/omitted inherits global capture; true/false overrides it. */
-  capture?: boolean | null;
 }
 
 export type PatchUserBody = Partial<
-  Pick<User, 'name' | 'budget' | 'scope' | 'rpm' | 'capture'>
+  Pick<User, 'name' | 'budget' | 'scope' | 'rpm'>
 >;
 
 export interface Credential {
@@ -285,17 +280,11 @@ export interface Catalog {
 
 export interface Settings {
   listen: string;
-  config_path: string;
   db_path: string;
   admin_protected: boolean;
   version: string;
-  watch_mode?: string;
   /** Whether request/response capture is globally enabled. */
   capture: boolean;
-  /** Max captured body size in bytes (bodies beyond this are truncated). */
-  capture_max_bytes: number;
-  /** How many captured payloads are retained. */
-  capture_retain: number;
 }
 
 export interface PricingRow {

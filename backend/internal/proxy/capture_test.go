@@ -11,15 +11,12 @@ import (
 	"github.com/songguo/songguo/internal/store"
 )
 
-// captureYAML builds a one-vendor config with the global capture switch and
-// caps set explicitly.
-func captureYAML(baseURL string, capture bool, maxBytes, retain int) string {
+// captureYAML builds a one-vendor config with the global capture switch set.
+func captureYAML(baseURL string, capture bool) string {
 	return fmt.Sprintf(`
 settings:
   listen: ":8080"
   capture: %t
-  capture_max_bytes: %d
-  capture_retain: %d
 vendors:
   - name: vendorA
     origin: %s/v1
@@ -29,7 +26,7 @@ vendors:
     credential: {id: credA, api_key: vendor-secret-key}
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
-`, capture, maxBytes, retain, baseURL)
+`, capture, baseURL)
 }
 
 // --- capture ON: non-streaming round-trip with redaction ---
@@ -41,7 +38,7 @@ func TestCaptureNonStreaming(t *testing.T) {
 
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
-	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, true, 32768, 10000)), st)
+	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, true)), st)
 
 	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
 	resp := env.post(t, "/v1/chat/completions", key, reqBody)
@@ -70,9 +67,6 @@ func TestCaptureNonStreaming(t *testing.T) {
 	if string(p.RespBody) != wantBody {
 		t.Errorf("captured resp body = %q, want %q", p.RespBody, wantBody)
 	}
-	if p.ReqTruncated || p.RespTruncated {
-		t.Errorf("unexpected truncation: req=%v resp=%v", p.ReqTruncated, p.RespTruncated)
-	}
 	// Redaction: the consumer Authorization header must be gone.
 	if _, ok := p.ReqHeaders["Authorization"]; ok {
 		t.Error("captured request leaked Authorization header")
@@ -85,25 +79,24 @@ func TestCaptureNonStreaming(t *testing.T) {
 	}
 }
 
-// --- capture ON: streaming tees a capped buffer; client stream unaffected ---
+// --- capture ON: streaming buffers the full stream; client stream unaffected ---
 
-func TestCaptureStreamingTruncates(t *testing.T) {
+func TestCaptureStreaming(t *testing.T) {
 	up := &mockUpstream{}
 	mock := httptest.NewServer(up.handler())
 	defer mock.Close()
 
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
-	// Tiny cap so the streamed body is truncated.
-	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, true, 16, 10000)), st)
+	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, true)), st)
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","stream":true,"messages":[]}`)
 	streamed, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 
-	// Client still receives the full SSE stream despite capture truncation.
+	// Client receives the full SSE stream.
 	if !strings.Contains(string(streamed), `data: [DONE]`) {
-		t.Errorf("client stream truncated; missing [DONE]:\n%s", streamed)
+		t.Errorf("client stream missing [DONE]:\n%s", streamed)
 	}
 	if !strings.Contains(string(streamed), `"content":"he"`) {
 		t.Errorf("client stream missing first chunk:\n%s", streamed)
@@ -114,14 +107,9 @@ func TestCaptureStreamingTruncates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPayload: %v", err)
 	}
-	if !p.RespTruncated {
-		t.Error("streamed resp should be marked truncated under a 16-byte cap")
-	}
-	if len(p.RespBody) > 16 {
-		t.Errorf("captured stream = %d bytes, want <= 16 (capped)", len(p.RespBody))
-	}
-	if len(p.RespBody) == 0 {
-		t.Error("expected some captured stream bytes")
+	// The captured stream is the full body — same bytes the client received.
+	if string(p.RespBody) != string(streamed) {
+		t.Errorf("captured stream != client stream:\n got %q\nwant %q", p.RespBody, streamed)
 	}
 }
 
@@ -134,7 +122,7 @@ func TestCaptureOffStoresNothing(t *testing.T) {
 
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
-	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, false, 32768, 10000)), st)
+	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, false)), st)
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","messages":[]}`)
 	resp.Body.Close()
@@ -142,28 +130,6 @@ func TestCaptureOffStoresNothing(t *testing.T) {
 	callID := callIDForVendor(t, st, "vendorA")
 	if _, err := st.GetPayload(callID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected no payload when capture off, got err %v", err)
-	}
-}
-
-// --- per-token override beats the global setting (off->on and on->off) ---
-
-func TestCaptureUserOverride(t *testing.T) {
-	up := &mockUpstream{}
-	mock := httptest.NewServer(up.handler())
-	defer mock.Close()
-
-	st := openStore(t)
-	// Global capture OFF, but a token opts IN via override.
-	on := true
-	_, key := mustUser(t, st, store.NewUser{Name: "on", Capture: &on})
-	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, false, 32768, 10000)), st)
-
-	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","messages":[]}`)
-	resp.Body.Close()
-
-	callID := callIDForVendor(t, st, "vendorA")
-	if _, err := st.GetPayload(callID); err != nil {
-		t.Errorf("token override on should capture, got err %v", err)
 	}
 }
 

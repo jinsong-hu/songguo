@@ -3,6 +3,7 @@ import type { Settings } from '../api/types';
 
 interface SettingsContextValue {
   settings: Settings;
+  setSettings: (settings: Settings) => void;
   signOut: () => void;
 }
 

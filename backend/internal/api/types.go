@@ -19,7 +19,6 @@ type userView struct {
 	Budget    *float64 `json:"budget"`
 	Scope     []string `json:"scope"`
 	RPM       int      `json:"rpm"`
-	Capture   *bool    `json:"capture"`
 	CreatedAt string   `json:"created_at"`
 	RevokedAt *string  `json:"revoked_at"`
 	Spent     float64  `json:"spent"`
@@ -45,7 +44,6 @@ func newUserView(u store.User, spent float64) userView {
 		Budget:    u.Budget,
 		Scope:     scope,
 		RPM:       u.RPM,
-		Capture:   u.Capture,
 		CreatedAt: u.CreatedAt.UTC().Format(time.RFC3339),
 		Spent:     spent,
 		Active:    u.RevokedAt == nil,
@@ -254,13 +252,11 @@ type testVendorView struct {
 // settingsView is the GET /api/settings response. It never exposes the admin
 // key.
 type settingsView struct {
-	Listen          string `json:"listen"`
-	DBPath          string `json:"db_path"`
-	AdminProtected  bool   `json:"admin_protected"`
-	Version         string `json:"version"`
-	Capture         bool   `json:"capture"`
-	CaptureMaxBytes int    `json:"capture_max_bytes"`
-	CaptureRetain   int    `json:"capture_retain"`
+	Listen         string `json:"listen"`
+	DBPath         string `json:"db_path"`
+	AdminProtected bool   `json:"admin_protected"`
+	Version        string `json:"version"`
+	Capture        bool   `json:"capture"`
 }
 
 // traceSideView is one side (request or response) of a captured trace.
@@ -269,7 +265,6 @@ type traceSideView struct {
 	Body        string            `json:"body"`
 	BodyBase64  bool              `json:"body_base64,omitempty"`
 	ContentType string            `json:"content_type"`
-	Truncated   bool              `json:"truncated"`
 }
 
 // traceView is the GET /api/calls/{id}/trace response.
@@ -294,8 +289,8 @@ type pricingRow struct {
 func newTraceView(p store.Payload) traceView {
 	return traceView{
 		CallID:     p.CallID,
-		Request:    newTraceSide(p.ReqHeaders, p.ReqBody, p.ReqContentType, p.ReqTruncated),
-		Response:   newTraceSide(p.RespHeaders, p.RespBody, p.RespContentType, p.RespTruncated),
+		Request:    newTraceSide(p.ReqHeaders, p.ReqBody, p.ReqContentType),
+		Response:   newTraceSide(p.RespHeaders, p.RespBody, p.RespContentType),
 		CapturedAt: p.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }
@@ -303,14 +298,13 @@ func newTraceView(p store.Payload) traceView {
 // newTraceSide builds one side of a trace, choosing a UTF-8 string body when
 // the bytes are valid UTF-8 and a base64 encoding (with body_base64=true)
 // otherwise so binary payloads survive JSON transport.
-func newTraceSide(headers map[string]string, body []byte, contentType string, truncated bool) traceSideView {
+func newTraceSide(headers map[string]string, body []byte, contentType string) traceSideView {
 	if headers == nil {
 		headers = map[string]string{}
 	}
 	side := traceSideView{
 		Headers:     headers,
 		ContentType: contentType,
-		Truncated:   truncated,
 	}
 	if utf8.Valid(body) {
 		side.Body = string(body)

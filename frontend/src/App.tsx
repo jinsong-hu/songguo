@@ -94,6 +94,10 @@ export function App() {
     setPhase({ kind: 'gate' });
   }, []);
 
+  const setSettings = useCallback((settings: Settings) => {
+    setPhase((p) => (p.kind === 'ready' ? { kind: 'ready', settings } : p));
+  }, []);
+
   if (phase.kind === 'loading') {
     return (
       <div
@@ -126,7 +130,7 @@ export function App() {
   const { settings } = phase;
 
   return (
-    <SettingsContext.Provider value={{ settings, signOut }}>
+    <SettingsContext.Provider value={{ settings, setSettings, signOut }}>
       <ToastProvider>
         <BrowserRouter>
           <Routes>

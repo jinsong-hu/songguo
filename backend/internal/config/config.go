@@ -13,18 +13,9 @@ import (
 	"strings"
 )
 
-// Default capture tuning, applied during normalization when a value is unset
-// (zero) or non-positive.
-const (
-	defaultCaptureMaxBytes = 32768
-	defaultCaptureRetain   = 10000
-)
-
 // Settings holds gateway-wide options.
 type Settings struct {
-	Capture         bool `yaml:"capture"`
-	CaptureMaxBytes int  `yaml:"capture_max_bytes"`
-	CaptureRetain   int  `yaml:"capture_retain"`
+	Capture bool `yaml:"capture"`
 }
 
 // Credential is a vendor's upstream API key. A vendor holds exactly one; to
@@ -98,13 +89,6 @@ func Build(cfg Config) (*Snapshot, error) {
 
 // normalize applies defaults that should hold regardless of validity.
 func normalize(cfg *Config) {
-	if cfg.Settings.CaptureMaxBytes <= 0 {
-		cfg.Settings.CaptureMaxBytes = defaultCaptureMaxBytes
-	}
-	if cfg.Settings.CaptureRetain <= 0 {
-		cfg.Settings.CaptureRetain = defaultCaptureRetain
-	}
-
 	for i := range cfg.Vendors {
 		if cfg.Vendors[i].Weight <= 0 {
 			cfg.Vendors[i].Weight = 1
@@ -134,13 +118,6 @@ func normalize(cfg *Config) {
 // load surfaces the full list rather than the first failure.
 func validate(cfg *Config) error {
 	var problems []error
-
-	if cfg.Settings.CaptureMaxBytes < 0 {
-		problems = append(problems, fmt.Errorf("settings: capture_max_bytes must be non-negative"))
-	}
-	if cfg.Settings.CaptureRetain < 0 {
-		problems = append(problems, fmt.Errorf("settings: capture_retain must be non-negative"))
-	}
 
 	seenVendor := make(map[string]struct{}, len(cfg.Vendors))
 

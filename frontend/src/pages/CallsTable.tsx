@@ -401,9 +401,6 @@ function TraceSidePane({ title, side }: { title: string; side: TraceSide }) {
         {side.content_type && (
           <span className="chip chip-mono">{side.content_type}</span>
         )}
-        {side.truncated && (
-          <span className={`chip ${styles.truncatedChip}`}>truncated</span>
-        )}
         {side.body_base64 && (
           <span className={`chip ${styles.binaryChip}`}>binary (base64)</span>
         )}

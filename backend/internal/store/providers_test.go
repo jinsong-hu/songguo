@@ -116,15 +116,12 @@ func TestAppSettingsRoundTrip(t *testing.T) {
 	if as.Capture {
 		t.Error("capture should default off")
 	}
-	if as.CaptureMaxBytes != 32768 || as.CaptureRetain != 10000 {
-		t.Errorf("defaults wrong: %+v", as)
-	}
 
-	if err := s.UpdateAppSettings(AppSettings{Capture: true, CaptureMaxBytes: 1000, CaptureRetain: 50}); err != nil {
+	if err := s.UpdateAppSettings(AppSettings{Capture: true}); err != nil {
 		t.Fatalf("UpdateAppSettings: %v", err)
 	}
 	as, _ = s.GetAppSettings()
-	if !as.Capture || as.CaptureMaxBytes != 1000 || as.CaptureRetain != 50 {
+	if !as.Capture {
 		t.Errorf("settings not persisted: %+v", as)
 	}
 }

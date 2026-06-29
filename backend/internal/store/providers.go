@@ -86,9 +86,7 @@ type ProviderUpdate struct {
 
 // AppSettings is the gateway-wide settings singleton.
 type AppSettings struct {
-	Capture         bool
-	CaptureMaxBytes int
-	CaptureRetain   int
+	Capture bool
 }
 
 // CountProviders returns the number of configured providers.
@@ -402,26 +400,21 @@ func (s *Store) DeleteProvider(id string) error {
 
 // GetAppSettings returns the settings singleton, falling back to defaults.
 func (s *Store) GetAppSettings() (AppSettings, error) {
-	row := s.db.QueryRow(`SELECT capture, capture_max_bytes, capture_retain FROM app_settings WHERE id = 1`)
-	var (
-		as      AppSettings
-		capture int64
-	)
-	err := row.Scan(&capture, &as.CaptureMaxBytes, &as.CaptureRetain)
+	row := s.db.QueryRow(`SELECT capture FROM app_settings WHERE id = 1`)
+	var capture int64
+	err := row.Scan(&capture)
 	if errors.Is(err, sql.ErrNoRows) {
-		return AppSettings{CaptureMaxBytes: 32768, CaptureRetain: 10000}, nil
+		return AppSettings{}, nil
 	}
 	if err != nil {
 		return AppSettings{}, fmt.Errorf("store: get app settings: %w", err)
 	}
-	as.Capture = capture != 0
-	return as, nil
+	return AppSettings{Capture: capture != 0}, nil
 }
 
 // UpdateAppSettings overwrites the settings singleton.
 func (s *Store) UpdateAppSettings(as AppSettings) error {
-	if _, err := s.db.Exec(`UPDATE app_settings SET capture = ?, capture_max_bytes = ?, capture_retain = ? WHERE id = 1`,
-		boolToInt(as.Capture), as.CaptureMaxBytes, as.CaptureRetain); err != nil {
+	if _, err := s.db.Exec(`UPDATE app_settings SET capture = ? WHERE id = 1`, boolToInt(as.Capture)); err != nil {
 		return fmt.Errorf("store: update app settings: %w", err)
 	}
 	return nil

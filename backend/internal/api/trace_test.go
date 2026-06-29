@@ -35,7 +35,7 @@ func seedTracedCall(t *testing.T, s *store.Store) int64 {
 		RespContentType: "application/json",
 		CreatedAt:       time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC),
 	}
-	if err := s.SavePayload(p, 0); err != nil {
+	if err := s.SavePayload(p); err != nil {
 		t.Fatalf("SavePayload: %v", err)
 	}
 	return id
@@ -142,8 +142,6 @@ func TestSettingsExposeCapture(t *testing.T) {
 settings:
   listen: ":8080"
   capture: true
-  capture_max_bytes: 4096
-  capture_retain: 500
 vendors:
   - name: openai
     origin: https://api.openai.com
@@ -164,62 +162,15 @@ vendors:
 	if !sv.Capture {
 		t.Error("capture = false, want true")
 	}
-	if sv.CaptureMaxBytes != 4096 {
-		t.Errorf("capture_max_bytes = %d, want 4096", sv.CaptureMaxBytes)
-	}
-	if sv.CaptureRetain != 500 {
-		t.Errorf("capture_retain = %d, want 500", sv.CaptureRetain)
-	}
 }
 
 func TestSettingsCaptureDefaults(t *testing.T) {
-	// The default test config has no capture block: capture off, default caps.
+	// The default test config has no capture block: capture off.
 	h := testHandler(t, Deps{AdminKey: "secret"})
 	rec := do(h, "GET", "/api/settings", "secret", nil)
 	var sv settingsView
 	decodeBody(t, rec, &sv)
 	if sv.Capture {
 		t.Error("capture default should be false")
-	}
-	if sv.CaptureMaxBytes != 32768 {
-		t.Errorf("capture_max_bytes default = %d, want 32768", sv.CaptureMaxBytes)
-	}
-	if sv.CaptureRetain != 10000 {
-		t.Errorf("capture_retain default = %d, want 10000", sv.CaptureRetain)
-	}
-}
-
-func TestTokenCaptureCreatePatch(t *testing.T) {
-	s := newTestStore(t)
-	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
-
-	// Create with capture=true.
-	rec := do(h, "POST", "/api/users", "secret", strings.NewReader(`{"name":"cap","capture":true}`))
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("create: code = %d, body = %s", rec.Code, rec.Body.String())
-	}
-	var created userView
-	decodeBody(t, rec, &created)
-	if created.Capture == nil || !*created.Capture {
-		t.Errorf("created capture = %v, want true", created.Capture)
-	}
-
-	// Create without capture -> null (inherit).
-	rec = do(h, "POST", "/api/users", "secret", strings.NewReader(`{"name":"inherit"}`))
-	var inherit userView
-	decodeBody(t, rec, &inherit)
-	if inherit.Capture != nil {
-		t.Errorf("created capture = %v, want null (inherit)", *inherit.Capture)
-	}
-
-	// Patch capture=false on the inherit token.
-	rec = do(h, "PATCH", "/api/users/"+inherit.ID, "secret", strings.NewReader(`{"capture":false}`))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("patch: code = %d, body = %s", rec.Code, rec.Body.String())
-	}
-	var patched userView
-	decodeBody(t, rec, &patched)
-	if patched.Capture == nil || *patched.Capture {
-		t.Errorf("patched capture = %v, want false", patched.Capture)
 	}
 }

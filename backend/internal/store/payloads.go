@@ -15,19 +15,16 @@ type Payload struct {
 	ReqHeaders      map[string]string
 	ReqBody         []byte
 	ReqContentType  string
-	ReqTruncated    bool
 	RespHeaders     map[string]string
 	RespBody        []byte
 	RespContentType string
-	RespTruncated   bool
 	CreatedAt       time.Time
 }
 
 // SavePayload upserts the payload for a call (INSERT OR REPLACE, keyed by
-// call_id) and then prunes the table to the newest retain rows. A retain of 0
-// or less disables pruning. It is safe to call concurrently: all work goes
-// through the shared *sql.DB which serializes writes.
-func (s *Store) SavePayload(p Payload, retain int) error {
+// call_id). It is safe to call concurrently: all work goes through the shared
+// *sql.DB which serializes writes.
+func (s *Store) SavePayload(p Payload) error {
 	reqHeaders, err := marshalStringMap(p.ReqHeaders)
 	if err != nil {
 		return fmt.Errorf("store: encode req headers: %w", err)
@@ -44,24 +41,13 @@ func (s *Store) SavePayload(p Payload, retain int) error {
 
 	if _, err := s.db.Exec(
 		`INSERT OR REPLACE INTO payloads
-		 (call_id, req_headers, req_body, req_content_type, req_truncated,
-		  resp_headers, resp_body, resp_content_type, resp_truncated, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.CallID, reqHeaders, p.ReqBody, p.ReqContentType, boolToInt(p.ReqTruncated),
-		respHeaders, p.RespBody, p.RespContentType, boolToInt(p.RespTruncated), created.UnixMilli(),
+		 (call_id, req_headers, req_body, req_content_type,
+		  resp_headers, resp_body, resp_content_type, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.CallID, reqHeaders, p.ReqBody, p.ReqContentType,
+		respHeaders, p.RespBody, p.RespContentType, created.UnixMilli(),
 	); err != nil {
 		return fmt.Errorf("store: save payload: %w", err)
-	}
-
-	if retain > 0 {
-		if _, err := s.db.Exec(
-			`DELETE FROM payloads WHERE call_id NOT IN (
-			   SELECT call_id FROM payloads ORDER BY call_id DESC LIMIT ?
-			 )`,
-			retain,
-		); err != nil {
-			return fmt.Errorf("store: prune payloads: %w", err)
-		}
 	}
 	return nil
 }
@@ -70,8 +56,8 @@ func (s *Store) SavePayload(p Payload, retain int) error {
 // captured.
 func (s *Store) GetPayload(callID int64) (Payload, error) {
 	row := s.db.QueryRow(
-		`SELECT call_id, req_headers, req_body, req_content_type, req_truncated,
-		        resp_headers, resp_body, resp_content_type, resp_truncated, created_at
+		`SELECT call_id, req_headers, req_body, req_content_type,
+		        resp_headers, resp_body, resp_content_type, created_at
 		 FROM payloads WHERE call_id = ?`,
 		callID,
 	)
@@ -80,13 +66,11 @@ func (s *Store) GetPayload(callID int64) (Payload, error) {
 		p             Payload
 		reqHeaders    string
 		respHeaders   string
-		reqTruncated  int
-		respTruncated int
 		createdMillis int64
 	)
 	err := row.Scan(
-		&p.CallID, &reqHeaders, &p.ReqBody, &p.ReqContentType, &reqTruncated,
-		&respHeaders, &p.RespBody, &p.RespContentType, &respTruncated, &createdMillis,
+		&p.CallID, &reqHeaders, &p.ReqBody, &p.ReqContentType,
+		&respHeaders, &p.RespBody, &p.RespContentType, &createdMillis,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Payload{}, fmt.Errorf("store: payload %d: %w", callID, ErrNotFound)
@@ -101,8 +85,6 @@ func (s *Store) GetPayload(callID int64) (Payload, error) {
 	if err := json.Unmarshal([]byte(respHeaders), &p.RespHeaders); err != nil {
 		return Payload{}, fmt.Errorf("store: decode resp headers: %w", err)
 	}
-	p.ReqTruncated = reqTruncated != 0
-	p.RespTruncated = respTruncated != 0
 	p.CreatedAt = time.UnixMilli(createdMillis)
 	return p, nil
 }

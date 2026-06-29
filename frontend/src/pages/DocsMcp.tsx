@@ -19,13 +19,13 @@ const READ_TOOLS: ReadonlyArray<[string, string]> = [
 ];
 
 const WRITE_TOOLS: ReadonlyArray<[string, string]> = [
-  ['create_user', 'Create a gateway user (consumer key). Returns the plaintext key once. Fields: name (required), budget, scope, rpm, capture.'],
-  ['update_user', 'Update a user’s mutable fields via a patch object (name, budget, scope, rpm, capture).'],
+  ['create_user', 'Create a gateway user (consumer key). Returns the plaintext key once. Fields: name (required), budget, scope, rpm.'],
+  ['update_user', 'Update a user’s mutable fields via a patch object (name, budget, scope, rpm).'],
   ['revoke_user', 'Revoke a user by id, immediately disabling its key.'],
   ['create_provider', 'Create an upstream provider: name, vendor, api_key, priority, weight, enabled, quirks, models and wire endpoints.'],
   ['update_provider', 'Update a provider’s mutable fields. Supplying models or endpoints replaces those lists wholesale.'],
   ['delete_provider', 'Delete a provider by id; services it backed are re-derived without it.'],
-  ['update_settings', 'Update capture settings: capture on/off, capture_max_bytes, capture_retain.'],
+  ['update_settings', 'Update the capture setting: capture on/off. Returns the resulting settings.'],
   ['test_provider', 'Probe a provider’s host for reachability using its API key. Returns reachability, status and latency.'],
 ];
 

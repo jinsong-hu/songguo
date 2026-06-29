@@ -78,9 +78,7 @@ func (m *Manager) build() (*config.Snapshot, error) {
 
 	cfg := config.Config{
 		Settings: config.Settings{
-			Capture:         as.Capture,
-			CaptureMaxBytes: as.CaptureMaxBytes,
-			CaptureRetain:   as.CaptureRetain,
+			Capture: as.Capture,
 		},
 	}
 	for _, pvd := range providers {

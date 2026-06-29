@@ -397,11 +397,10 @@ func (a *api) usersData() ([]userView, error) {
 
 // createUserReq is the POST /api/users body.
 type createUserReq struct {
-	Name    string    `json:"name"`
-	Budget  *float64  `json:"budget,omitempty"`
-	Scope   *[]string `json:"scope,omitempty"`
-	RPM     *int      `json:"rpm,omitempty"`
-	Capture *bool     `json:"capture,omitempty"`
+	Name   string    `json:"name"`
+	Budget *float64  `json:"budget,omitempty"`
+	Scope  *[]string `json:"scope,omitempty"`
+	RPM    *int      `json:"rpm,omitempty"`
 }
 
 // handleCreateUser creates a user and returns it once with the plaintext key.
@@ -425,7 +424,7 @@ func (a *api) createUserData(req createUserReq) (userView, error) {
 	if req.Name == "" {
 		return userView{}, badRequestErr("name is required")
 	}
-	nu := store.NewUser{Name: req.Name, Budget: req.Budget, Capture: req.Capture}
+	nu := store.NewUser{Name: req.Name, Budget: req.Budget}
 	if req.Scope != nil {
 		nu.Scope = *req.Scope
 	}
@@ -447,11 +446,10 @@ func (a *api) createUserData(req createUserReq) (userView, error) {
 // UserUpdate uses a *float64 set-or-unchanged; PATCH cannot reset budget to
 // null (documented limitation for v1).
 type patchUserReq struct {
-	Name    *string   `json:"name,omitempty"`
-	Budget  *float64  `json:"budget,omitempty"`
-	Scope   *[]string `json:"scope,omitempty"`
-	RPM     *int      `json:"rpm,omitempty"`
-	Capture *bool     `json:"capture,omitempty"`
+	Name   *string   `json:"name,omitempty"`
+	Budget *float64  `json:"budget,omitempty"`
+	Scope  *[]string `json:"scope,omitempty"`
+	RPM    *int      `json:"rpm,omitempty"`
 }
 
 // handlePatchUser applies a subset of fields to a user.
@@ -473,11 +471,10 @@ func (a *api) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 // view with computed spend. An unknown id is a *apiError (404).
 func (a *api) updateUserData(id string, req patchUserReq) (userView, error) {
 	upd := store.UserUpdate{
-		Name:    req.Name,
-		Budget:  req.Budget,
-		Scope:   req.Scope,
-		RPM:     req.RPM,
-		Capture: req.Capture,
+		Name:   req.Name,
+		Budget: req.Budget,
+		Scope:  req.Scope,
+		RPM:    req.RPM,
 	}
 	usr, err := a.store.UpdateUser(id, upd)
 	if err != nil {
@@ -633,13 +630,11 @@ func (a *api) settingsData() settingsView {
 		settings = snap.Settings()
 	}
 	return settingsView{
-		Listen:          a.listenAddr,
-		DBPath:          a.dbPath,
-		AdminProtected:  a.adminKey != "",
-		Version:         a.version,
-		Capture:         settings.Capture,
-		CaptureMaxBytes: settings.CaptureMaxBytes,
-		CaptureRetain:   settings.CaptureRetain,
+		Listen:         a.listenAddr,
+		DBPath:         a.dbPath,
+		AdminProtected: a.adminKey != "",
+		Version:        a.version,
+		Capture:        settings.Capture,
 	}
 }
 

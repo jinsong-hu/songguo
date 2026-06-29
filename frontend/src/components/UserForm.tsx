@@ -3,27 +3,6 @@ import { api } from '../api/client';
 import type { CreateUserBody, PatchUserBody, User } from '../api/types';
 import styles from './UserForm.module.css';
 
-/** Three-way capture override choice shown in the user form. */
-type CaptureChoice = 'default' | 'on' | 'off';
-
-const CAPTURE_CHOICES: { value: CaptureChoice; label: string }[] = [
-  { value: 'default', label: 'Default' },
-  { value: 'on', label: 'On' },
-  { value: 'off', label: 'Off' },
-];
-
-function toCaptureChoice(capture: boolean | null | undefined): CaptureChoice {
-  if (capture === true) return 'on';
-  if (capture === false) return 'off';
-  return 'default';
-}
-
-function fromCaptureChoice(choice: CaptureChoice): boolean | null {
-  if (choice === 'on') return true;
-  if (choice === 'off') return false;
-  return null;
-}
-
 interface UserFormProps {
   /** When set, the form edits this user; otherwise it creates a new one. */
   user?: User;
@@ -42,7 +21,6 @@ export function UserForm({ user, modelOptions, onCancel, onCreated, onSaved }: U
   );
   const [rpm, setRpm] = useState(user?.rpm ? String(user.rpm) : '');
   const [scope, setScope] = useState<string[]>(user?.scope ?? []);
-  const [capture, setCapture] = useState<CaptureChoice>(toCaptureChoice(user?.capture));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -70,7 +48,6 @@ export function UserForm({ user, modelOptions, onCancel, onCreated, onSaved }: U
       setErr('RPM must be a non-negative number.');
       return;
     }
-    const captureVal = fromCaptureChoice(capture);
 
     setBusy(true);
     setErr(null);
@@ -81,7 +58,6 @@ export function UserForm({ user, modelOptions, onCancel, onCreated, onSaved }: U
           budget: budgetVal,
           scope,
           rpm: rpmVal,
-          capture: captureVal,
         };
         await api.patchUser(user.id, body);
         onSaved?.();
@@ -91,7 +67,6 @@ export function UserForm({ user, modelOptions, onCancel, onCreated, onSaved }: U
           budget: budgetVal,
           scope,
           rpm: rpmVal,
-          capture: captureVal,
         };
         const created = await api.createUser(body);
         onCreated?.(created);
@@ -170,29 +145,6 @@ export function UserForm({ user, modelOptions, onCancel, onCreated, onSaved }: U
             ))}
           </div>
         )}
-      </div>
-
-      <div className={styles.field}>
-        <span className={styles.fieldLabel}>Capture</span>
-        <span className={styles.fieldHint}>
-          Capture request/response payloads for this user. Default inherits the global
-          setting.
-        </span>
-        <div className={styles.captureSeg} role="group" aria-label="Capture override">
-          {CAPTURE_CHOICES.map((c) => (
-            <button
-              key={c.value}
-              type="button"
-              className={`${styles.captureBtn} ${
-                capture === c.value ? styles.captureBtnActive : ''
-              }`}
-              aria-pressed={capture === c.value}
-              onClick={() => setCapture(c.value)}
-            >
-              {c.label}
-            </button>
-          ))}
-        </div>
       </div>
 
       {err && <div className={styles.error}>{err}</div>}

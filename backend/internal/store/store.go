@@ -103,7 +103,6 @@ func (s *Store) migrate() error {
 			budget     REAL,
 			scope      TEXT NOT NULL DEFAULT '[]',
 			rpm        INTEGER NOT NULL DEFAULT 0,
-			capture    INTEGER,
 			created_at INTEGER NOT NULL,
 			revoked_at INTEGER
 		)`,
@@ -129,11 +128,9 @@ func (s *Store) migrate() error {
 			req_headers      TEXT NOT NULL DEFAULT '{}',
 			req_body         BLOB,
 			req_content_type TEXT NOT NULL DEFAULT '',
-			req_truncated    INTEGER NOT NULL DEFAULT 0,
 			resp_headers     TEXT NOT NULL DEFAULT '{}',
 			resp_body        BLOB,
 			resp_content_type TEXT NOT NULL DEFAULT '',
-			resp_truncated   INTEGER NOT NULL DEFAULT 0,
 			created_at       INTEGER NOT NULL
 		)`,
 		// parsed_calls holds the structured, protocol-neutral view produced by
@@ -204,12 +201,10 @@ func (s *Store) migrate() error {
 		// Gateway-wide settings as a singleton row, hot-applied via the config
 		// manager when changed from the dashboard.
 		`CREATE TABLE IF NOT EXISTS app_settings (
-			id                INTEGER PRIMARY KEY CHECK (id = 1),
-			capture           INTEGER NOT NULL DEFAULT 0,
-			capture_max_bytes INTEGER NOT NULL DEFAULT 32768,
-			capture_retain    INTEGER NOT NULL DEFAULT 10000
+			id      INTEGER PRIMARY KEY CHECK (id = 1),
+			capture INTEGER NOT NULL DEFAULT 0
 		)`,
-		`INSERT OR IGNORE INTO app_settings (id, capture, capture_max_bytes, capture_retain) VALUES (1, 0, 32768, 10000)`,
+		`INSERT OR IGNORE INTO app_settings (id, capture) VALUES (1, 0)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -435,8 +430,8 @@ func (s *Store) renameTokensToUsers() error {
 		if hasNew, _ := s.tableExists("users"); hasNew {
 			// An interrupted migration already created the new (empty) table;
 			// fold the old rows in instead of renaming over it.
-			if err := exec(`INSERT OR IGNORE INTO users (id, name, key_hash, key_prefix, budget, scope, rpm, capture, created_at, revoked_at)
-				SELECT id, name, key_hash, key_prefix, budget, scope, rpm, capture, created_at, revoked_at FROM tokens`); err != nil {
+			if err := exec(`INSERT OR IGNORE INTO users (id, name, key_hash, key_prefix, budget, scope, rpm, created_at, revoked_at)
+				SELECT id, name, key_hash, key_prefix, budget, scope, rpm, created_at, revoked_at FROM tokens`); err != nil {
 				return err
 			}
 			if err := exec(`DROP TABLE tokens`); err != nil {

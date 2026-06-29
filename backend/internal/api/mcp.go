@@ -76,7 +76,7 @@ func (a *api) buildMCPServer(enableWrites bool) *mcp.Server {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "get_settings",
-		Description: "Return non-secret runtime settings: listen address, db path, whether the admin API is protected, version, and payload-capture configuration.",
+		Description: "Return non-secret runtime settings: listen address, db path, whether the admin API is protected, version, and whether payload capture is on.",
 	}, a.mcpGetSettings)
 
 	if !enableWrites {
@@ -86,12 +86,12 @@ func (a *api) buildMCPServer(enableWrites bool) *mcp.Server {
 	// --- write tools (SONGGUO_MCP_WRITE=1 only) ---
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "create_user",
-		Description: "Create a gateway user (consumer key). Returns the user including the plaintext key — shown only once. Fields: name (required), budget (USD, optional), scope (allowed models, optional), rpm (per-minute limit, optional), capture (per-user payload capture override, optional).",
+		Description: "Create a gateway user (consumer key). Returns the user including the plaintext key — shown only once. Fields: name (required), budget (USD, optional), scope (allowed models, optional), rpm (per-minute limit, optional).",
 	}, a.mcpCreateUser)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "update_user",
-		Description: "Update a user's mutable fields. Provide the user id and a patch object with only the fields to change (name, budget, scope, rpm, capture).",
+		Description: "Update a user's mutable fields. Provide the user id and a patch object with only the fields to change (name, budget, scope, rpm).",
 	}, a.mcpUpdateUser)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -116,7 +116,7 @@ func (a *api) buildMCPServer(enableWrites bool) *mcp.Server {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "update_settings",
-		Description: "Update gateway capture settings: capture (on/off), capture_max_bytes, capture_retain (count). Only provided fields change. Returns the resulting settings.",
+		Description: "Update the gateway capture setting: capture (on/off). Returns the resulting settings.",
 	}, a.mcpUpdateSettings)
 
 	mcp.AddTool(srv, &mcp.Tool{

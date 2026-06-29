@@ -230,25 +230,6 @@ func TestValidationFailures(t *testing.T) {
 	}
 }
 
-func TestCaptureDefaults(t *testing.T) {
-	cfg := Config{
-		Vendors: []Vendor{
-			{Name: "a", Origin: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}},
-		},
-	}
-	snap, err := Build(cfg)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	s := snap.Settings()
-	if s.CaptureMaxBytes != 32768 {
-		t.Errorf("CaptureMaxBytes = %d, want 32768", s.CaptureMaxBytes)
-	}
-	if s.CaptureRetain != 10000 {
-		t.Errorf("CaptureRetain = %d, want 10000", s.CaptureRetain)
-	}
-}
-
 func TestAdapterDefault(t *testing.T) {
 	cfg := Config{
 		Vendors: []Vendor{
