@@ -193,6 +193,20 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /api/users/{id}:
+    get:
+      tags: [users]
+      summary: Get one user with computed lifetime spend
+      operationId: getUser
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
     patch:
       tags: [users]
       summary: Update a user's mutable fields

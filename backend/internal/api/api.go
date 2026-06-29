@@ -106,6 +106,7 @@ var adminRoutes = []adminRoute{
 	{"GET", "/api/calls/export", (*api).handleCallsExport},
 	{"GET", "/api/calls/{id}/trace", (*api).handleCallTrace},
 	{"GET", "/api/users", (*api).handleListUsers},
+	{"GET", "/api/users/{id}", (*api).handleGetUser},
 	{"POST", "/api/users", (*api).handleCreateUser},
 	{"PATCH", "/api/users/{id}", (*api).handlePatchUser},
 	{"DELETE", "/api/users/{id}", (*api).handleDeleteUser},

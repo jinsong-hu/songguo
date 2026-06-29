@@ -481,6 +481,37 @@ func (a *api) usersData() ([]userView, error) {
 	return views, nil
 }
 
+// handleGetUser returns one user with computed lifetime spend. The plaintext key
+// is never exposed on a read (only creation returns it).
+func (a *api) handleGetUser(w http.ResponseWriter, r *http.Request) {
+	u, err := a.store.GetUser(r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "user not found")
+			return
+		}
+		a.writeDataErr(w, "get user", err)
+		return
+	}
+	spent, err := a.store.SpendByUser(u.ID, nil)
+	if err != nil {
+		a.writeDataErr(w, "get user spend", err)
+		return
+	}
+	v := newUserView(u, spent)
+	v.Key = "" // never expose the plaintext key on read
+	lastSeen, err := a.store.LastSeenByUser(u.ID)
+	if err != nil {
+		a.writeDataErr(w, "get user last seen", err)
+		return
+	}
+	if lastSeen != nil {
+		s := lastSeen.UTC().Format(time.RFC3339)
+		v.LastSeen = &s
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
 // createUserReq is the POST /api/users body.
 type createUserReq struct {
 	Name   string    `json:"name"`
