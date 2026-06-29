@@ -16,7 +16,6 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/tls"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -47,74 +46,6 @@ var wsHandshakeHeaders = map[string]struct{}{
 	"Sec-Websocket-Version":    {},
 	"Sec-Websocket-Protocol":   {},
 	"Sec-Websocket-Extensions": {},
-}
-
-// wsAuthSubprotocols map a Sec-WebSocket-Protocol token prefix to the request
-// header it stands in for. A browser's WebSocket API cannot set headers, so the
-// dashboard test playground smuggles the gateway credentials as subprotocol
-// tokens (the one handshake channel a browser controls). The value after each
-// prefix is base64url-encoded — base64url's alphabet is all valid subprotocol
-// token characters, so any key/id survives the round trip.
-//
-// This is NOT the standard use of Sec-WebSocket-Protocol (it's meant for
-// application subprotocol negotiation, not auth) — it's a deliberate workaround
-// for the browser's header-less WebSocket API. Same trick the Kubernetes API
-// server uses for exec/attach ("base64url.bearer.authorization.k8s.io.<token>").
-// We strip these tokens here so the upstream vendor never sees them.
-var wsAuthSubprotocols = []struct {
-	prefix string
-	header string
-	bearer bool // wrap the decoded value as "Bearer <value>"
-}{
-	{"songguo.auth.", "Authorization", true},
-	{"songguo.provider.", "X-Songguo-Provider", false},
-	{"songguo.resource.", "X-Api-Resource-Id", false},
-}
-
-// applyWSSubprotocolAuth lifts songguo.* credential tokens from the request's
-// Sec-WebSocket-Protocol header into the equivalent request headers (never
-// overwriting an explicitly set header), then rewrites the subprotocol list to
-// drop those tokens so they are never replayed upstream. It is a no-op when no
-// such tokens are present, so a non-browser client that sets real headers is
-// unaffected. Call it only for WebSocket upgrades, before auth.
-func applyWSSubprotocolAuth(r *http.Request) {
-	const header = "Sec-Websocket-Protocol"
-	raw := r.Header.Get(header)
-	if raw == "" {
-		return
-	}
-	var kept []string
-	for _, part := range strings.Split(raw, ",") {
-		tok := strings.TrimSpace(part)
-		if tok == "" {
-			continue
-		}
-		matched := false
-		for _, p := range wsAuthSubprotocols {
-			if !strings.HasPrefix(tok, p.prefix) {
-				continue
-			}
-			matched = true
-			val, err := base64.RawURLEncoding.DecodeString(tok[len(p.prefix):])
-			if err != nil || len(val) == 0 || r.Header.Get(p.header) != "" {
-				break
-			}
-			v := string(val)
-			if p.bearer {
-				v = "Bearer " + v
-			}
-			r.Header.Set(p.header, v)
-			break
-		}
-		if !matched {
-			kept = append(kept, tok)
-		}
-	}
-	if len(kept) == 0 {
-		r.Header.Del(header)
-	} else {
-		r.Header.Set(header, strings.Join(kept, ", "))
-	}
 }
 
 // isWebSocketUpgrade reports whether r is a WebSocket upgrade request: the
@@ -159,9 +90,11 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 		return
 	}
 	// Prefer the vendor(s) whose enabled wires match this path; fall back to all
-	// of the provider's vendors when none declares the (realtime) wire.
-	if matched, _, _ := resolveWires(targets, r.Method, r.URL.Path); len(matched) > 0 {
-		targets = matched
+	// of the provider's vendors when none declares the (realtime) wire. Keep the
+	// wire map so each attempt can rewrite to its vendor's configured endpoint.
+	matchedTargets, wireMap, _ := resolveWires(targets, r.Method, r.URL.Path)
+	if len(matchedTargets) > 0 {
+		targets = matchedTargets
 	}
 
 	// 2. Policy, all BEFORE any hijack so rejections are normal HTTP responses.
@@ -187,7 +120,6 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 		return
 	}
 
-	requestTarget := joinQuery(r.URL.Path, r.URL.RawQuery)
 	model := r.URL.Query().Get("model") // best-effort; realtime model often in query
 
 	// 3. Try each candidate until one yields 101. Each target carries its own
@@ -205,7 +137,7 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 	for i, t := range targets {
 		last := i == len(targets)-1
 
-		host, useTLS, terr := wsTargetOf(t.Vendor.Origin)
+		host, useTLS, requestTarget, terr := wsUpstreamTarget(t, wireMap[t.Vendor.Name], r.URL.Path, r.URL.RawQuery)
 		if terr != nil {
 			h.logger.Error("vendor origin invalid", "err", terr, "vendor", t.Vendor.Name)
 			h.router.Report(t.Vendor.Name, t.Credential.ID, 0, terr)
@@ -308,9 +240,9 @@ func (h *handler) dialWSUpstream(host string, useTLS bool, requestTarget string,
 // buildWSHandshake assembles the raw HTTP/1.1 upgrade request sent upstream. It
 // copies the client's headers EXCEPT the credential header(s) and hop-by-hop
 // headers we must control, but KEEPS the WebSocket handshake headers verbatim,
-// then injects the chosen credential per the vendor's adapter convention.
-// Building the bytes explicitly guarantees the handshake headers survive
-// untouched.
+// then injects the chosen credential per the vendor's adapter convention. This
+// is a transparent relay of a real client's handshake; browser-specific test
+// traffic uses the dedicated /api/test driver (see wstest.go), not this path.
 func buildWSHandshake(host, requestTarget string, r *http.Request, adapter, apiKey string) []byte {
 	// Header names the adapter owns; we strip any client-sent value and write
 	// our own so the upstream only ever sees the vendor credential.
@@ -359,9 +291,19 @@ func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Respons
 		defer resp.Body.Close()
 		copyHeaders(w.Header(), resp.Header)
 		status = resp.StatusCode
+		// Buffer the (small) error body so we can both forward it to the client
+		// and log the upstream's reason for refusing the upgrade.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, defaultMaxBodyBytes))
+		h.logger.Warn("websocket upstream refused upgrade",
+			"vendor", vendorName, "model", model, "credential", t.Credential.ID,
+			"status", status, "attempt", attempt, "handshake_ms", handshake.Milliseconds(),
+			"body", errorSnippet(body))
 		w.WriteHeader(status)
-		_, _ = io.Copy(w, resp.Body)
+		_, _ = w.Write(body)
 	} else {
+		h.logger.Warn("websocket upstream refused upgrade (no response)",
+			"vendor", vendorName, "model", model, "credential", t.Credential.ID,
+			"attempt", attempt, "handshake_ms", handshake.Milliseconds())
 		writeError(w, status, "upstream_error", "upstream refused websocket upgrade")
 	}
 
@@ -456,6 +398,23 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 	close(done)
 
 	duration := h.now().Sub(sessionStart)
+	bu, bd := bytesUp.Load(), bytesDown.Load()
+
+	// The access log only sees the 101 handshake; this is the only record of how
+	// the realtime session actually went. A session that relayed no upstream
+	// bytes is almost always an application-level rejection the raw byte pipe
+	// can't decode (bad config, post-upgrade auth failure), so flag it loudly.
+	args := []any{
+		"vendor", vendorName, "model", model, "credential", t.Credential.ID,
+		"attempt", attempt, "handshake_ms", handshake.Milliseconds(),
+		"bytes_up", bu, "bytes_down", bd, "duration_ms", duration.Milliseconds(),
+	}
+	if bd == 0 {
+		h.logger.Warn("websocket session closed with no upstream data", args...)
+	} else {
+		h.logger.Info("websocket session closed", args...)
+	}
+
 	h.append(calls.Entry{
 		TS:           h.now(),
 		UserID:       userID,
@@ -466,8 +425,8 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 		Attempt:      attempt,
 		Status:       http.StatusSwitchingProtocols,
 		Usage: map[string]any{
-			"bytes_up":    bytesUp.Load(),
-			"bytes_down":  bytesDown.Load(),
+			"bytes_up":    bu,
+			"bytes_down":  bd,
 			"duration_ms": duration.Milliseconds(),
 		},
 		Cost:      0, // realtime pricing deferred
@@ -494,6 +453,29 @@ func writeWSResponse(w *bufio.Writer, resp *http.Response) error {
 		return fmt.Errorf("write header terminator: %w", err)
 	}
 	return w.Flush()
+}
+
+// wsUpstreamTarget computes the dial host and request line for one WebSocket
+// attempt. Like the HTTP path, a matched wire whose endpoint carries a path is a
+// rewrite: the upstream URL is the configured endpoint (host + path), so a vendor
+// that serves a wire under a non-public base — e.g. a plan account's
+// .../api/v3/plan/sauc/... vs the public .../api/v3/sauc/... — is reached
+// correctly instead of being dialed at the verbatim inbound path (which the
+// upstream rejects, often as a 401). An origin-only endpoint, or an unmatched
+// wire, forwards the inbound path to the vendor origin unchanged.
+func wsUpstreamTarget(t router.Target, rw resolvedWire, inboundPath, rawQuery string) (host string, useTLS bool, requestTarget string, err error) {
+	endpoint := t.Vendor.Origin
+	path := inboundPath
+	if rw.matched {
+		if ep, ok := t.Vendor.Endpoints[rw.wire.Name]; ok && endpointHasPath(ep) {
+			endpoint = ep
+			if u, perr := url.Parse(ep); perr == nil && u.Path != "" {
+				path = u.Path
+			}
+		}
+	}
+	host, useTLS, err = wsTargetOf(endpoint)
+	return host, useTLS, joinQuery(path, rawQuery), err
 }
 
 // wsTargetOf maps a vendor origin to a WebSocket dial target. The scheme is

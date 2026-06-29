@@ -57,12 +57,14 @@ func main() {
 	}
 
 	rt := router.New(manager.Current)
-	proxyHandler := proxy.NewHandler(proxy.Deps{
+	proxyDeps := proxy.Deps{
 		Snapshot: manager.Current,
 		Store:    st,
 		Router:   rt,
 		Logger:   logger,
-	})
+	}
+	proxyHandler := proxy.NewHandler(proxyDeps)
+	testWSHandler := proxy.NewWSTestHandler(proxyDeps)
 
 	adminDeps := api.Deps{
 		Store:      st,
@@ -88,9 +90,11 @@ func main() {
 	srv := server.New(server.Options{
 		Addr:           listen,
 		ProxyHandler:   proxyHandler,
+		TestWSHandler:  testWSHandler,
 		AdminHandler:   adminHandler,
 		MCPHandler:     mcpHandler,
 		OpenAPIHandler: api.NewOpenAPIHandler(),
+		Logger:         logger,
 	})
 
 	errCh := make(chan error, 1)

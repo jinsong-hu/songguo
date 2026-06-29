@@ -1,38 +1,24 @@
-// Browser transports for the WebSocket streaming speech wires. Each opens a real
-// WS through the gateway (auth + provider pin smuggled as subprotocol tokens, see
-// volcWsProtocol.wsAuthProtocols), speaks Volcengine's binary frame protocol, and
-// summarizes the outcome — so a streaming test is routed and metered like SDK
-// traffic, just over WS instead of HTTP.
-//
-// Two audio sources share one session core: an uploaded file (sent in paced
-// chunks) and the live microphone (16 kHz mono PCM, streamed frame-by-frame as
-// it's captured, for real-time transcription).
+// Browser transport for the streaming-ASR test. The browser does NOT speak the
+// vendor's binary WebSocket protocol — that lives server-side in the gateway's
+// /api/test driver (see backend internal/proxy/wstest.go). Here the browser just
+// opens a plain WebSocket to /api/test/<wire-path>, streams 16 kHz mono 16-bit
+// PCM as binary messages, signals end-of-audio with a text "eof", and receives
+// the vendor's decoded JSON results back as text. Mic capture and file decode
+// both normalize to 16 kHz mono PCM first.
 
-import {
-  decodeFrame,
-  encodeAudioOnlyRequest,
-  encodeFullClientRequest,
-  isFinalFrame,
-  MessageType,
-  wsAuthProtocols,
-  wsUrl,
-  type Frame,
-} from './volcWsProtocol';
 import type { AsrUtterance } from './playground';
 
-const WS_TIMEOUT_MS = 60_000;
-const MIC_RATE = 16000;
-
-// Fixed session defaults — surfaced in the code samples, not the test UI.
 const DEFAULT_ASR_RESOURCE = 'volc.seedasr.sauc.duration';
-const DEFAULT_ASR_MODEL = 'bigmodel';
+const TARGET_RATE = 16000;
+const WS_TIMEOUT_MS = 60_000;
+const FILE_CHUNK_BYTES = 3200; // 100 ms of 16 kHz mono 16-bit PCM
 
 export interface AsrStreamResult {
   ok: boolean;
   text: string;
   utterances?: AsrUtterance[];
   errorMessage?: string;
-  /** Pretty-printed server JSON frames, for the raw view. */
+  /** Pretty-printed server JSON results, for the raw view. */
   raw: string;
   latencyMs: number;
   /** Audio bytes streamed up. */
@@ -42,44 +28,43 @@ export interface AsrStreamResult {
 interface SessionOpts {
   key: string;
   providerId: string;
-  /** Gateway WS path, e.g. "/api/v3/sauc/bigmodel_async". */
+  /** Wire path, e.g. "/api/v3/sauc/bigmodel_async". */
   path: string;
-  /** Audio container declared in the config, e.g. "wav" | "pcm". */
-  format: string;
-  rate: number;
   onPartial?: (text: string) => void;
 }
 
-/** A live streaming session: feed audio, then end(); await done for the result. */
 interface AsrSession {
-  pushAudio(bytes: Uint8Array): void;
+  pushAudio(pcm: Uint8Array): void;
   end(): void;
   done: Promise<AsrStreamResult>;
 }
 
+/** The dev/prod ws(s):// URL for the test driver path. */
+function testWsUrl(path: string): string {
+  const base = import.meta.env.DEV
+    ? `ws://${window.location.hostname}:8080`
+    : window.location.origin.replace(/^http/, 'ws');
+  return `${base}/api/test${path}`;
+}
+
 /**
- * Open a streaming-ASR WebSocket session. Sends the JSON config on connect, then
- * drains pushed audio frames in order (one frame per push), flagging the final
- * frame once end() is called and the queue drains. Resolves done with the
- * collected transcript when the server signals completion, errors, or closes.
+ * Open a streaming-ASR test session against /api/test. Audio is pushed as PCM
+ * and flushed to the gateway as binary frames; end() sends the "eof" marker so
+ * the gateway finalizes the transcript. Resolves when the gateway closes (or on
+ * error/timeout) with whatever transcript arrived.
  */
 function openAsrSession(o: SessionOpts): AsrSession {
   const start = performance.now();
   const elapsed = () => Math.round(performance.now() - start);
-  const config = {
-    user: { uid: 'songguo-playground' },
-    audio: { format: o.format, rate: o.rate, bits: 16, channel: 1 },
-    request: {
-      model_name: DEFAULT_ASR_MODEL,
-      enable_punc: true,
-      enable_itn: true,
-      show_utterances: true,
-    },
-  };
+  const url =
+    `${testWsUrl(o.path)}?key=${encodeURIComponent(o.key)}` +
+    `&provider=${encodeURIComponent(o.providerId)}` +
+    `&resource=${encodeURIComponent(DEFAULT_ASR_RESOURCE)}`;
 
   const queue: Uint8Array[] = [];
   let ended = false;
   let settled = false;
+  let opened = false;
   let bytesUp = 0;
   const frames: unknown[] = [];
   let lastText = '';
@@ -90,9 +75,16 @@ function openAsrSession(o: SessionOpts): AsrSession {
 
   let ws: WebSocket;
   try {
-    ws = new WebSocket(wsUrl(o.path), wsAuthProtocols(o.key, o.providerId, DEFAULT_ASR_RESOURCE));
+    ws = new WebSocket(url);
   } catch (e) {
-    resolveDone(errResult(elapsed(), e instanceof Error ? e.message : 'Failed to open WebSocket'));
+    resolveDone({
+      ok: false,
+      text: '',
+      errorMessage: e instanceof Error ? e.message : 'Failed to open WebSocket',
+      raw: '',
+      latencyMs: elapsed(),
+      bytesUp: 0,
+    });
     return { pushAudio: () => {}, end: () => {}, done };
   }
   ws.binaryType = 'arraybuffer';
@@ -118,73 +110,72 @@ function openAsrSession(o: SessionOpts): AsrSession {
   };
 
   const timer = setTimeout(
-    () => finish({ ok: false, errorMessage: 'Timed out waiting for the transcript (60s).' }),
+    () => finish({ ok: lastText !== '', errorMessage: lastText ? undefined : 'Timed out waiting for the transcript (60s).' }),
     WS_TIMEOUT_MS,
   );
 
-  // Serial pump: config first, then one frame per queued chunk, last flag when
-  // the producer has ended and the queue is empty.
+  // Drain pushed PCM as binary frames; once ended and drained, send the "eof"
+  // marker and keep the socket open for the final transcript.
   const pump = async () => {
-    try {
-      ws.send(await encodeFullClientRequest(config));
-      while (!settled) {
-        if (queue.length === 0) {
-          if (ended) {
-            ws.send(await encodeAudioOnlyRequest(new Uint8Array(0), true));
-            return;
-          }
-          await sleep(20);
-          continue;
+    while (!settled) {
+      if (queue.length === 0) {
+        if (ended) {
+          if (ws.readyState === WebSocket.OPEN) ws.send('eof');
+          return;
         }
-        const chunk = queue.shift()!;
-        bytesUp += chunk.length;
-        const last = ended && queue.length === 0;
-        ws.send(await encodeAudioOnlyRequest(chunk, last));
-        if (last) return;
+        await sleep(20);
+        continue;
       }
-    } catch (e) {
-      finish({ ok: false, errorMessage: e instanceof Error ? e.message : 'Failed to send audio' });
+      const chunk = queue.shift()!;
+      bytesUp += chunk.length;
+      if (ws.readyState !== WebSocket.OPEN) return;
+      ws.send(chunk);
+      await sleep(0); // yield so onmessage can interleave
     }
   };
 
   ws.onopen = () => {
+    opened = true;
     void pump();
   };
 
-  ws.onmessage = async (ev) => {
-    let frame: Frame;
+  ws.onmessage = (ev) => {
+    if (typeof ev.data !== 'string') return; // gateway sends decoded JSON as text
+    let json: unknown;
     try {
-      frame = await decodeFrame(new Uint8Array(ev.data as ArrayBuffer));
-    } catch (e) {
-      finish({ ok: false, errorMessage: e instanceof Error ? e.message : 'Failed to decode frame' });
+      json = JSON.parse(ev.data);
+    } catch {
       return;
     }
-    if (frame.json !== undefined) frames.push(frame.json);
-
-    if (frame.messageType === MessageType.ErrorResponse) {
-      finish({ ok: false, errorMessage: asrError(frame) });
+    if (json && typeof json === 'object' && 'error' in json) {
+      finish({ ok: false, errorMessage: String((json as { error: unknown }).error) });
       return;
     }
-    const parsed = asrResultOf(frame.json);
+    frames.push(json);
+    const parsed = asrResultOf(json);
     if (parsed.text) {
       lastText = parsed.text;
       o.onPartial?.(lastText);
     }
     if (parsed.utterances) utterances = parsed.utterances;
-
-    if (isFinalFrame(frame)) finish({ ok: true });
   };
 
-  ws.onerror = () => finish({ ok: false, errorMessage: 'WebSocket error (handshake or transport failed).' });
+  ws.onerror = () => {};
   ws.onclose = (ev) => {
     if (settled) return;
-    if (lastText) finish({ ok: true });
-    else finish({ ok: false, errorMessage: `Connection closed (code ${ev.code}) before a transcript.` });
+    if (lastText) {
+      finish({ ok: true });
+      return;
+    }
+    finish({
+      ok: false,
+      errorMessage: `Connection closed before a transcript (code=${ev.code}${ev.reason ? ` ${ev.reason}` : ''} opened=${opened}).`,
+    });
   };
 
   return {
-    pushAudio: (bytes) => {
-      if (!settled) queue.push(bytes);
+    pushAudio: (pcm) => {
+      if (!settled) queue.push(pcm);
     },
     end: () => {
       ended = true;
@@ -199,44 +190,65 @@ export interface AsrStreamFileParams {
   key: string;
   providerId: string;
   path: string;
-  audio: Uint8Array;
-  /** Audio container, e.g. "wav" | "mp3" | "pcm". */
-  format: string;
-  rate: number;
+  file: File;
   onPartial?: (text: string) => void;
 }
 
-/** Stream an uploaded recording: chunked, lightly paced so the server sees a stream. */
+/** Decode an uploaded recording to 16 kHz mono PCM and stream it, lightly paced. */
 export async function runAsrStreamFile(p: AsrStreamFileParams): Promise<AsrStreamResult> {
-  const session = openAsrSession({
-    key: p.key,
-    providerId: p.providerId,
-    path: p.path,
-    format: p.format,
-    rate: p.rate,
-    onPartial: p.onPartial,
-  });
-  const chunkSize = Math.max(p.rate, 8000); // ~1s of 16-bit mono audio
-  for (let off = 0; off < p.audio.length; off += chunkSize) {
-    session.pushAudio(p.audio.subarray(off, off + chunkSize));
-    await sleep(40);
+  let pcm: Uint8Array;
+  try {
+    pcm = await fileToPcm16k(p.file);
+  } catch (e) {
+    return {
+      ok: false,
+      text: '',
+      errorMessage: e instanceof Error ? `Could not decode audio: ${e.message}` : 'Could not decode audio',
+      raw: '',
+      latencyMs: 0,
+      bytesUp: 0,
+    };
+  }
+  const session = openAsrSession({ key: p.key, providerId: p.providerId, path: p.path, onPartial: p.onPartial });
+  for (let off = 0; off < pcm.length; off += FILE_CHUNK_BYTES) {
+    session.pushAudio(pcm.subarray(off, off + FILE_CHUNK_BYTES));
+    await sleep(40); // pace so the server sees a stream, not one burst
   }
   session.end();
   return session.done;
 }
 
+/** Decode any browser-supported audio file to 16 kHz mono 16-bit PCM bytes. */
+async function fileToPcm16k(file: File): Promise<Uint8Array> {
+  const buf = await file.arrayBuffer();
+  const decodeCtx = new AudioContext();
+  let decoded: AudioBuffer;
+  try {
+    decoded = await decodeCtx.decodeAudioData(buf);
+  } finally {
+    void decodeCtx.close();
+  }
+  const frames = Math.max(1, Math.ceil(decoded.duration * TARGET_RATE));
+  const offline = new OfflineAudioContext(1, frames, TARGET_RATE);
+  const src = offline.createBufferSource();
+  src.buffer = decoded;
+  src.connect(offline.destination);
+  src.start();
+  const rendered = await offline.startRendering();
+  return floatToPCM16(rendered.getChannelData(0));
+}
+
 // --- microphone source -----------------------------------------------------
 
 export interface AsrMicController {
-  /** Stop capturing and finish the stream; awaitable via done. */
   stop(): void;
   done: Promise<AsrStreamResult>;
 }
 
 /**
  * Capture the microphone as 16 kHz mono PCM and stream it live, so the transcript
- * appears as you speak. Returns a controller: call stop() to end the utterance.
- * Throws if mic permission is denied before the session opens.
+ * appears as you speak. Returns a controller: stop() ends the utterance. Throws
+ * if mic permission is denied before the session opens.
  */
 export async function startAsrMicStream(p: {
   key: string;
@@ -247,20 +259,13 @@ export async function startAsrMicStream(p: {
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
   });
-  const ctx = new AudioContext({ sampleRate: MIC_RATE });
+  const ctx = new AudioContext({ sampleRate: TARGET_RATE });
   const source = ctx.createMediaStreamSource(stream);
   const node = ctx.createScriptProcessor(4096, 1, 1);
   const sink = ctx.createGain();
   sink.gain.value = 0; // route to destination silently so onaudioprocess fires
 
-  const session = openAsrSession({
-    key: p.key,
-    providerId: p.providerId,
-    path: p.path,
-    format: 'pcm',
-    rate: MIC_RATE,
-    onPartial: p.onPartial,
-  });
+  const session = openAsrSession({ key: p.key, providerId: p.providerId, path: p.path, onPartial: p.onPartial });
 
   node.onaudioprocess = (e) => session.pushAudio(floatToPCM16(e.inputBuffer.getChannelData(0)));
   source.connect(node);
@@ -294,38 +299,9 @@ function floatToPCM16(input: Float32Array): Uint8Array {
   return out;
 }
 
-// --- audio metadata --------------------------------------------------------
+// --- response parsing ------------------------------------------------------
 
-const ASR_FORMATS = ['wav', 'mp3', 'm4a', 'ogg', 'flac', 'pcm'];
-
-/**
- * Best-effort container + sample rate for an uploaded recording, so the test UI
- * needs no format/rate fields: the container comes from the extension, and the
- * rate from the WAV header when present (else a 16 kHz default that the server
- * tolerates for compressed containers it decodes itself).
- */
-export function guessAudioMeta(bytes: Uint8Array, fileName: string): { format: string; rate: number } {
-  const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
-  const format = ASR_FORMATS.includes(ext) ? ext : 'wav';
-  return { format, rate: wavSampleRate(bytes) ?? MIC_RATE };
-}
-
-/** Read the sample rate from a canonical WAV header, if this is one. */
-function wavSampleRate(b: Uint8Array): number | undefined {
-  if (b.length < 28) return undefined;
-  const tag = (off: number, s: string) =>
-    s.split('').every((c, i) => b[off + i] === c.charCodeAt(0));
-  if (!tag(0, 'RIFF') || !tag(8, 'WAVE')) return undefined;
-  return new DataView(b.buffer, b.byteOffset, b.byteLength).getUint32(24, true);
-}
-
-// --- shared helpers --------------------------------------------------------
-
-function errResult(latencyMs: number, errorMessage: string): AsrStreamResult {
-  return { ok: false, text: '', errorMessage, raw: '', latencyMs, bytesUp: 0 };
-}
-
-/** Pull text + utterances from a bigmodel response frame (result may nest under data). */
+/** Pull text + utterances from a vendor response (result may nest under data). */
 function asrResultOf(json: unknown): { text: string; utterances?: AsrUtterance[] } {
   if (typeof json !== 'object' || json === null) return { text: '' };
   const obj = json as Record<string, unknown>;
@@ -336,17 +312,6 @@ function asrResultOf(json: unknown): { text: string; utterances?: AsrUtterance[]
   const text = typeof src.text === 'string' ? src.text : '';
   const utterances = Array.isArray(src.utterances) ? (src.utterances as AsrUtterance[]) : undefined;
   return { text, utterances };
-}
-
-/** The message from an ERROR_RESPONSE frame. */
-function asrError(frame: Frame): string {
-  if (frame.json && typeof frame.json === 'object') {
-    const m = (frame.json as { message?: unknown }).message;
-    if (typeof m === 'string' && m) return m;
-  }
-  const text = new TextDecoder().decode(frame.payload).trim();
-  if (text) return text;
-  return frame.errorCode ? `Upstream error (code ${frame.errorCode})` : 'Upstream error';
 }
 
 function sleep(ms: number): Promise<void> {

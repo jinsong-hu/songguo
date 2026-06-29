@@ -2,12 +2,17 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
+	"log/slog"
+	"net"
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/songguo/songguo/web"
 )
@@ -23,12 +28,17 @@ type Options struct {
 	ProxyHandler http.Handler
 	// AdminHandler, if non-nil, is mounted under /api/ as the admin/dashboard API.
 	AdminHandler http.Handler
+	// TestWSHandler, if non-nil, is the dashboard's browser-facing streaming test
+	// driver, mounted at /api/test/ (more specific than the admin /api/ mount).
+	TestWSHandler http.Handler
 	// MCPHandler, if non-nil, is mounted at /mcp as the agent-facing MCP server
 	// over the same control plane as AdminHandler (admin-key gated).
 	MCPHandler http.Handler
 	// OpenAPIHandler, if non-nil, serves the admin API's OpenAPI spec at
 	// /openapi.yaml and /openapi.json (unauthenticated; schema only).
 	OpenAPIHandler http.Handler
+	// Logger, if non-nil, enables a per-request access log wrapping every route.
+	Logger *slog.Logger
 }
 
 // Server wraps an *http.Server and its route mux.
@@ -41,16 +51,104 @@ type Server struct {
 // New constructs a Server and registers its routes.
 func New(cfg Options) *Server {
 	mux := http.NewServeMux()
+	var root http.Handler = mux
+	if cfg.Logger != nil {
+		root = accessLog(cfg.Logger, mux)
+	}
 	s := &Server{
 		mux:  mux,
 		opts: cfg,
 		httpServer: &http.Server{
 			Addr:    cfg.Addr,
-			Handler: mux,
+			Handler: root,
 		},
 	}
 	s.registerRoutes()
 	return s
+}
+
+// accessLog wraps next with a per-request log line recording method, path,
+// status, response bytes, and latency. It is the gateway's access log; the
+// proxy adds upstream/vendor detail of its own on top of this.
+func accessLog(logger *slog.Logger, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &recorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		status := rec.status
+		if rec.hijacked {
+			// A hijacked connection (WebSocket upgrade) completes its 101
+			// handshake on the raw conn, bypassing WriteHeader.
+			status = http.StatusSwitchingProtocols
+		}
+		logger.Info("request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", status,
+			"bytes", rec.bytes,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"remote", clientIP(r),
+		)
+	})
+}
+
+// recorder wraps an http.ResponseWriter to capture the status code and number
+// of bytes written, while transparently forwarding the http.Flusher and
+// http.Hijacker the proxy relies on for streaming and WebSocket relays.
+type recorder struct {
+	http.ResponseWriter
+	status      int
+	bytes       int
+	wroteHeader bool
+	hijacked    bool
+}
+
+func (rec *recorder) WriteHeader(code int) {
+	if !rec.wroteHeader {
+		rec.status = code
+		rec.wroteHeader = true
+	}
+	rec.ResponseWriter.WriteHeader(code)
+}
+
+func (rec *recorder) Write(b []byte) (int, error) {
+	rec.wroteHeader = true
+	n, err := rec.ResponseWriter.Write(b)
+	rec.bytes += n
+	return n, err
+}
+
+// Flush forwards to the underlying flusher so streamed (SSE) responses are not
+// buffered by the access-log wrapper.
+func (rec *recorder) Flush() {
+	if f, ok := rec.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack forwards to the underlying hijacker so WebSocket upgrades still work.
+func (rec *recorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := rec.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
+	}
+	rec.hijacked = true
+	return hj.Hijack()
+}
+
+// clientIP returns the caller's address for the access log, preferring the
+// left-most X-Forwarded-For hop when present, else the raw remote address.
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.IndexByte(xff, ','); i >= 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return strings.TrimSpace(xff)
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
 
 // registerRoutes wires up the HTTP routes.
@@ -64,6 +162,11 @@ func (s *Server) registerRoutes() {
 		// routes it here; new native prefixes are added as further mounts.
 		s.mux.Handle("/v1/", s.opts.ProxyHandler)
 		s.mux.Handle("/api/v3/", s.opts.ProxyHandler)
+	}
+	if s.opts.TestWSHandler != nil {
+		// The dashboard's browser streaming-test driver. Mounted before the admin
+		// /api/ catch-all (more specific prefix wins in ServeMux).
+		s.mux.Handle("/api/test/", s.opts.TestWSHandler)
 	}
 	if s.opts.AdminHandler != nil {
 		// The dashboard and CLI call the admin API under http://<songguo>/api.

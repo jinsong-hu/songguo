@@ -14,7 +14,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/songguo/songguo/internal/config"
+	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/store"
+	"github.com/songguo/songguo/internal/wire"
 )
 
 // wsMagicGUID is the RFC 6455 accept-key salt.
@@ -425,61 +428,63 @@ func TestWebSocketScopeRejected(t *testing.T) {
 	}
 }
 
-// b64 is base64url-no-pad, matching how the browser playground encodes credential
-// values into Sec-WebSocket-Protocol tokens.
-func b64(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+// TestWSUpstreamTarget covers the per-attempt WS path rewrite: a matched wire
+// with a path-bearing endpoint dials that endpoint (host + plan path), while an
+// origin-only endpoint forwards the inbound path verbatim.
+func TestWSUpstreamTarget(t *testing.T) {
+	wireName := "volc/asr-stream-async"
+	planEP := "https://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async"
+	mk := func(ep string) router.Target {
+		return router.Target{Vendor: config.Vendor{
+			Origin:    "https://openspeech.bytedance.com",
+			Endpoints: map[string]string{wireName: ep},
+		}}
+	}
+	matched := resolvedWire{wire: wire.Wire{Name: wireName}, matched: true}
 
-// TestApplyWSSubprotocolAuth covers lifting songguo.* credential tokens out of
-// the Sec-WebSocket-Protocol header into real headers, and stripping them so
-// they are never replayed upstream.
-func TestApplyWSSubprotocolAuth(t *testing.T) {
-	t.Run("lifts all three credentials and clears the header", func(t *testing.T) {
-		r := httptest.NewRequest(http.MethodGet, "/api/v3/sauc/bigmodel_async", nil)
-		r.Header.Set("Sec-WebSocket-Protocol", strings.Join([]string{
-			"songguo.auth." + b64("sk-user-key"),
-			"songguo.provider." + b64("volc-speech"),
-			"songguo.resource." + b64("volc.seedasr.sauc.duration"),
-		}, ", "))
-
-		applyWSSubprotocolAuth(r)
-
-		if got := r.Header.Get("Authorization"); got != "Bearer sk-user-key" {
-			t.Errorf("Authorization = %q, want %q", got, "Bearer sk-user-key")
-		}
-		if got := r.Header.Get("X-Songguo-Provider"); got != "volc-speech" {
-			t.Errorf("X-Songguo-Provider = %q, want %q", got, "volc-speech")
-		}
-		if got := r.Header.Get("X-Api-Resource-Id"); got != "volc.seedasr.sauc.duration" {
-			t.Errorf("X-Api-Resource-Id = %q, want %q", got, "volc.seedasr.sauc.duration")
-		}
-		if got := r.Header.Get("Sec-WebSocket-Protocol"); got != "" {
-			t.Errorf("Sec-WebSocket-Protocol = %q, want empty (all tokens consumed)", got)
-		}
-	})
-
-	t.Run("keeps non-songguo subprotocols and does not overwrite explicit headers", func(t *testing.T) {
-		r := httptest.NewRequest(http.MethodGet, "/ws", nil)
-		r.Header.Set("Authorization", "Bearer explicit")
-		r.Header.Set("Sec-WebSocket-Protocol", strings.Join([]string{
-			"songguo.auth." + b64("smuggled"),
-			"realtime.v1",
-		}, ", "))
-
-		applyWSSubprotocolAuth(r)
-
-		if got := r.Header.Get("Authorization"); got != "Bearer explicit" {
-			t.Errorf("Authorization = %q, want explicit header preserved", got)
-		}
-		if got := r.Header.Get("Sec-WebSocket-Protocol"); got != "realtime.v1" {
-			t.Errorf("Sec-WebSocket-Protocol = %q, want %q", got, "realtime.v1")
-		}
-	})
-
-	t.Run("no-op without the header", func(t *testing.T) {
-		r := httptest.NewRequest(http.MethodGet, "/ws", nil)
-		applyWSSubprotocolAuth(r)
-		if r.Header.Get("Authorization") != "" {
-			t.Errorf("Authorization should stay empty")
-		}
-	})
+	cases := []struct {
+		name           string
+		target         router.Target
+		rw             resolvedWire
+		wantHost, want string
+	}{
+		{
+			name:     "path-bearing endpoint rewrites to the plan path",
+			target:   mk(planEP),
+			rw:       matched,
+			wantHost: "openspeech.bytedance.com:443",
+			want:     "/api/v3/plan/sauc/bigmodel_async",
+		},
+		{
+			name:     "origin-only endpoint keeps the inbound path",
+			target:   mk("https://openspeech.bytedance.com"),
+			rw:       matched,
+			wantHost: "openspeech.bytedance.com:443",
+			want:     "/api/v3/sauc/bigmodel_async",
+		},
+		{
+			name:     "unmatched wire keeps the inbound path",
+			target:   mk(planEP),
+			rw:       resolvedWire{matched: false},
+			wantHost: "openspeech.bytedance.com:443",
+			want:     "/api/v3/sauc/bigmodel_async",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			host, useTLS, reqTarget, err := wsUpstreamTarget(c.target, c.rw, "/api/v3/sauc/bigmodel_async", "")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !useTLS {
+				t.Errorf("useTLS = false, want true for https")
+			}
+			if host != c.wantHost {
+				t.Errorf("host = %q, want %q", host, c.wantHost)
+			}
+			if reqTarget != c.want {
+				t.Errorf("requestTarget = %q, want %q", reqTarget, c.want)
+			}
+		})
+	}
 }

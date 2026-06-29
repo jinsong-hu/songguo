@@ -24,7 +24,6 @@ import {
   type WireTest,
 } from '../lib/playground';
 import {
-  guessAudioMeta,
   runAsrStreamFile,
   startAsrMicStream,
   type AsrMicController,
@@ -854,15 +853,11 @@ function AsrStreamPanel({
     if (!file || !ready || busy) return;
     reset();
     setRunning(true);
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const { format, rate } = guessAudioMeta(bytes, file.name);
     const res = await runAsrStreamFile({
       key: apiKey.trim(),
       providerId,
       path,
-      audio: bytes,
-      format,
-      rate,
+      file,
       onPartial: setPartial,
     });
     setResult(res);
@@ -871,17 +866,17 @@ function AsrStreamPanel({
 
   const toggleMic = async () => {
     if (recording) {
+      // Stop the mic and flip the UI immediately; the result arrives when the
+      // session resolves (it always does — there's an end() grace window).
       micRef.current?.stop();
+      setRecording(false);
       return;
     }
     if (!ready || running) return;
     reset();
+    let ctrl: AsrMicController;
     try {
-      const ctrl = await startAsrMicStream({ key: apiKey.trim(), providerId, path, onPartial: setPartial });
-      micRef.current = ctrl;
-      setRecording(true);
-      const res = await ctrl.done;
-      setResult(res);
+      ctrl = await startAsrMicStream({ key: apiKey.trim(), providerId, path, onPartial: setPartial });
     } catch (e) {
       setResult({
         ok: false,
@@ -891,10 +886,15 @@ function AsrStreamPanel({
         latencyMs: 0,
         bytesUp: 0,
       });
-    } finally {
+      return;
+    }
+    micRef.current = ctrl;
+    setRecording(true);
+    void ctrl.done.then((res) => {
+      setResult(res);
       setRecording(false);
       micRef.current = null;
-    }
+    });
   };
 
   return (

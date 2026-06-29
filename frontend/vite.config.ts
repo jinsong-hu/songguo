@@ -19,10 +19,13 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api':          { target: 'http://localhost:8080', changeOrigin: true },
-      '/v1':           { target: 'http://localhost:8080', changeOrigin: true },
-      '/x':            { target: 'http://localhost:8080', changeOrigin: true, ws: true },
-      '/healthz':      { target: 'http://localhost:8080' },
+      // ws:true so the WebSocket streaming wires (e.g. /api/v3/sauc/bigmodel_async,
+      // /api/v3/tts/bidirection) get their Upgrade proxied to the backend in dev,
+      // not just plain HTTP. In production the backend serves both on one origin.
+      '/api':     { target: 'http://localhost:8080', changeOrigin: true, ws: true },
+      '/v1':      { target: 'http://localhost:8080', changeOrigin: true, ws: true },
+      '/x':       { target: 'http://localhost:8080', changeOrigin: true, ws: true },
+      '/healthz': { target: 'http://localhost:8080' },
       '/openapi.yaml': { target: 'http://localhost:8080' },
       '/openapi.json': { target: 'http://localhost:8080' },
     },

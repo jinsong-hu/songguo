@@ -151,14 +151,6 @@ func defaultHTTPClient() *http.Client {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// 0. A browser WebSocket can't set headers, so the dashboard playground
-	// smuggles the gateway credentials as Sec-WebSocket-Protocol tokens; lift
-	// them into headers before auth so a browser-driven upgrade authenticates
-	// (and pins its provider) exactly like a header-setting client.
-	if isWebSocketUpgrade(r) {
-		applyWSSubprotocolAuth(r)
-	}
-
 	// 1. Auth.
 	key := bearerToken(r.Header.Get("Authorization"))
 	if key == "" {
@@ -263,6 +255,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// Transport error: failover-eligible.
 		if err != nil {
+			h.logger.Warn("upstream request failed",
+				"vendor", t.Vendor.Name, "model", rt.model, "credential", t.Credential.ID,
+				"url", upReq.URL.String(), "attempt", attempt, "latency_ms", latency,
+				"failover", !last, "err", err)
 			h.recordFailure(user.ID, rt.model, modality, t, attempt, 0, err, latency, tags)
 			h.router.Report(t.Vendor.Name, t.Credential.ID, 0, err)
 			if last {
@@ -276,6 +272,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		failover := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
 		if failover && !last {
+			h.logger.Warn("upstream returned failover status; trying next target",
+				"vendor", t.Vendor.Name, "model", rt.model, "credential", t.Credential.ID,
+				"status", resp.StatusCode, "attempt", attempt, "latency_ms", latency,
+				"body", errorSnippet(peekBody(resp)))
 			h.recordFailure(user.ID, rt.model, modality, t, attempt, resp.StatusCode,
 				fmt.Errorf("upstream status %d", resp.StatusCode), latency, tags)
 			h.router.Report(t.Vendor.Name, t.Credential.ID, resp.StatusCode, nil)
@@ -742,6 +742,17 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		wireName = rw.wire.Name
 	}
 
+	// An error status on the chosen (forwarded) response is the single most
+	// useful debugging signal: the vendor rejected the call. Log it with the
+	// vendor's own error body so the cause (bad key, unknown model, quota, …)
+	// is visible without opening the captured payload.
+	if resp.StatusCode >= 400 {
+		h.logger.Warn("upstream error response",
+			"vendor", t.Vendor.Name, "model", model, "credential", t.Credential.ID,
+			"wire", wireName, "status", resp.StatusCode, "attempt", attempt,
+			"latency_ms", latency, "stream", stream, "body", errorSnippet(parseRespBody))
+	}
+
 	id, err := h.store.AppendCall(calls.Entry{
 		TS:           h.now(),
 		UserID:       userID,
@@ -1087,6 +1098,29 @@ func extractTags(headerVal string, body []byte) map[string]string {
 		return nil
 	}
 	return out
+}
+
+// errorSnippet renders an upstream error body as a single bounded log field:
+// whitespace is collapsed so the message stays on one line, and the result is
+// truncated to keep noisy HTML/JSON error pages from flooding the log.
+func errorSnippet(b []byte) string {
+	const max = 512
+	s := strings.Join(strings.Fields(string(b)), " ")
+	if len(s) > max {
+		return s[:max] + "…"
+	}
+	return s
+}
+
+// peekBody reads a bounded prefix of an upstream response body for logging. It
+// is used only on the failover path, where the body is discarded (drained and
+// closed) rather than forwarded, so consuming a prefix here is safe.
+func peekBody(resp *http.Response) []byte {
+	if resp == nil || resp.Body == nil {
+		return nil
+	}
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	return b
 }
 
 // errorBody is the JSON error envelope returned for gateway-originated errors.
