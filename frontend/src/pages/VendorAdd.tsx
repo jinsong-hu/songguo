@@ -230,12 +230,12 @@ export function VendorAddPage() {
               className={`input mono ${styles.keyInput}`}
               type="text"
               value={baseUrl}
-              placeholder="https://your-endpoint.example/v1"
+              placeholder="https://your-endpoint.example"
               onChange={(e) => setBaseUrl(e.target.value)}
             />
             <span className={styles.hint}>
-              Shared by every API below; each wire's path is appended (e.g.{' '}
-              <code>{resolveEndpoint('{base}/chat/completions', baseUrl.trim() || '…')}</code>).
+              The bare host; each wire's full path is appended (e.g.{' '}
+              <code>{resolveEndpoint('{base}/v1/chat/completions', baseUrl.trim() || '…')}</code>).
             </span>
           </div>
         )}

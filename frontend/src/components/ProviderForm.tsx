@@ -365,12 +365,12 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
             id="s-base"
             className={`input mono ${cards.keyInput}`}
             value={baseValue}
-            placeholder="https://your-endpoint.example/v1"
+            placeholder="https://your-endpoint.example"
             onChange={(e) => setBaseUrl(e.target.value)}
           />
           <span className={cards.hint}>
-            Shared by every API below; each wire's path is appended (e.g.{' '}
-            <code>{resolveEndpoint('{base}/chat/completions', baseValue.trim() || '…')}</code>).
+            The bare host; each wire's full path is appended (e.g.{' '}
+            <code>{resolveEndpoint('{base}/v1/chat/completions', baseValue.trim() || '…')}</code>).
           </span>
         </div>
       )}

@@ -210,12 +210,12 @@
       "custom": true,
       "models": {},
       "endpoints": [
-        { "wire": "openai/chat", "endpoint": "{base}/chat/completions", "adapter": "openai-compatible" },
-        { "wire": "openai/responses", "endpoint": "{base}/responses", "adapter": "openai-compatible" },
-        { "wire": "openai/embeddings", "endpoint": "{base}/embeddings", "adapter": "openai-compatible" },
-        { "wire": "openai/images", "endpoint": "{base}/images/generations", "adapter": "openai-compatible" },
-        { "wire": "openai/models", "endpoint": "{base}", "adapter": "openai-compatible" },
-        { "wire": "anthropic/messages", "endpoint": "{base}/messages", "adapter": "anthropic-compatible" }
+        { "wire": "openai/chat", "endpoint": "{base}/v1/chat/completions", "adapter": "openai-compatible" },
+        { "wire": "openai/responses", "endpoint": "{base}/v1/responses", "adapter": "openai-compatible" },
+        { "wire": "openai/embeddings", "endpoint": "{base}/v1/embeddings", "adapter": "openai-compatible" },
+        { "wire": "openai/images", "endpoint": "{base}/v1/images/generations", "adapter": "openai-compatible" },
+        { "wire": "openai/models", "endpoint": "{base}/v1/models", "adapter": "openai-compatible" },
+        { "wire": "anthropic/messages", "endpoint": "{base}/v1/messages", "adapter": "anthropic-compatible" }
       ]
     }
   ]
