@@ -129,9 +129,10 @@ func NewHandler(d Deps) http.Handler {
 }
 
 // defaultHTTPClient returns a client tuned for proxying, including long-lived
-// streams: it sets connect/TLS/header timeouts but NO overall Client.Timeout,
-// which would truncate streaming responses. Per-request cancellation is honored
-// through the request context.
+// streams: it sets short connect/TLS timeouts but a generous (1h) header
+// timeout for slow upstreams, and NO overall Client.Timeout, which would
+// truncate streaming responses. Per-request cancellation is honored through
+// the request context.
 func defaultHTTPClient() *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
@@ -145,7 +146,7 @@ func defaultHTTPClient() *http.Client {
 			IdleConnTimeout:       90 * time.Second,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
-			ResponseHeaderTimeout: 60 * time.Second,
+			ResponseHeaderTimeout: 1 * time.Hour,
 		},
 	}
 }
