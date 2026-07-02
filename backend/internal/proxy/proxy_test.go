@@ -1477,9 +1477,9 @@ vendors:
 	}
 }
 
-// --- Test 21: inject_stream_usage quirk rewrites only the upstream body, opt-in ---
+// --- Test 21: the request body is forwarded verbatim, streamed or not ---
 
-func TestInjectStreamUsageQuirk(t *testing.T) {
+func TestRequestBodyForwardedVerbatim(t *testing.T) {
 	up := &mockUpstream{}
 	mock := httptest.NewServer(up.handler())
 	defer mock.Close()
@@ -1491,7 +1491,6 @@ vendors:
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/chat]
-    quirks: { inject_stream_usage: "true" }
     credential: {id: credA, api_key: k}
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
@@ -1500,24 +1499,19 @@ vendors:
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
-	// Streamed request without stream_options: the quirk must add include_usage.
-	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","stream":true,"messages":[]}`)
+	// Streamed request: the proxy must NOT rewrite the body (no injection).
+	stream := `{"model":"gpt-4o","stream":true,"messages":[]}`
+	resp := env.post(t, "/v1/chat/completions", key, stream)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
-
-	var sent map[string]any
-	if err := json.Unmarshal(up.lastBody, &sent); err != nil {
-		t.Fatalf("upstream body not JSON: %v", err)
-	}
-	opts, _ := sent["stream_options"].(map[string]any)
-	if opts == nil || opts["include_usage"] != true {
-		t.Errorf("upstream body missing injected stream_options.include_usage: %s", up.lastBody)
+	if string(up.lastBody) != stream {
+		t.Errorf("streamed body changed: got %q want %q", up.lastBody, stream)
 	}
 
-	// Non-streamed request must pass through byte-for-byte (no injection).
+	// Non-streamed request must pass through byte-for-byte too.
 	plain := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
 	resp2 := env.post(t, "/v1/chat/completions", key, plain)
 	defer resp2.Body.Close()

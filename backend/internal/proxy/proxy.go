@@ -3,11 +3,9 @@
 // The handler is a gate plus a meter: it authenticates the consumer user,
 // enforces scope, budget and rate limits, routes the request to an upstream
 // vendor (with failover), and records every attempt as a call. It NEVER
-// rewrites the request or response body — the only mutations are the
-// credential headers and, when a service explicitly opts in via the
-// inject_stream_usage quirk, setting stream_options.include_usage so streamed
-// calls stay meterable. Metering is read-only sniffing and must never block
-// or alter traffic.
+// rewrites the request or response body — the credential headers are the only
+// mutation; request and response bytes are forwarded verbatim. Metering is
+// read-only sniffing and must never block or alter traffic.
 //
 // Every request must resolve to a wire (see internal/wire): the service's
 // enabled wire whose path pattern matches. The wire owns usage extraction and
@@ -230,14 +228,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rw := rt.wires[t.Vendor.Name]
 		modality := rt.modalityFor(t.Vendor.Name)
 
-		// The one sanctioned body mutation, per-service opt-in: ask the
-		// upstream to report usage on streamed calls so they stay meterable.
-		upBody := body
-		if rw.matched && rw.quirks[quirkInjectStreamUsage] == "true" {
-			upBody = injectStreamUsage(body)
-		}
-
-		upReq, err := h.buildUpstreamRequest(r, t, rt.upstreamURL(t), upBody)
+		upReq, err := h.buildUpstreamRequest(r, t, rt.upstreamURL(t), body)
 		if err != nil {
 			h.logger.Error("build upstream request failed", "err", err, "vendor", t.Vendor.Name)
 			h.recordFailure(user.ID, rt.model, modality, t, attempt, 0, err, 0, tags)
@@ -521,44 +512,6 @@ func applyUpstreamAuth(req *http.Request, adapter, key string) {
 	default:
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
-}
-
-// quirkInjectStreamUsage is the per-service opt-in flag (value "true") that
-// lets the proxy set stream_options.include_usage on streamed requests. Some
-// vendors (DeepSeek, Ark, DashScope) omit usage from SSE streams unless the
-// client asked for it, which would leave those calls metered zero. This is the
-// proxy's only body mutation and is off by default.
-const quirkInjectStreamUsage = "inject_stream_usage"
-
-// injectStreamUsage returns the body with stream_options.include_usage set to
-// true when (and only when) the body is a JSON object requesting a stream and
-// the option is not already present. Any other shape is returned unchanged.
-func injectStreamUsage(body []byte) []byte {
-	if len(body) == 0 {
-		return body
-	}
-	var obj map[string]any
-	dec := json.NewDecoder(strings.NewReader(string(body)))
-	dec.UseNumber() // preserve number representations across the re-marshal
-	if err := dec.Decode(&obj); err != nil {
-		return body
-	}
-	if stream, _ := obj["stream"].(bool); !stream {
-		return body
-	}
-	opts, _ := obj["stream_options"].(map[string]any)
-	if opts == nil {
-		opts = map[string]any{}
-	} else if _, set := opts["include_usage"]; set {
-		return body
-	}
-	opts["include_usage"] = true
-	obj["stream_options"] = opts
-	out, err := json.Marshal(obj)
-	if err != nil {
-		return body
-	}
-	return out
 }
 
 // joinQuery appends a raw query string to a URL if non-empty.
