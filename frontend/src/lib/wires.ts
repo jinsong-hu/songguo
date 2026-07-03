@@ -82,6 +82,26 @@ export function wireServesModels(wire: string): boolean {
   return wireKind(wire) !== '';
 }
 
+// Utility wires: model-less capabilities the operator toggles per provider (e.g.
+// Anthropic token counting). Unlike a silent companion (a /models listing that
+// rides along invisibly), a utility wire gets its own explicit on/off card on the
+// provider form; toggling it adds or removes just that one endpoint.
+const WIRE_UTILITY_TOGGLE = new Set<string>(['anthropic/count_tokens']);
+
+/** A model-less wire shown as an explicit on/off toggle on the provider form. */
+export function wireIsUtilityToggle(wire: string): boolean {
+  return WIRE_UTILITY_TOGGLE.has(wire);
+}
+
+// A one-line blurb shown under a utility wire's toggle card.
+const WIRE_UTILITY_NOTE: Record<string, string> = {
+  'anthropic/count_tokens': 'Free token counting · zero-cost',
+};
+
+export function wireUtilityNote(wire: string): string {
+  return WIRE_UTILITY_NOTE[wire] ?? '';
+}
+
 // The auth scheme (adapter) a wire family expects. Derived from the wire id so
 // the user never picks it: openai/* → Bearer, anthropic/* → x-api-key+version,
 // volc/* → x-api-key.

@@ -192,30 +192,44 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// provider (X-Songguo-Provider header, else body model, else default).
 	// Resolution sets the model/modality, the ordered candidate targets, and the
 	// per-target upstream-URL builder. Forwarding uses only the first target.
-	rt, ok := h.resolve(w, r, user, body)
+	rt, ok := h.resolve(w, r, user, capture, body)
 	if !ok {
 		return
 	}
 
-	// 4. Budget (coarse pre-check).
+	// Tags/attribution were resolved once (in resolve) and carried on the route so
+	// a denied call's ledger row and captured trace share the same attribution a
+	// forwarded one would.
+	tags := rt.tags
+	attr := rt.attr
+	t := rt.targets[0]
+	modality := rt.modalityFor(t.Vendor.Name)
+
+	// 4. Budget (coarse pre-check). A denial is recorded and captured like any
+	// other gateway-originated outcome (see denyCapture).
 	if user.Budget != nil {
 		spent, err := h.store.SpendByUser(user.ID, nil)
 		if err != nil {
 			h.logger.Error("budget lookup failed", "err", err)
 		} else if spent >= *user.Budget {
-			writeError(w, http.StatusPaymentRequired, "budget_exceeded", "budget exceeded")
+			h.denyCapture(w, r, body, capture, calls.Entry{
+				UserID: user.ID, Model: rt.model, Modality: modality,
+				Vendor: t.Vendor.Name, CredentialID: t.Credential.ID,
+				Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
+			}, http.StatusPaymentRequired, "budget_exceeded", "budget exceeded")
 			return
 		}
 	}
 
 	// 5. Rate limit.
 	if !h.limiter.allow(user.ID, user.RPM) {
-		writeError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded")
+		h.denyCapture(w, r, body, capture, calls.Entry{
+			UserID: user.ID, Model: rt.model, Modality: modality,
+			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID,
+			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
+		}, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded")
 		return
 	}
-
-	tags := extractTags(r.Header.Get("X-Songguo-Tags"), body)
-	attr := extractAttribution(r.Header)
 
 	// 6. Forward exactly one attempt — no per-call retry or failover. songguo is
 	// a transparent gateway: it forwards the request to the selected upstream and
@@ -227,15 +241,20 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// by priority -> weighted round-robin, so targets[0] is the pick. There is no
 	// health demotion today — a failing vendor is NOT auto-brought-down, so it
 	// stays selected until an operator changes config (see router package).
-	t := rt.targets[0]
 	rw := rt.wires[t.Vendor.Name]
-	modality := rt.modalityFor(t.Vendor.Name)
 
 	upReq, err := h.buildUpstreamRequest(r, t, rt.upstreamURL(t), body)
 	if err != nil {
 		h.logger.Error("build upstream request failed", "err", err, "vendor", t.Vendor.Name)
-		h.recordFailure(user.ID, rt.model, modality, t, 0, err, 0, tags, attr)
-		writeError(w, http.StatusBadGateway, "upstream_error", "failed to build upstream request")
+		// An upstream build/transport failure records a row but captures no payload:
+		// there is no served response, and pairing a request with a synthesized error
+		// is deliberately not treated as a capture (see denyCapture — that is reserved
+		// for gateway-side denials). Pass capture=false regardless of the flag.
+		h.denyCapture(w, r, body, false, calls.Entry{
+			UserID: user.ID, Model: rt.model, Modality: modality,
+			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID,
+			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
+		}, http.StatusBadGateway, "upstream_error", "failed to build upstream request")
 		return
 	}
 
@@ -249,8 +268,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("upstream request failed",
 			"vendor", t.Vendor.Name, "model", rt.model, "credential", t.Credential.ID,
 			"url", upReq.URL.String(), "latency_ms", latency, "err", err)
-		h.recordFailure(user.ID, rt.model, modality, t, 0, err, latency, tags, attr)
-		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
+		h.denyCapture(w, r, body, false, calls.Entry{
+			UserID: user.ID, Model: rt.model, Modality: modality,
+			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID, LatencyMS: latency,
+			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
+		}, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
 
@@ -270,6 +292,8 @@ type route struct {
 	targets     []router.Target
 	upstreamURL func(router.Target) string
 	wires       map[string]resolvedWire // keyed by vendor name
+	tags        map[string]string       // call tags (header + body metadata)
+	attr        attribution             // Claude Code attribution ids
 }
 
 // resolvedWire is the metering plan for one candidate vendor: the matched wire
@@ -316,22 +340,50 @@ func resolveWires(targets []router.Target, method, path string) (kept []router.T
 	return kept, wires, denied
 }
 
-// denyUnmatched rejects a request whose path matched no enabled wire on any
-// candidate, and records the rejection as a call row so it surfaces on the
-// dashboard (the signal that a wire mapping is missing).
-func (h *handler) denyUnmatched(w http.ResponseWriter, r *http.Request, userID, model, path string, vendors []string) {
-	detail := fmt.Sprintf("no enabled wire matches %s %s on service %s; add a wire mapping or enable allow_unmatched",
-		r.Method, path, strings.Join(vendors, ", "))
-	h.append(calls.Entry{
-		TS:         h.now(),
-		UserID:     userID,
-		Model:      model,
-		Vendor:     strings.Join(vendors, ","),
-		Status:     http.StatusNotFound,
-		Err:        "unmatched: " + r.Method + " " + path,
-		Confidence: calls.ConfidenceUnknown,
-	})
-	writeError(w, http.StatusNotFound, "wire_unmatched", detail)
+// denyCapture records a gateway-originated rejection as a ledger row and, when
+// capture is passed true, saves the request payload plus the synthesized error
+// body — so a denied call is as inspectable as a forwarded one. Gateway-side
+// denials (unmatched 404, scope 403, budget 402, rate 429) pass the global
+// capture flag; upstream build/transport failures (502) reuse this to record the
+// row but pass capture=false, since there is no served response to pair with. It
+// owns writing the error response; the caller fills the Entry's known identity
+// fields (user, model, vendor, attribution) and status/reason/message.
+func (h *handler) denyCapture(w http.ResponseWriter, r *http.Request, body []byte, capture bool,
+	e calls.Entry, status int, reason, message string) {
+	e.TS = h.now()
+	e.Status = status
+	if e.Err == "" {
+		e.Err = reason
+	}
+	if e.Confidence == "" {
+		e.Confidence = calls.ConfidenceUnknown
+	}
+	id, err := h.store.AppendCall(e)
+	if err != nil {
+		h.logger.Error("call append failed", "err", err, "vendor", e.Vendor, "model", e.Model)
+	}
+
+	// Build the exact bytes the client will receive, so the captured response is
+	// byte-identical to what was served.
+	respBytes, _ := json.Marshal(errorBody{Error: errorDetail{Message: message, Type: "songguo_" + reason}})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(respBytes)
+
+	if capture && err == nil {
+		if perr := h.store.SavePayload(store.Payload{
+			CallID:          id,
+			ReqHeaders:      redactHeaders(r.Header),
+			ReqBody:         body,
+			ReqContentType:  r.Header.Get("Content-Type"),
+			RespHeaders:     map[string]string{"Content-Type": "application/json"},
+			RespBody:        respBytes,
+			RespContentType: "application/json",
+			CreatedAt:       h.now(),
+		}); perr != nil {
+			h.logger.Error("save payload failed", "err", perr, "call_id", id)
+		}
+	}
 }
 
 // resolve builds the route with a single rule: match the wire by path suffix,
@@ -339,9 +391,12 @@ func (h *handler) denyUnmatched(w http.ResponseWriter, r *http.Request, userID, 
 // X-Songguo-Provider header (an explicit pin by provider id), else the body's
 // model string, else the default (every vendor serving the matched path,
 // priority-ordered). It enforces scope and writes any error response itself,
-// returning ok=false when it has already responded.
-func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.User, body []byte) (route, bool) {
+// returning ok=false when it has already responded. Denials are recorded and
+// captured via denyCapture, so they conform to the global capture flag.
+func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.User, capture bool, body []byte) (route, bool) {
 	res := meter.Classify(r.Method, r.URL.Path, body)
+	tags := extractTags(r.Header.Get("X-Songguo-Tags"), body)
+	attr := extractAttribution(r.Header)
 
 	// Two distinct identities, deliberately kept apart:
 	//   routingModel — the body's model, the ONLY thing we route on. Empty for
@@ -359,10 +414,17 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 		billingModel = r.Header.Get("X-Api-Resource-Id")
 	}
 
+	denyEntry := func(vendor string) calls.Entry {
+		return calls.Entry{
+			UserID: user.ID, Model: billingModel, Modality: res.Modality, Vendor: vendor,
+			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
+		}
+	}
+
 	// Scope (model-bearing case): reject early if the requested model is not in
 	// a scoped user's allowlist, before any routing work.
 	if routingModel != "" && len(user.Scope) > 0 && !contains(user.Scope, routingModel) {
-		writeError(w, http.StatusForbidden, "model_not_allowed", "model not allowed for this user")
+		h.denyCapture(w, r, body, capture, denyEntry(""), http.StatusForbidden, "model_not_allowed", "model not allowed for this user")
 		return route{}, false
 	}
 
@@ -386,17 +448,21 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 	}
 	if err != nil {
 		if errors.Is(err, router.ErrNoVendor) {
-			writeError(w, http.StatusBadGateway, "no_upstream", "no upstream serves this request")
+			h.denyCapture(w, r, body, capture, denyEntry(""), http.StatusBadGateway, "no_upstream", "no upstream serves this request")
 			return route{}, false
 		}
 		h.logger.Error("routing failed", "err", err)
-		writeError(w, http.StatusBadGateway, "no_upstream", "routing failed")
+		h.denyCapture(w, r, body, capture, denyEntry(""), http.StatusBadGateway, "no_upstream", "routing failed")
 		return route{}, false
 	}
 
 	kept, wires, denied := resolveWires(targets, r.Method, r.URL.Path)
 	if len(kept) == 0 {
-		h.denyUnmatched(w, r, user.ID, billingModel, r.URL.Path, denied)
+		detail := fmt.Sprintf("no enabled wire matches %s %s on service %s; add a wire mapping or enable allow_unmatched",
+			r.Method, r.URL.Path, strings.Join(denied, ", "))
+		e := denyEntry(strings.Join(denied, ","))
+		e.Err = "unmatched: " + r.Method + " " + r.URL.Path
+		h.denyCapture(w, r, body, capture, e, http.StatusNotFound, "wire_unmatched", detail)
 		return route{}, false
 	}
 
@@ -405,7 +471,7 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 	if routingModel == "" && len(user.Scope) > 0 {
 		kept = filterScopedVendors(kept, user.Scope)
 		if len(kept) == 0 {
-			writeError(w, http.StatusForbidden, "vendor_not_allowed", "vendor not allowed for this user")
+			h.denyCapture(w, r, body, capture, denyEntry(""), http.StatusForbidden, "vendor_not_allowed", "vendor not allowed for this user")
 			return route{}, false
 		}
 	}
@@ -416,6 +482,8 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 		modality: res.Modality,
 		targets:  kept,
 		wires:    wires,
+		tags:     tags,
+		attr:     attr,
 		upstreamURL: func(t router.Target) string {
 			if rw, ok := wires[t.Vendor.Name]; ok && rw.matched {
 				// A path-bearing endpoint is the fixed upstream URL — a rewrite
@@ -791,32 +859,6 @@ func (h *handler) copyBody(w http.ResponseWriter, src io.Reader) []byte {
 		}
 	}
 	return body
-}
-
-// recordFailure appends a call row for an attempt that never produced an
-// upstream response to forward — a build or transport error.
-func (h *handler) recordFailure(userID, model string, modality calls.Modality,
-	t router.Target, status int, err error, latency int64, tags map[string]string, attr attribution) {
-	detail := ""
-	if err != nil {
-		detail = err.Error()
-	}
-	h.append(calls.Entry{
-		TS:           h.now(),
-		UserID:       userID,
-		Model:        model,
-		Modality:     modality,
-		Vendor:       t.Vendor.Name,
-		CredentialID: t.Credential.ID,
-		Status:       status,
-		Err:          detail,
-		Cost:         0,
-		LatencyMS:    latency,
-		Tags:         tags,
-		SessionID:     attr.session,
-		AgentID:       attr.agent,
-		ParentAgentID: attr.parentAgent,
-	})
 }
 
 // append writes a call entry, logging (never surfacing) any failure.

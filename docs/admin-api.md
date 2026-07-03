@@ -37,7 +37,7 @@ served **without** auth — it describes shapes only and carries no secrets.
 | `GET /api/usage/series` | Cost/request/error totals bucketed by hour or day. |
 | `GET /api/calls` | Browse the per-call ledger (filter by user/model/vendor/status/time, paginated). |
 | `GET /api/calls/export` | Download filtered calls as CSV or JSON. |
-| `GET /api/calls/{id}/trace` | Captured request/response payload for a call (when capture is on). |
+| `GET /api/calls/{id}/trace` | Captured request/response payload for a call (when capture is on). Covers gateway-denied calls too — an unmatched `404`, scope `403`, budget `402`, or rate-limit `429` saves the request plus the synthesized error body, so a rejected request is as inspectable as a forwarded one. (Upstream transport/build `502` failures record a row but no payload — there is no served response to pair.) |
 | `GET /api/users` · `POST /api/users` | List / create users (keys). Create returns the plaintext key once. |
 | `PATCH /api/users/{id}` · `POST /api/users/{id}/revoke` | Update / revoke a user. |
 | `GET /api/providers` · `POST /api/providers` | List / create upstream providers. |

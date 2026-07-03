@@ -17,7 +17,7 @@ import { Skeleton } from '../components/Skeleton';
 import { useToast } from '../components/Toast';
 import { useFetch } from '../lib/useFetch';
 import { BrandIcon, providerBrand } from '../lib/modelBrand';
-import { wireName, wireServesModels } from '../lib/wires';
+import { wireName, wireServesModels, wireIsUtilityToggle, wireUtilityNote } from '../lib/wires';
 import styles from './VendorAdd.module.css';
 
 export function VendorAddPage() {
@@ -55,10 +55,22 @@ export function VendorAddPage() {
     [vendor, custom],
   );
 
+  // Utility wires (model-less on/off toggles, e.g. Anthropic count_tokens). Shown
+  // as their own cards. Default on for catalog vendors (the endpoint is known
+  // good); off for custom templates, where the user opts in per their base URL.
+  const utilityWires = useMemo(
+    () => (vendor ? vendor.endpoints.filter((ep) => wireIsUtilityToggle(ep.wire)) : []),
+    [vendor],
+  );
+
   // --- Catalog-vendor selection (per wire+model checkbox) ---
   const allKeys = useMemo(
-    () => new Set(modelWires.flatMap((ep) => (ep.models ?? []).map((m) => mkey(ep.wire, m)))),
-    [modelWires],
+    () =>
+      new Set([
+        ...modelWires.flatMap((ep) => (ep.models ?? []).map((m) => mkey(ep.wire, m))),
+        ...(custom ? [] : utilityWires.map((ep) => mkey(ep.wire, ''))),
+      ]),
+    [modelWires, utilityWires, custom],
   );
   const [selected, setSelected] = useState<Set<string> | null>(null);
   // Default every model on, once the catalog has loaded.
@@ -82,6 +94,15 @@ export function VendorAddPage() {
       }
       return next;
     });
+  const toggleUtility = (wire: string) =>
+    setSelected(() => {
+      const next = new Set(checked);
+      const k = mkey(wire, '');
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  const enabledUtility = () => utilityWires.map((ep) => ep.wire).filter((wire) => checked.has(mkey(wire, '')));
 
   // --- Custom-template state (base URL + free-form models per wire) ---
   const [baseUrl, setBaseUrl] = useState('');
@@ -140,7 +161,7 @@ export function VendorAddPage() {
         return;
       }
       const wireModels = customWireModels(modelWires, customModels);
-      const { endpoints, models } = buildProvider(vendor, wireModels, (id) => customPrice(id, priceIndex), url);
+      const { endpoints, models } = buildProvider(vendor, wireModels, (id) => customPrice(id, priceIndex), url, enabledUtility());
       if (models.length === 0) {
         setErr('Add at least one model.');
         return;
@@ -148,7 +169,7 @@ export function VendorAddPage() {
       body = { name: providerName, enabled: true, api_key: apiKey.trim() || undefined, models, endpoints };
     } else {
       const wireModels = catalogWireModels(vendor, checked);
-      const { endpoints, models } = buildProvider(vendor, wireModels, (id) => catalogPrice(id, vendor), null);
+      const { endpoints, models } = buildProvider(vendor, wireModels, (id) => catalogPrice(id, vendor), null, enabledUtility());
       if (models.length === 0) {
         setErr('Select at least one model.');
         return;
@@ -253,6 +274,7 @@ export function VendorAddPage() {
                 ? renderCustomCard(ep)
                 : renderCatalogCard(ep),
             )}
+            {utilityWires.map((ep) => renderUtilityCard(ep))}
           </div>
         </div>
 
@@ -352,6 +374,29 @@ export function VendorAddPage() {
       </div>
     );
   }
+
+  // Utility card: a model-less wire (e.g. count_tokens) toggled on/off as a whole.
+  function renderUtilityCard(ep: CatalogEndpoint) {
+    const on = checked.has(mkey(ep.wire, ''));
+    const url = resolveEndpoint(ep.endpoint, custom ? baseUrl.trim() || '…' : null);
+    return (
+      <div key={ep.wire} className={`card ${styles.apiCard} ${on ? styles.apiCardOn : ''}`}>
+        <button
+          type="button"
+          className={styles.apiCardHead}
+          aria-pressed={on}
+          onClick={() => toggleUtility(ep.wire)}
+        >
+          <span className={styles.apiName}>{wireName(ep.wire, vendor!.id)}</span>
+          <span className={`${styles.apiCheck} ${on ? styles.apiCheckOn : ''}`}>
+            {on ? <Check size={13} strokeWidth={3} /> : null}
+          </span>
+        </button>
+        <span className={styles.apiUrl}>{url}</span>
+        <div className={styles.utilityNote}>{wireUtilityNote(ep.wire)}</div>
+      </div>
+    );
+  }
 }
 
 // Selection key for one (wire, model) checkbox. A space can't appear in a wire id
@@ -431,25 +476,32 @@ function customPrice(id: string, priceIndex: Record<string, CatalogPrice>): Prov
 }
 
 // buildProvider turns a (wire → model ids) selection into the endpoints + models
-// to POST: each selected model-serving wire is included, pulls in any companion
-// (non-model) wire sharing its (origin, adapter) group — the same grouping the
-// backend uses to form routing vendors — and only the selected models are priced.
-// `base` (non-null for custom templates) substitutes the {base} URL placeholder.
+// to POST: each selected model-serving wire is included, pulls in any silent
+// companion (non-model) wire sharing its (origin, adapter) group — the same
+// grouping the backend uses to form routing vendors — and only the selected
+// models are priced. Utility wires (model-less toggles like count_tokens) are the
+// exception: they never ride along silently and are included only when explicitly
+// enabled via `utilityWires`. `base` (non-null for custom templates) substitutes
+// the {base} URL placeholder.
 export function buildProvider(
   vendor: CatalogVendor,
   wireModels: Map<string, string[]>,
   priceModel: (id: string) => ProviderModel | null,
   base: string | null,
+  utilityWires: Iterable<string> = [],
 ): { endpoints: ProviderEndpoint[]; models: ProviderModel[] } {
   const selectedWires = new Set([...wireModels.keys()]);
+  const enabledUtility = new Set(utilityWires);
   const selectedGroups = new Set(
     vendor.endpoints.filter((ep) => selectedWires.has(ep.wire)).map((ep) => groupKey(ep, base)),
   );
   const endpoints: ProviderEndpoint[] = [];
   for (const ep of vendor.endpoints) {
-    const include =
-      selectedWires.has(ep.wire) ||
-      (!wireServesModels(ep.wire) && selectedGroups.has(groupKey(ep, base)));
+    const include = selectedWires.has(ep.wire)
+      ? true
+      : wireIsUtilityToggle(ep.wire)
+        ? enabledUtility.has(ep.wire)
+        : !wireServesModels(ep.wire) && selectedGroups.has(groupKey(ep, base));
     if (!include) continue;
     endpoints.push({ wire: ep.wire, endpoint: resolveEndpoint(ep.endpoint, base), adapter: ep.adapter });
   }

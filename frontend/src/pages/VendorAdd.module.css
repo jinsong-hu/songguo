@@ -133,6 +133,15 @@
   padding-top: 8px;
 }
 
+/* A model-less utility wire's blurb (e.g. "Free token counting · zero-cost"). */
+.utilityNote {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
 .modelRow {
   display: flex;
   align-items: center;

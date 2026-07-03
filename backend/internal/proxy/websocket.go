@@ -136,7 +136,21 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 	case len(matchedTargets) > 0:
 		targets = matchedTargets
 	case pin == "":
-		h.denyUnmatched(w, r, user.ID, billingModel, r.URL.Path, denied)
+		// Mirror the HTTP wire_unmatched 404, recording a ledger row so the missing
+		// wire mapping surfaces. A WS upgrade carries no buffered body, so there is
+		// no payload to capture (unlike the HTTP denyCapture path).
+		h.append(calls.Entry{
+			TS:         h.now(),
+			UserID:     user.ID,
+			Model:      billingModel,
+			Vendor:     strings.Join(denied, ","),
+			Status:     http.StatusNotFound,
+			Err:        "unmatched: " + r.Method + " " + r.URL.Path,
+			Confidence: calls.ConfidenceUnknown,
+		})
+		writeError(w, http.StatusNotFound, "wire_unmatched",
+			fmt.Sprintf("no enabled wire matches %s %s on service %s; add a wire mapping or enable allow_unmatched",
+				r.Method, r.URL.Path, strings.Join(denied, ", ")))
 		return
 	}
 

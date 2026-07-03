@@ -184,6 +184,68 @@ vendors:
 	}
 }
 
+// --- a gateway-denied wire_unmatched 404 records a row AND captures the request ---
+
+// A denied call never reaches an upstream, but it is still a request the operator
+// wants to inspect (the signal a wire mapping is missing). With capture on, the
+// 404 saves the request payload plus the synthesized error body.
+func TestCaptureDeniedUnmatched(t *testing.T) {
+	up := &mockUpstream{}
+	mock := httptest.NewServer(up.handler())
+	defer mock.Close()
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, true)), st)
+
+	reqBody := `{"model":"gpt-4o","messages":[]}`
+	// /v1/rerank matches no enabled wire (vendorA serves only openai/chat).
+	resp := env.post(t, "/v1/rerank", key, reqBody)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (wire_unmatched)", resp.StatusCode)
+	}
+
+	if rows := env.callRows(t); len(rows) != 1 {
+		t.Fatalf("call rows = %d, want 1", len(rows))
+	}
+	callID := callIDForVendor(t, st, "vendorA")
+	p, err := st.GetPayload(callID)
+	if err != nil {
+		t.Fatalf("denied 404 should be captured: GetPayload: %v", err)
+	}
+	if string(p.ReqBody) != reqBody {
+		t.Errorf("captured req body = %q, want %q", p.ReqBody, reqBody)
+	}
+	if !strings.Contains(string(p.RespBody), "wire_unmatched") {
+		t.Errorf("captured resp body should carry the 404 error, got %q", p.RespBody)
+	}
+	if _, ok := p.ReqHeaders["Authorization"]; ok {
+		t.Error("captured denied request leaked Authorization header")
+	}
+}
+
+// With capture off, a denied 404 still records its row but saves no payload.
+func TestCaptureOffDeniedNoPayload(t *testing.T) {
+	up := &mockUpstream{}
+	mock := httptest.NewServer(up.handler())
+	defer mock.Close()
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, false)), st)
+
+	resp := env.post(t, "/v1/rerank", key, `{"model":"gpt-4o","messages":[]}`)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	callID := callIDForVendor(t, st, "vendorA")
+	if _, err := st.GetPayload(callID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("expected no payload when capture off, got %v", err)
+	}
+}
+
 // callIDForVendor returns the id of the single call row for a vendor.
 func callIDForVendor(t *testing.T, st *store.Store, vendor string) int64 {
 	t.Helper()

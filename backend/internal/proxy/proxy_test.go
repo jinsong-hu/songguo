@@ -1671,3 +1671,56 @@ vendors:
 			up.lastHeaders.Get("X-Claude-Code-Session-Id"))
 	}
 }
+
+// --- count_tokens routes like Messages and is billed zero-cost ---
+
+// The Anthropic token-counting endpoint shares the /messages stem but is its own
+// ZeroCost wire. It must route on the body model, forward verbatim, and record a
+// call at $0 — not 404 as wire_unmatched.
+func TestAnthropicCountTokensZeroCost(t *testing.T) {
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"input_tokens":7}`)
+	}))
+	defer mock.Close()
+
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: anthro
+    origin: %s
+    adapter: anthropic-compatible
+    served_models: [claude-x]
+    priority: 1
+    wires: [anthropic/messages, anthropic/count_tokens]
+    credential: {id: credAn, api_key: anthro-key}
+    prices:
+      claude-x: { input: 3.0, output: 15.0, cached_input: 0.3, unit: per_1m_tokens }
+`, mock.URL)
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	resp := env.post(t, "/v1/messages/count_tokens", key,
+		`{"model":"claude-x","messages":[{"role":"user","content":"hi"}]}`)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (routed, not wire_unmatched); body=%s", resp.StatusCode, body)
+	}
+	if string(body) != `{"input_tokens":7}` {
+		t.Errorf("body not forwarded verbatim: got %q", body)
+	}
+
+	rows := env.callRows(t)
+	if len(rows) != 1 {
+		t.Fatalf("call rows = %d, want 1", len(rows))
+	}
+	if rows[0].Wire != "anthropic/count_tokens" {
+		t.Errorf("wire = %q, want anthropic/count_tokens", rows[0].Wire)
+	}
+	if rows[0].Cost != 0 {
+		t.Errorf("cost = %v, want 0 (zero-cost wire)", rows[0].Cost)
+	}
+}

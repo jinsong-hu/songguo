@@ -12,7 +12,7 @@ import { ErrorBanner } from './ErrorBanner';
 import { Skeleton } from './Skeleton';
 import { useFetch } from '../lib/useFetch';
 import { BrandIcon, providerBrand } from '../lib/modelBrand';
-import { wireName, wireServesModels } from '../lib/wires';
+import { wireName, wireServesModels, wireIsUtilityToggle, wireUtilityNote } from '../lib/wires';
 import {
   buildPriceIndex,
   buildProvider,
@@ -79,18 +79,30 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
     [vendor, isCustom],
   );
 
-  // --- Catalog selection (per wire+model checkbox), seeded from the saved provider ---
+  // Utility wires (model-less on/off toggles, e.g. count_tokens), shown as cards
+  // in both catalog and custom modes.
+  const utilityWires = useMemo(
+    () => (vendor ? vendor.endpoints.filter((ep) => wireIsUtilityToggle(ep.wire)) : []),
+    [vendor],
+  );
+
+  // --- Catalog selection (per wire+model checkbox) + utility toggles, seeded from
+  // the saved provider (a utility wire is on iff the provider already has it). ---
   const initialChecked = useMemo(() => {
     const s = new Set<string>();
-    if (!catalogVendor) return s;
     const haveWire = new Set(editing.endpoints.map((e) => e.wire));
     const haveModel = new Set(editing.models.map((m) => m.model));
-    for (const ep of catalogVendor.endpoints) {
-      if (!wireServesModels(ep.wire) || !haveWire.has(ep.wire)) continue;
-      for (const m of ep.models ?? []) if (haveModel.has(m)) s.add(mkey(ep.wire, m));
+    if (catalogVendor) {
+      for (const ep of catalogVendor.endpoints) {
+        if (!wireServesModels(ep.wire) || !haveWire.has(ep.wire)) continue;
+        for (const m of ep.models ?? []) if (haveModel.has(m)) s.add(mkey(ep.wire, m));
+      }
+    }
+    for (const ep of vendor?.endpoints ?? []) {
+      if (wireIsUtilityToggle(ep.wire) && haveWire.has(ep.wire)) s.add(mkey(ep.wire, ''));
     }
     return s;
-  }, [catalogVendor, editing]);
+  }, [catalogVendor, vendor, editing]);
   const [selected, setSelected] = useState<Set<string> | null>(null);
   const checked = selected ?? initialChecked;
   const toggleModel = (wire: string, model: string) =>
@@ -112,6 +124,15 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
       }
       return next;
     });
+  const toggleUtility = (wire: string) =>
+    setSelected(() => {
+      const next = new Set(checked);
+      const k = mkey(wire, '');
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  const enabledUtility = () => utilityWires.map((ep) => ep.wire).filter((wire) => checked.has(mkey(wire, '')));
 
   // --- Custom state: base URL + free-form model rows, recovered from the provider ---
   const derivedBase = useMemo(
@@ -262,6 +283,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
       wireModels,
       (id) => ({ model: id, ...priceFor(id) }),
       base,
+      enabledUtility(),
     );
     if (models.length === 0) {
       setErr(isCustom ? 'Add at least one model.' : 'Select at least one model.');
@@ -384,6 +406,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
         )}
         <div className={cards.apiGrid}>
           {modelWires.map((ep) => (isCustom ? renderCustomCard(ep) : renderCatalogCard(ep)))}
+          {utilityWires.map((ep) => renderUtilityCard(ep))}
         </div>
       </div>
 
@@ -652,6 +675,29 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
             <Plus size={13} /> Add model
           </button>
         </div>
+      </div>
+    );
+  }
+
+  // Utility card: a model-less wire (e.g. count_tokens) toggled on/off as a whole.
+  function renderUtilityCard(ep: CatalogEndpoint) {
+    const on = checked.has(mkey(ep.wire, ''));
+    const url = resolveEndpoint(ep.endpoint, isCustom ? baseValue.trim() || '…' : null);
+    return (
+      <div key={ep.wire} className={`card ${cards.apiCard} ${on ? cards.apiCardOn : ''}`}>
+        <button
+          type="button"
+          className={cards.apiCardHead}
+          aria-pressed={on}
+          onClick={() => toggleUtility(ep.wire)}
+        >
+          <span className={cards.apiName}>{wireName(ep.wire, vendor!.id)}</span>
+          <span className={`${cards.apiCheck} ${on ? cards.apiCheckOn : ''}`}>
+            {on ? <Check size={13} strokeWidth={3} /> : null}
+          </span>
+        </button>
+        <span className={cards.apiUrl}>{url}</span>
+        <div className={cards.utilityNote}>{wireUtilityNote(ep.wire)}</div>
       </div>
     );
   }
