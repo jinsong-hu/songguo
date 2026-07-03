@@ -351,6 +351,27 @@ paths:
               schema: { $ref: "#/components/schemas/TestResult" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/me:
+    get:
+      tags: [meta]
+      summary: Whoami — the caller's role and, for a consumer key, its scope and budget
+      operationId: getMe
+      responses:
+        "200":
+          description: Identity
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [role, id, name, scope]
+                properties:
+                  role: { type: string, enum: [admin, user] }
+                  id: { type: string }
+                  name: { type: string }
+                  scope: { type: array, items: { type: string } }
+                  budget: { type: number, nullable: true }
+                  spend: { type: number }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /api/services:
     get:
       tags: [services]

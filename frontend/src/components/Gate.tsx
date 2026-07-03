@@ -24,7 +24,7 @@ export function Gate({ onAuthenticated, verify }: GateProps) {
       await verify();
       onAuthenticated();
     } catch {
-      setError('Invalid admin key. Check the key and try again.');
+      setError('Invalid key. Check the key and try again.');
       setBusy(false);
     }
   };
@@ -34,11 +34,11 @@ export function Gate({ onAuthenticated, verify }: GateProps) {
       <form className={`card ${styles.card}`} onSubmit={submit}>
         <img className={styles.logo} src="/songguo-mark.svg" alt="Songguo" />
         <div className={styles.title}>Songguo</div>
-        <div className={styles.subtitle}>Sign in to the dashboard</div>
+        <div className={styles.subtitle}>Sign in to continue</div>
 
         <div className={styles.form}>
           <label className={styles.label} htmlFor="admin-key">
-            Admin key
+            API key
           </label>
           <input
             id="admin-key"

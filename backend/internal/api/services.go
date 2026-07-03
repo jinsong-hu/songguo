@@ -29,13 +29,33 @@ type serviceView struct {
 // handleListServices returns the auto-derived, model-centric service list.
 // Each service corresponds to a unique model name served by one or more
 // providers. No database table — derived from the live snapshot + call stats.
+// For a consumer key with a non-empty scope the list is narrowed to the models
+// that key may play (empty scope = all, matching proxy enforcement).
 func (a *api) handleListServices(w http.ResponseWriter, r *http.Request) {
 	views, err := a.servicesData()
 	if err != nil {
 		a.writeDataErr(w, "model stats", err)
 		return
 	}
+	if u, ok := userFrom(r); ok && len(u.Scope) > 0 {
+		views = filterServicesByScope(views, u.Scope)
+	}
 	writeJSON(w, http.StatusOK, views)
+}
+
+// filterServicesByScope keeps only services whose model is in the allowed set.
+func filterServicesByScope(views []serviceView, scope []string) []serviceView {
+	allowed := make(map[string]bool, len(scope))
+	for _, m := range scope {
+		allowed[m] = true
+	}
+	out := make([]serviceView, 0, len(views))
+	for _, v := range views {
+		if allowed[v.Model] {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // servicesData derives the model-centric service list from the live snapshot

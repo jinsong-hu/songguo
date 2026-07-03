@@ -226,6 +226,18 @@ export interface User {
   key?: string;
 }
 
+/** Whoami: who the signed-in key belongs to. `admin` unlocks the full
+ *  dashboard; `user` (a consumer key) unlocks the scoped playground only. */
+export interface Me {
+  role: 'admin' | 'user';
+  id: string;
+  name: string;
+  /** Models the key may play; empty means all. */
+  scope: string[];
+  budget: number | null;
+  spend: number;
+}
+
 export interface CreateUserBody {
   name: string;
   budget?: number | null;

@@ -1,12 +1,13 @@
 import { lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { api, clearAdminKey, getAdminKey, onUnauthorized } from './api/client';
-import type { Settings } from './api/types';
+import type { Me, Settings } from './api/types';
 import { ApiError } from './api/client';
 import { Gate } from './components/Gate';
 import { Layout } from './components/Layout';
 import { ToastProvider } from './components/Toast';
 import { SettingsContext } from './lib/settingsContext';
+import { SessionContext } from './lib/sessionContext';
 
 // Routes are split into their own chunks so heavy page-only deps (charts on
 // Overview, the Radix Select on a service detail, etc.) don't weigh down the
@@ -38,7 +39,8 @@ const DocsMcpPage = lazy(() => import('./pages/DocsMcp').then((m) => ({ default:
 type Phase =
   | { kind: 'loading' }
   | { kind: 'gate' }
-  | { kind: 'ready'; settings: Settings };
+  | { kind: 'ready'; role: 'admin'; me: Me; settings: Settings }
+  | { kind: 'ready'; role: 'user'; me: Me };
 
 // A restarting backend is briefly unreachable. Retry the initial probe with
 // backoff (capped) before giving up, so a backend restart doesn't bounce an
@@ -51,8 +53,16 @@ export function App() {
 
   const bootstrap = useCallback(async (attempt = 0) => {
     try {
+      // Whoami works for either key type; its role decides the shell. Only the
+      // admin dashboard needs settings, so fetch those on the admin branch.
+      const me = await api.me();
+      if (!mounted.current) return;
+      if (me.role === 'user') {
+        setPhase({ kind: 'ready', role: 'user', me });
+        return;
+      }
       const settings = await api.settings();
-      if (mounted.current) setPhase({ kind: 'ready', settings });
+      if (mounted.current) setPhase({ kind: 'ready', role: 'admin', me, settings });
     } catch (e) {
       if (!mounted.current) return;
       // A real 401 means the stored key is missing or wrong — clearAdminKey
@@ -99,7 +109,7 @@ export function App() {
   }, []);
 
   const setSettings = useCallback((settings: Settings) => {
-    setPhase((p) => (p.kind === 'ready' ? { kind: 'ready', settings } : p));
+    setPhase((p) => (p.kind === 'ready' && p.role === 'admin' ? { ...p, settings } : p));
   }, []);
 
   if (phase.kind === 'loading') {
@@ -121,7 +131,7 @@ export function App() {
     return (
       <Gate
         verify={async () => {
-          await api.settings();
+          await api.me();
         }}
         onAuthenticated={() => {
           // The Gate stored & verified the key before calling back.
@@ -131,41 +141,63 @@ export function App() {
     );
   }
 
-  const { settings } = phase;
+  // Scoped user: models list + per-model playground only. No admin routes.
+  if (phase.role === 'user') {
+    return (
+      <SessionContext.Provider value={{ me: phase.me, signOut }}>
+        <ToastProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route element={<Layout />}>
+                <Route index element={<Navigate to="/services" replace />} />
+                <Route path="services" element={<ServicesPage />} />
+                <Route path="services/:model" element={<ServiceDetailPage />} />
+                <Route path="*" element={<Navigate to="/services" replace />} />
+              </Route>
+            </Routes>
+          </BrowserRouter>
+        </ToastProvider>
+      </SessionContext.Provider>
+    );
+  }
+
+  const { settings, me } = phase;
 
   return (
-    <SettingsContext.Provider value={{ settings, setSettings, signOut }}>
-      <ToastProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route
-              element={<Layout />}
-            >
-              <Route index element={<OverviewPage />} />
-              <Route path="sessions/:id" element={<SessionDetailPage />} />
-              <Route path="calls/:id" element={<RequestDetailPage />} />
-              <Route path="services" element={<ServicesPage />} />
-              <Route path="services/add" element={<Navigate to="/providers" replace />} />
-              <Route path="services/:model" element={<ServiceDetailPage />} />
-              <Route path="providers" element={<ProvidersPage />} />
-              <Route path="providers/add" element={<Navigate to="/providers" replace />} />
-              <Route path="providers/add/:vendorId" element={<VendorAddPage />} />
-              {/* The old custom-provider routes are now the "custom" catalog vendor. */}
-              <Route path="providers/new" element={<Navigate to="/providers/add/custom" replace />} />
-              <Route path="providers/new/:kind" element={<Navigate to="/providers/add/custom" replace />} />
-              <Route path="providers/:id/edit" element={<ProviderEditPage />} />
-              <Route path="users" element={<UsersPage />} />
-              <Route path="users/new" element={<UserNewPage />} />
-              <Route path="users/:id/edit" element={<UserEditPage />} />
-              <Route path="settings" element={<SettingsPage />} />
-              <Route path="docs" element={<DocsHomePage />} />
-              <Route path="docs/api" element={<DocsApiPage />} />
-              <Route path="docs/mcp" element={<DocsMcpPage />} />
-              <Route path="*" element={<OverviewPage />} />
-            </Route>
-          </Routes>
-        </BrowserRouter>
-      </ToastProvider>
-    </SettingsContext.Provider>
+    <SessionContext.Provider value={{ me, signOut }}>
+      <SettingsContext.Provider value={{ settings, setSettings, signOut }}>
+        <ToastProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route
+                element={<Layout />}
+              >
+                <Route index element={<OverviewPage />} />
+                <Route path="sessions/:id" element={<SessionDetailPage />} />
+                <Route path="calls/:id" element={<RequestDetailPage />} />
+                <Route path="services" element={<ServicesPage />} />
+                <Route path="services/add" element={<Navigate to="/providers" replace />} />
+                <Route path="services/:model" element={<ServiceDetailPage />} />
+                <Route path="providers" element={<ProvidersPage />} />
+                <Route path="providers/add" element={<Navigate to="/providers" replace />} />
+                <Route path="providers/add/:vendorId" element={<VendorAddPage />} />
+                {/* The old custom-provider routes are now the "custom" catalog vendor. */}
+                <Route path="providers/new" element={<Navigate to="/providers/add/custom" replace />} />
+                <Route path="providers/new/:kind" element={<Navigate to="/providers/add/custom" replace />} />
+                <Route path="providers/:id/edit" element={<ProviderEditPage />} />
+                <Route path="users" element={<UsersPage />} />
+                <Route path="users/new" element={<UserNewPage />} />
+                <Route path="users/:id/edit" element={<UserEditPage />} />
+                <Route path="settings" element={<SettingsPage />} />
+                <Route path="docs" element={<DocsHomePage />} />
+                <Route path="docs/api" element={<DocsApiPage />} />
+                <Route path="docs/mcp" element={<DocsMcpPage />} />
+                <Route path="*" element={<OverviewPage />} />
+              </Route>
+            </Routes>
+          </BrowserRouter>
+        </ToastProvider>
+      </SettingsContext.Provider>
+    </SessionContext.Provider>
   );
 }

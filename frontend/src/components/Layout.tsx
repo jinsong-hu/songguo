@@ -1,6 +1,7 @@
 import { Suspense, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { Activity, BookOpen, Boxes, Braces, Layers, Plug, Settings, Users } from 'lucide-react';
+import { Activity, BookOpen, Boxes, Braces, Layers, LogOut, Plug, Settings, Users } from 'lucide-react';
+import { useSession } from '../lib/sessionContext';
 import styles from './Layout.module.css';
 
 const NAV_TOP = [
@@ -28,6 +29,8 @@ export function Layout() {
   // to reveal its second-level pages.
   const { pathname } = useLocation();
   const docsActive = pathname === '/docs' || pathname.startsWith('/docs/');
+  const { me, signOut } = useSession();
+  const isUser = me.role === 'user';
 
   return (
     <div className={styles.shell}>
@@ -37,32 +40,62 @@ export function Layout() {
           <span className={styles.wordmark}>Songguo</span>
         </div>
         <nav className={styles.nav}>
-          {NAV_TOP.map(({ to, label, icon: Icon, end }) => (
-            <NavLink key={to} to={to} end={end} className={navItemClass}>
-              <Icon size={16} />
-              <span>{label}</span>
+          {isUser ? (
+            // Scoped playground: models list only, no operator surfaces.
+            <NavLink to="/services" className={navItemClass}>
+              <Layers size={16} />
+              <span>Models</span>
             </NavLink>
-          ))}
-
-          <NavLink to="/docs" className={navItemClass}>
-            <BookOpen size={16} />
-            <span>Docs</span>
-          </NavLink>
-          {docsActive ? (
-            <div className={styles.subNav}>
-              {DOCS_SUB.map(({ to, label, icon: Icon }) => (
-                <NavLink key={to} to={to} className={subNavItemClass}>
+          ) : (
+            <>
+              {NAV_TOP.map(({ to, label, icon: Icon, end }) => (
+                <NavLink key={to} to={to} end={end} className={navItemClass}>
                   <Icon size={16} />
                   <span>{label}</span>
                 </NavLink>
               ))}
-            </div>
-          ) : null}
 
-          <NavLink to="/settings" className={navItemClass}>
-            <Settings size={16} />
-            <span>Settings</span>
-          </NavLink>
+              <NavLink to="/docs" className={navItemClass}>
+                <BookOpen size={16} />
+                <span>Docs</span>
+              </NavLink>
+              {docsActive ? (
+                <div className={styles.subNav}>
+                  {DOCS_SUB.map(({ to, label, icon: Icon }) => (
+                    <NavLink key={to} to={to} className={subNavItemClass}>
+                      <Icon size={16} />
+                      <span>{label}</span>
+                    </NavLink>
+                  ))}
+                </div>
+              ) : null}
+
+              <NavLink to="/settings" className={navItemClass}>
+                <Settings size={16} />
+                <span>Settings</span>
+              </NavLink>
+            </>
+          )}
+
+          {isUser ? (
+            // The user shell has no Settings page, so sign-out lives here.
+            <button
+              type="button"
+              className={styles.navItem}
+              onClick={signOut}
+              style={{
+                background: 'none',
+                border: 'none',
+                width: '100%',
+                font: 'inherit',
+                textAlign: 'left',
+                cursor: 'pointer',
+              }}
+            >
+              <LogOut size={16} />
+              <span>Sign out</span>
+            </button>
+          ) : null}
         </nav>
       </aside>
       <main className={styles.main}>

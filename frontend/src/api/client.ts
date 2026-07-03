@@ -10,6 +10,7 @@ import type {
   CreateUserBody,
   ErrorBreakdown,
   FeedPage,
+  Me,
   Overview,
   PatchProviderBody,
   PatchUserBody,
@@ -138,6 +139,9 @@ function callsQuery(f: CallsFilters): string {
 }
 
 export const api = {
+  /** Whoami — succeeds for any valid key; `role` decides which shell to show. */
+  me: () => request<Me>('/me'),
+
   settings: () => request<Settings>('/settings'),
 
   patchSettings: (body: { capture: boolean }) =>

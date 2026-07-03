@@ -142,13 +142,45 @@ type patchProviderReq struct {
 // --- handlers ---
 
 // handleListProviders returns all configured providers (keys masked) with stats.
+// A consumer key gets a sanitized view: identity and wire/model shape only, with
+// upstream endpoint URLs, key preview, pricing, quirks and stats stripped.
 func (a *api) handleListProviders(w http.ResponseWriter, r *http.Request) {
 	views, err := a.providersData()
 	if err != nil {
 		a.writeDataErr(w, "list providers", err)
 		return
 	}
+	if roleFrom(r) == roleUser {
+		views = sanitizeProvidersForUser(views)
+	}
 	writeJSON(w, http.StatusOK, views)
+}
+
+// sanitizeProvidersForUser strips operator-only fields from provider views before
+// exposing them to a consumer key. It keeps the identity plus the per-wire
+// (wire/adapter) and model-name shape the playground needs to pin a provider,
+// but drops the upstream endpoint URLs, the masked key, per-provider pricing,
+// quirks, and aggregate call stats. The JSON shape is unchanged so the SPA reads
+// it with the same Provider type.
+func sanitizeProvidersForUser(in []providerView) []providerView {
+	out := make([]providerView, 0, len(in))
+	for _, p := range in {
+		p.MaskedKey = ""
+		p.Quirks = nil
+		p.Stats = vendorStatsView{Healthy: true}
+		eps := make([]providerEndpointView, 0, len(p.Endpoints))
+		for _, ep := range p.Endpoints {
+			eps = append(eps, providerEndpointView{Wire: ep.Wire, Adapter: ep.Adapter})
+		}
+		p.Endpoints = eps
+		models := make([]providerModelView, 0, len(p.Models))
+		for _, m := range p.Models {
+			models = append(models, providerModelView{Model: m.Model, Unit: m.Unit})
+		}
+		p.Models = models
+		out = append(out, p)
+	}
+	return out
 }
 
 // providersData returns all configured providers (keys masked) with per-vendor
