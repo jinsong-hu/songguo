@@ -28,7 +28,7 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	listen := getenv("SONGGUO_LISTEN", ":8080")
+	listen := getenv("SONGGUO_LISTEN", ":12345")
 	dbPath := getenv("SONGGUO_DB", "./songguo.db")
 	adminKey := os.Getenv("SONGGUO_ADMIN_KEY")
 

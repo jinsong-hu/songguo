@@ -62,7 +62,7 @@ GET /openapi.json    # same document as JSON
 Agents connect an MCP client to the streamable-HTTP endpoint:
 
 ```
-URL:    http://<host>:8080/mcp
+URL:    http://<host>:12345/mcp
 Header: Authorization: Bearer <SONGGUO_ADMIN_KEY>
 ```
 

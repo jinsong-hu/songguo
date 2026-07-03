@@ -8,30 +8,30 @@ SHELL := /bin/bash
 -include .env
 export
 
-# Run the Go backend (:8080) and the Vite dev server (:5173) together.
+# Run the Go backend (:12345) and the Vite dev server (:12346) together.
 # Vite proxies /api, /v1, /x, /healthz to the backend. Ctrl+C stops BOTH.
 dev:
 	@command -v go >/dev/null || { echo "go not found in PATH"; exit 1; }
 	@test -d frontend/node_modules || (cd frontend && npm install)
-	@echo "backend  -> http://localhost:8080"
-	@echo "frontend -> http://localhost:5173   (open this)"
+	@echo "backend  -> http://localhost:12345"
+	@echo "frontend -> http://localhost:12346   (open this)"
 	@stop() { \
 		echo; echo "stopping dev servers..."; \
 		kill 0 2>/dev/null || true; \
 		for sig in TERM TERM KILL; do \
-			pids=$$({ lsof -ti tcp:8080; lsof -ti tcp:5173; } 2>/dev/null | sort -u); \
+			pids=$$({ lsof -ti tcp:12345; lsof -ti tcp:12346; } 2>/dev/null | sort -u); \
 			[ -z "$$pids" ] && break; \
 			echo "$$pids" | xargs kill -$$sig 2>/dev/null || true; \
 			sleep 0.4; \
 		done; \
 	}; \
 	trap stop INT TERM EXIT; \
-	( cd backend && exec env SONGGUO_DB=$(CURDIR)/songguo.db SONGGUO_LISTEN=:8080 go run ./cmd/songguo ) & \
+	( cd backend && exec env SONGGUO_DB=$(CURDIR)/songguo.db SONGGUO_LISTEN=:12345 go run ./cmd/songguo ) & \
 	( cd frontend && exec npm run dev ) & \
 	wait
 
 backend:
-	cd backend && SONGGUO_DB=$(CURDIR)/songguo.db SONGGUO_LISTEN=:8080 go run ./cmd/songguo
+	cd backend && SONGGUO_DB=$(CURDIR)/songguo.db SONGGUO_LISTEN=:12345 go run ./cmd/songguo
 
 frontend:
 	cd frontend && npm run dev

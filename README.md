@@ -37,21 +37,21 @@ make build
 # 2. Run
 export SONGGUO_ADMIN_KEY="$(openssl rand -hex 16)"   # gates the dashboard + admin API
 ./songguo
-# -> songguo listening on :8080
+# -> songguo listening on :12345
 
 # 3. Add a service in the dashboard
-#    Open http://localhost:8080/, go to Catalog, pick a provider, paste your API key.
+#    Open http://localhost:12345/, go to Catalog, pick a provider, paste your API key.
 ```
 
 The dashboard is also pre-built and committed (in `backend/web/dist`), so if you already have it built you can compile the binary with Go alone: `cd backend && go build -o ../songguo ./cmd/songguo`.
 
-For local development, run `make dev` and open **http://localhost:5173** — this starts the Go backend on `:8080` and the Vite dev server on `:5173` (which proxies API traffic to the backend); Ctrl+C stops both.
+For local development, run `make dev` and open **http://localhost:12346** — this starts the Go backend on `:12345` and the Vite dev server on `:12346` (which proxies API traffic to the backend); Ctrl+C stops both.
 
-Open the dashboard at **http://localhost:8080/** (production) or **http://localhost:5173/** (dev) and enter the admin key. Mint a token on the **Tokens** page, then point any OpenAI-compatible SDK at the gateway, using that token as the API key:
+Open the dashboard at **http://localhost:12345/** (production) or **http://localhost:12346/** (dev) and enter the admin key. Mint a token on the **Tokens** page, then point any OpenAI-compatible SDK at the gateway, using that token as the API key:
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://localhost:8080/v1", api_key="sg-...")  # your Songguo token
+client = OpenAI(base_url="http://localhost:12345/v1", api_key="sg-...")  # your Songguo token
 client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": "hi"}])
 ```
 
@@ -81,7 +81,7 @@ Off by default. Toggle capture from the dashboard **Settings** page to record th
 
 | Var | Default | Purpose |
 |-----|---------|---------|
-| `SONGGUO_LISTEN` | `:8080` | Listen address |
+| `SONGGUO_LISTEN` | `:12345` | Listen address |
 | `SONGGUO_DB` | `./songguo.db` | SQLite path (auto-migrated); source of truth for services + tokens |
 | `SONGGUO_ADMIN_KEY` | _(empty)_ | Admin/dashboard key. **If empty, the admin API is unprotected** (a warning is logged). |
 
@@ -127,8 +127,8 @@ Makefile      dev / build orchestration
 ## Development
 
 ```bash
-# Run backend (:8080) + Vite dev server (:5173) together; Ctrl+C stops both.
-# Vite proxies /api, /v1, /x, /healthz to the backend. Open http://localhost:5173
+# Run backend (:12345) + Vite dev server (:12346) together; Ctrl+C stops both.
+# Vite proxies /api, /v1, /x, /healthz to the backend. Open http://localhost:12346
 make dev
 
 # Build the dashboard into backend/web/dist (embedded), then the ./songguo binary
