@@ -34,11 +34,14 @@ decision, not a tradeoff to re-litigate.
 
 ## What "forward verbatim" costs (known, accepted)
 
-- The request body is currently **buffered** in RAM (bounded by `MaxBodyBytes`,
-  default 25 MiB) so the proxy can read `model` for routing and replay it across
-  failover candidates. Buffering ≠ mutating — the buffered bytes are forwarded
-  unchanged. Large base64 media on `openai/responses` / `anthropic/messages`, or
-  uploads on `volc/asr-file` / `openai/images` edits, can hit the cap → 413.
+- The request body is **buffered** in RAM (so the proxy can read `model` for
+  routing and replay it across failover candidates) and forwarded verbatim —
+  buffering ≠ mutating. **There is no size ceiling.** The buffer grows to the
+  actual payload size; songguo is key-gated and single-tenant, so payloads are
+  trusted. Consequence: memory = payload × concurrency, and a runaway
+  authenticated client can OOM the box rather than get a clean 413 — accepted
+  tradeoff. If that ever becomes a real problem, the fix is to **stream** the
+  body (byte-for-byte relay, like the WebSocket path), NOT to re-add a cap.
 - Streaming the request body (byte-for-byte relay, like the WebSocket path
   already does) is possible but not implemented for HTTP wires; it trades away
   failover and needs mid-stream-truncation handling. Not a priority — raise the

@@ -53,10 +53,6 @@ import (
 	"github.com/songguo/songguo/internal/wire"
 )
 
-// defaultMaxBodyBytes bounds both the buffered request body and a non-streaming
-// upstream response body.
-const defaultMaxBodyBytes int64 = 25 << 20 // 25 MiB
-
 // hopByHopHeaders are connection-specific headers that must not be forwarded in
 // either direction. Content-Length is handled separately (recomputed by the
 // transport / ResponseWriter).
@@ -79,20 +75,18 @@ type Deps struct {
 	Logger       *slog.Logger
 	HTTPClient   *http.Client     // optional; default constructed if nil
 	Now          func() time.Time // optional; defaults to time.Now (for tests)
-	MaxBodyBytes int64            // optional; default ~25MiB
 }
 
 // handler is the concrete http.Handler returned by NewHandler.
 type handler struct {
-	snapshot     func() *config.Snapshot
-	store        *store.Store
-	router       *router.Router
-	logger       *slog.Logger
-	client       *http.Client
-	now          func() time.Time
-	maxBodyBytes int64
-	limiter      *rateLimiter
-	parse        *parsePipeline
+	snapshot func() *config.Snapshot
+	store    *store.Store
+	router   *router.Router
+	logger   *slog.Logger
+	client   *http.Client
+	now      func() time.Time
+	limiter  *rateLimiter
+	parse    *parsePipeline
 }
 
 // NewHandler builds the transparent proxy handler.
@@ -109,20 +103,15 @@ func NewHandler(d Deps) http.Handler {
 	if client == nil {
 		client = defaultHTTPClient()
 	}
-	max := d.MaxBodyBytes
-	if max <= 0 {
-		max = defaultMaxBodyBytes
-	}
 	return &handler{
-		snapshot:     d.Snapshot,
-		store:        d.Store,
-		router:       d.Router,
-		logger:       logger,
-		client:       client,
-		now:          now,
-		maxBodyBytes: max,
-		limiter:      newRateLimiter(now),
-		parse:        newParsePipeline(d.Store, logger, 0, 0),
+		snapshot: d.Snapshot,
+		store:    d.Store,
+		router:   d.Router,
+		logger:   logger,
+		client:   client,
+		now:      now,
+		limiter:  newRateLimiter(now),
+		parse:    newParsePipeline(d.Store, logger, 0, 0),
 	}
 }
 
@@ -177,12 +166,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Buffer the request body, bounded.
-	body, tooLarge, err := readBounded(r.Body, h.maxBodyBytes)
-	if tooLarge {
-		writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body too large")
-		return
-	}
+	// 2. Buffer the request body. No size ceiling: songguo is key-gated and
+	// single-tenant, so a caller's payload is trusted; the buffer grows to the
+	// actual body size and is forwarded verbatim.
+	body, err := readBody(r.Body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "failed to read request body")
 		return
@@ -792,10 +779,10 @@ func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.
 	return captured
 }
 
-// copyBody reads the full (bounded) non-streaming body and writes it to the
-// client unchanged, returning the body for usage extraction and capture.
+// copyBody reads the full non-streaming body and writes it to the client
+// unchanged, returning the body for usage extraction and capture.
 func (h *handler) copyBody(w http.ResponseWriter, src io.Reader) []byte {
-	body, _, err := readBounded(src, h.maxBodyBytes)
+	body, err := readBody(src)
 	if err != nil {
 		h.logger.Error("read upstream body failed", "err", err)
 	}
@@ -876,22 +863,18 @@ func bearerToken(header string) string {
 	return h
 }
 
-// readBounded reads up to max bytes from r. If the source has more than max
-// bytes it returns tooLarge=true.
-func readBounded(r io.Reader, max int64) (body []byte, tooLarge bool, err error) {
+// readBody reads r fully into memory. There is no size ceiling: songguo is a
+// key-gated single-tenant gateway, so payloads are trusted and forwarded
+// verbatim. The buffer grows to the actual body size.
+func readBody(r io.Reader) (body []byte, err error) {
 	if r == nil {
-		return nil, false, nil
+		return nil, nil
 	}
-	// Read one extra byte to detect overflow.
-	limited := io.LimitReader(r, max+1)
-	body, err = io.ReadAll(limited)
+	body, err = io.ReadAll(r)
 	if err != nil {
-		return nil, false, fmt.Errorf("read body: %w", err)
+		return nil, fmt.Errorf("read body: %w", err)
 	}
-	if int64(len(body)) > max {
-		return nil, true, nil
-	}
-	return body, false, nil
+	return body, nil
 }
 
 // bytesReader returns a fresh reader over b suitable for an http.Request body.

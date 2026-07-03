@@ -314,7 +314,7 @@ func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Respons
 		status = resp.StatusCode
 		// Buffer the (small) error body so we can both forward it to the client
 		// and log the upstream's reason for refusing the upgrade.
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, defaultMaxBodyBytes))
+		body, _ := io.ReadAll(resp.Body)
 		h.logger.Warn("websocket upstream refused upgrade",
 			"vendor", vendorName, "model", model, "credential", t.Credential.ID,
 			"status", status, "attempt", attempt, "handshake_ms", handshake.Milliseconds(),
