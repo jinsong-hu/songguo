@@ -3,17 +3,20 @@ import type {
   BreakdownDimension,
   CallsFilters,
   CallsPage,
+  CallEntry,
   CallTrace,
   Catalog,
   CreateProviderBody,
   CreateUserBody,
   ErrorBreakdown,
+  FeedPage,
   Overview,
   PatchProviderBody,
   PatchUserBody,
   PricingRow,
   Provider,
   Service,
+  SessionDetail,
   Settings,
   User,
   UsageSeries,
@@ -156,6 +159,15 @@ export const api = {
     request<ErrorBreakdown>(`/usage/errors${qs({ since, until })}`),
 
   calls: (f: CallsFilters) => request<CallsPage>(`/calls${callsQuery(f)}`),
+
+  /** Activity feed: one row per session (aggregated) or standalone request. */
+  feed: (f: CallsFilters) => request<FeedPage>(`/feed${callsQuery(f)}`),
+
+  /** Fetch a single call entry by id. 404 if absent. */
+  call: (id: number) => request<CallEntry>(`/calls/${id}`),
+
+  /** Fetch one session's rollups, agent tree, and calls. 404 if absent. */
+  session: (id: string) => request<SessionDetail>(`/sessions/${encodeURIComponent(id)}`),
 
   /** Fetch the captured request/response trace for a call. 404 if none. */
   trace: (id: number) => request<CallTrace>(`/calls/${id}/trace`),

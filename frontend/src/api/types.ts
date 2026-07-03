@@ -108,9 +108,16 @@ export interface CallEntry {
   err: string;
   usage: Record<string, unknown>;
   cost: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
   latency_ms: number;
   stream: boolean;
   tags: Record<string, string>;
+  /** Claude Code attribution (empty for non-Claude-Code traffic). */
+  session_id: string;
+  agent_id: string;
+  parent_agent_id: string;
   /** Whether a captured request/response payload exists for this call. */
   has_trace: boolean;
 }
@@ -136,6 +143,70 @@ export interface CallsPage {
   total: number;
   limit: number;
   offset: number;
+}
+
+/**
+ * One row of the activity feed: either an aggregated Claude Code session
+ * (kind === "session") or a standalone request (kind === "request"). Fields not
+ * relevant to a kind are absent/zero.
+ */
+export interface FeedRow {
+  kind: 'session' | 'request';
+  /** Set for session rows — the X-Claude-Code-Session-Id to link to. */
+  session_id?: string;
+  /** Set for request rows — the call id to link to. */
+  request_id?: number;
+  calls: number;
+  cost: number;
+  input_tokens: number;
+  output_tokens: number;
+  first_ts: string;
+  last_ts: string;
+  error_count: number;
+  models: string[];
+  vendors: string[];
+  // Single-call fields, present only on request rows.
+  model?: string;
+  vendor?: string;
+  wire?: string;
+  confidence?: string;
+  modality?: string;
+  status?: number;
+  latency_ms?: number;
+  stream?: boolean;
+}
+
+export interface FeedPage {
+  rows: FeedRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** One node in a session's agent tree; rollups cover the whole subtree. */
+export interface AgentNode {
+  agent_id: string;
+  calls: number;
+  cost: number;
+  input_tokens: number;
+  output_tokens: number;
+  children: AgentNode[];
+}
+
+/** GET /api/sessions/{id}: session rollups, agent tree, and its calls. */
+export interface SessionDetail {
+  session_id: string;
+  calls: number;
+  cost: number;
+  input_tokens: number;
+  output_tokens: number;
+  error_count: number;
+  first_ts: string;
+  last_ts: string;
+  models: string[];
+  vendors: string[];
+  agents: AgentNode[];
+  entries: CallEntry[];
 }
 
 export interface User {

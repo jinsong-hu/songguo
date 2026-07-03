@@ -222,6 +222,12 @@ func (s *Store) migrate() error {
 		{"calls", "input_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"calls", "output_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"calls", "cached_tokens", "REAL NOT NULL DEFAULT 0"},
+		// Claude Code attribution headers, captured read-only so the ledger can be
+		// grouped by session and by the main-loop→subagent tree. Empty for
+		// non-Claude-Code traffic (and for rows written before these columns).
+		{"calls", "session_id", "TEXT NOT NULL DEFAULT ''"},
+		{"calls", "agent_id", "TEXT NOT NULL DEFAULT ''"},
+		{"calls", "parent_agent_id", "TEXT NOT NULL DEFAULT ''"},
 		{"providers", "allow_unmatched", "INTEGER NOT NULL DEFAULT 0"},
 		{"providers", "quirks", "TEXT NOT NULL DEFAULT '{}'"},
 		{"providers", "api_key", "TEXT NOT NULL DEFAULT ''"},
@@ -234,6 +240,13 @@ func (s *Store) migrate() error {
 		if err := s.addColumn(a.table, a.col, a.decl); err != nil {
 			return err
 		}
+	}
+
+	// Index the session id for the activity feed's session grouping. Created
+	// after the adds loop because session_id is a post-v1 column (agent_id needs
+	// no index — it is only ever scanned within a single session).
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_calls_session_id ON calls(session_id)`); err != nil {
+		return fmt.Errorf("store: migrate: %w", err)
 	}
 
 	// Step 3b: Drop columns retired post-v1. calls.attempt tracked per-call

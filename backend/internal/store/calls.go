@@ -39,11 +39,12 @@ func (s *Store) AppendCall(e calls.Entry) (int64, error) {
 
 	res, err := s.db.Exec(
 		`INSERT INTO calls
-		 (ts, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (ts, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens, session_id, agent_id, parent_agent_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ts.UnixMilli(), e.UserID, e.Model, string(modality), e.Vendor, e.CredentialID,
 		e.Status, e.Err, usageJSON, e.Cost, e.LatencyMS, boolToInt(e.Stream), tagsJSON,
 		e.Wire, string(e.Confidence), e.InputTokens, e.OutputTokens, e.CachedTokens,
+		e.SessionID, e.AgentID, e.ParentAgentID,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("store: append call: %w", err)
@@ -57,14 +58,15 @@ func (s *Store) AppendCall(e calls.Entry) (int64, error) {
 
 // CallFilter selects and pages call rows. Zero-value fields are ignored.
 type CallFilter struct {
-	Since  *time.Time
-	Until  *time.Time
-	UserID string
-	Model  string
-	Vendor string
-	Status *int
-	Limit  int
-	Offset int
+	Since     *time.Time
+	Until     *time.Time
+	UserID    string
+	Model     string
+	Vendor    string
+	Status    *int
+	SessionID string
+	Limit     int
+	Offset    int
 }
 
 // where builds the shared WHERE clause and its positional arguments.
@@ -97,13 +99,17 @@ func (f CallFilter) where() (string, []any) {
 		conds = append(conds, "status = ?")
 		args = append(args, *f.Status)
 	}
+	if f.SessionID != "" {
+		conds = append(conds, "session_id = ?")
+		args = append(args, f.SessionID)
+	}
 	if len(conds) == 0 {
 		return "", nil
 	}
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
-const callsSelect = `SELECT id, ts, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens FROM calls`
+const callsSelect = `SELECT id, ts, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens, session_id, agent_id, parent_agent_id FROM calls`
 
 // QueryCalls returns matching entries ordered by ts DESC. Limit defaults to
 // 100 and is capped at 1000.
@@ -142,6 +148,26 @@ func (s *Store) QueryCalls(f CallFilter) ([]calls.Entry, error) {
 		return nil, fmt.Errorf("store: query calls: %w", err)
 	}
 	return out, nil
+}
+
+// GetCall returns a single call entry by id, or ErrNotFound if absent.
+func (s *Store) GetCall(id int64) (calls.Entry, error) {
+	rows, err := s.db.Query(callsSelect+" WHERE id = ? LIMIT 1", id)
+	if err != nil {
+		return calls.Entry{}, fmt.Errorf("store: get call: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return calls.Entry{}, fmt.Errorf("store: get call: %w", err)
+		}
+		return calls.Entry{}, ErrNotFound
+	}
+	e, err := scanEntry(rows)
+	if err != nil {
+		return calls.Entry{}, fmt.Errorf("store: scan call: %w", err)
+	}
+	return e, nil
 }
 
 // CountCalls returns the number of rows matching the filter (Limit/Offset are
@@ -256,6 +282,7 @@ func scanEntry(rows *sql.Rows) (calls.Entry, error) {
 		&e.ID, &tsMillis, &e.UserID, &e.Model, &modality, &e.Vendor, &e.CredentialID,
 		&e.Status, &e.Err, &usageJSON, &e.Cost, &e.LatencyMS, &stream, &tagsJSON,
 		&e.Wire, &confidence, &e.InputTokens, &e.OutputTokens, &e.CachedTokens,
+		&e.SessionID, &e.AgentID, &e.ParentAgentID,
 	); err != nil {
 		return calls.Entry{}, err
 	}

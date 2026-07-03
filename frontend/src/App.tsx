@@ -16,6 +16,12 @@ const ServicesPage = lazy(() => import('./pages/Services').then((m) => ({ defaul
 const ServiceDetailPage = lazy(() =>
   import('./pages/ServiceDetail').then((m) => ({ default: m.ServiceDetailPage })),
 );
+const SessionDetailPage = lazy(() =>
+  import('./pages/SessionDetail').then((m) => ({ default: m.SessionDetailPage })),
+);
+const RequestDetailPage = lazy(() =>
+  import('./pages/RequestDetail').then((m) => ({ default: m.RequestDetailPage })),
+);
 const ProvidersPage = lazy(() => import('./pages/Providers').then((m) => ({ default: m.ProvidersPage })));
 const VendorAddPage = lazy(() => import('./pages/VendorAdd').then((m) => ({ default: m.VendorAddPage })));
 const ProviderEditPage = lazy(() =>
@@ -136,6 +142,8 @@ export function App() {
               element={<Layout />}
             >
               <Route index element={<OverviewPage />} />
+              <Route path="sessions/:id" element={<SessionDetailPage />} />
+              <Route path="calls/:id" element={<RequestDetailPage />} />
               <Route path="services" element={<ServicesPage />} />
               <Route path="services/add" element={<Navigate to="/providers" replace />} />
               <Route path="services/:model" element={<ServiceDetailPage />} />

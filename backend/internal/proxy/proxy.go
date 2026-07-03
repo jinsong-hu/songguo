@@ -213,6 +213,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tags := extractTags(r.Header.Get("X-Songguo-Tags"), body)
+	attr := extractAttribution(r.Header)
 
 	// 6. Forward exactly one attempt — no per-call retry or failover. songguo is
 	// a transparent gateway: it forwards the request to the selected upstream and
@@ -231,7 +232,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	upReq, err := h.buildUpstreamRequest(r, t, rt.upstreamURL(t), body)
 	if err != nil {
 		h.logger.Error("build upstream request failed", "err", err, "vendor", t.Vendor.Name)
-		h.recordFailure(user.ID, rt.model, modality, t, 0, err, 0, tags)
+		h.recordFailure(user.ID, rt.model, modality, t, 0, err, 0, tags, attr)
 		writeError(w, http.StatusBadGateway, "upstream_error", "failed to build upstream request")
 		return
 	}
@@ -246,14 +247,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("upstream request failed",
 			"vendor", t.Vendor.Name, "model", rt.model, "credential", t.Credential.ID,
 			"url", upReq.URL.String(), "latency_ms", latency, "err", err)
-		h.recordFailure(user.ID, rt.model, modality, t, 0, err, latency, tags)
+		h.recordFailure(user.ID, rt.model, modality, t, 0, err, latency, tags, attr)
 		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
 
 	// Forward the vendor's response verbatim — including a 429/5xx. The client
 	// sees the real outcome and decides whether to retry.
-	h.forward(w, r, resp, user.ID, rt.model, modality, rw, t, latency, tags, capture, body)
+	h.forward(w, r, resp, user.ID, rt.model, modality, rw, t, latency, tags, attr, capture, body)
 }
 
 // route is the resolved plan for a request: the candidate targets in selection
@@ -605,7 +606,7 @@ func (h *handler) captureOn() bool {
 // call row is written.
 func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Response,
 	userID, model string, modality calls.Modality, rw resolvedWire, t router.Target,
-	latency int64, tags map[string]string, capture bool, reqBody []byte) {
+	latency int64, tags map[string]string, attr attribution, capture bool, reqBody []byte) {
 	defer resp.Body.Close()
 
 	stream := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
@@ -684,6 +685,9 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		LatencyMS:    latency,
 		Stream:       stream,
 		Tags:         tags,
+		SessionID:     attr.session,
+		AgentID:       attr.agent,
+		ParentAgentID: attr.parentAgent,
 	})
 	if err != nil {
 		h.logger.Error("call append failed", "err", err, "vendor", t.Vendor.Name, "model", model)
@@ -784,7 +788,7 @@ func (h *handler) copyBody(w http.ResponseWriter, src io.Reader) []byte {
 // recordFailure appends a call row for an attempt that never produced an
 // upstream response to forward — a build or transport error.
 func (h *handler) recordFailure(userID, model string, modality calls.Modality,
-	t router.Target, status int, err error, latency int64, tags map[string]string) {
+	t router.Target, status int, err error, latency int64, tags map[string]string, attr attribution) {
 	detail := ""
 	if err != nil {
 		detail = err.Error()
@@ -801,6 +805,9 @@ func (h *handler) recordFailure(userID, model string, modality calls.Modality,
 		Cost:         0,
 		LatencyMS:    latency,
 		Tags:         tags,
+		SessionID:     attr.session,
+		AgentID:       attr.agent,
+		ParentAgentID: attr.parentAgent,
 	})
 }
 
@@ -897,6 +904,26 @@ func contains(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// attribution carries the Claude Code request-attribution ids sniffed from the
+// request headers (read-only; the bytes are forwarded untouched). All fields are
+// "" for non-Claude-Code traffic.
+type attribution struct {
+	session     string
+	agent       string
+	parentAgent string
+}
+
+// extractAttribution reads the Claude Code attribution headers. These identify
+// the client session and the main-loop→subagent that issued the call, letting
+// the ledger aggregate a run's calls and reconstruct its agent tree.
+func extractAttribution(h http.Header) attribution {
+	return attribution{
+		session:     h.Get("X-Claude-Code-Session-Id"),
+		agent:       h.Get("X-Claude-Code-Agent-Id"),
+		parentAgent: h.Get("X-Claude-Code-Parent-Agent-Id"),
+	}
 }
 
 // extractTags builds the call tags from, in order of precedence, the

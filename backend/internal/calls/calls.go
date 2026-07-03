@@ -62,4 +62,11 @@ type Entry struct {
 	LatencyMS    int64
 	Stream       bool
 	Tags         map[string]string // optional business attribution (may be nil)
+	// Claude Code attribution, captured verbatim from the request's
+	// X-Claude-Code-Session-Id / -Agent-Id / -Parent-Agent-Id headers (read-only;
+	// no bytes are mutated). Empty for non-Claude-Code traffic. SessionID groups a
+	// run's calls; AgentID + ParentAgentID reconstruct the main-loop→subagent tree.
+	SessionID     string
+	AgentID       string
+	ParentAgentID string
 }

@@ -32,6 +32,7 @@ type mockUpstream struct {
 	forceStatus int    // if non-zero, every request returns this status
 	lastAuth    string // Authorization header observed on the last request
 	lastBody    []byte // request body observed on the last request
+	lastHeaders http.Header // all headers observed on the last request
 	calls       int
 }
 
@@ -41,6 +42,7 @@ func (m *mockUpstream) handler() http.HandlerFunc {
 		m.mu.Lock()
 		m.lastAuth = r.Header.Get("Authorization")
 		m.lastBody = body
+		m.lastHeaders = r.Header.Clone()
 		m.calls++
 		forced := m.forceStatus
 		m.mu.Unlock()
@@ -1549,5 +1551,69 @@ vendors:
 
 	if gotPath != "/weird/upstream/path" {
 		t.Errorf("upstream path = %q, want /weird/upstream/path (full endpoint used as-is, suffix not appended)", gotPath)
+	}
+}
+
+// TestCapturesClaudeCodeAttribution checks the three X-Claude-Code-* headers are
+// sniffed (read-only) onto the recorded ledger entry, so the ledger can be
+// grouped by session and agent.
+func TestCapturesClaudeCodeAttribution(t *testing.T) {
+	up := &mockUpstream{}
+	mock := httptest.NewServer(up.handler())
+	defer mock.Close()
+
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: vendorA
+    origin: %s/v1
+    served_models: [gpt-4o]
+    priority: 1
+    wires: [openai/chat]
+    credential: {id: credA, api_key: vendor-secret-key}
+    prices:
+      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+`, mock.URL)
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	req, err := http.NewRequest(http.MethodPost, env.server.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Claude-Code-Session-Id", "sess-42")
+	req.Header.Set("X-Claude-Code-Agent-Id", "agent-a")
+	req.Header.Set("X-Claude-Code-Parent-Agent-Id", "agent-root")
+	resp, err := env.client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	entries, err := st.QueryCalls(storeFilterAll())
+	if err != nil {
+		t.Fatalf("QueryCalls: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	e := entries[0]
+	if e.SessionID != "sess-42" || e.AgentID != "agent-a" || e.ParentAgentID != "agent-root" {
+		t.Errorf("attribution = %q/%q/%q, want sess-42/agent-a/agent-root",
+			e.SessionID, e.AgentID, e.ParentAgentID)
+	}
+
+	// Transparency: the attribution headers are forwarded upstream untouched.
+	if up.lastHeaders.Get("X-Claude-Code-Session-Id") != "sess-42" {
+		t.Errorf("upstream session header = %q, want sess-42 (forwarded verbatim)",
+			up.lastHeaders.Get("X-Claude-Code-Session-Id"))
 	}
 }

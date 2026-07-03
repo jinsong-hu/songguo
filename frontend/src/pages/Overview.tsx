@@ -30,7 +30,7 @@ import {
 } from '../components/ui/chart';
 import { LIVE_REFRESH_MS, useFetch, useLiveTick } from '../lib/useFetch';
 import { bucketLabel, int, money, ms, percent } from '../lib/format';
-import { CallsTable } from './CallsTable';
+import { ActivityFeed } from './ActivityFeed';
 import styles from './Overview.module.css';
 
 interface RangeOption {
@@ -486,9 +486,9 @@ export function OverviewPage() {
         </Frame>
       </div>
 
-      {/* Recent requests */}
-      <SectionTitle name="Recent requests" />
-      <CallsTable since={since} until={until} />
+      {/* Recent activity */}
+      <SectionTitle name="Recent activity" />
+      <ActivityFeed since={since} until={until} />
     </Page>
   );
 }

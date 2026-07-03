@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/store"
 )
@@ -487,6 +488,242 @@ func (a *api) callTraceData(id int64) (traceView, error) {
 		return traceView{}, err
 	}
 	return newTraceView(p), nil
+}
+
+// handleFeed returns the activity feed: one row per Claude Code session
+// (aggregated) or per standalone request, newest activity first.
+func (a *api) handleFeed(w http.ResponseWriter, r *http.Request) {
+	view, err := a.feedData(callFilterFromQuery(r, defaultCallsAPILimit, maxCallsAPILimit))
+	if err != nil {
+		a.writeDataErr(w, "query feed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// feedData returns a page of feed rows plus the total group count. Limit/offset
+// are clamped defensively so the method is safe with a raw filter.
+func (a *api) feedData(f store.CallFilter) (feedView, error) {
+	if f.Limit <= 0 {
+		f.Limit = defaultCallsAPILimit
+	}
+	if f.Limit > maxCallsAPILimit {
+		f.Limit = maxCallsAPILimit
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+
+	rows, total, err := a.store.Feed(f)
+	if err != nil {
+		return feedView{}, err
+	}
+	views := make([]feedRowView, 0, len(rows))
+	for _, row := range rows {
+		views = append(views, newFeedRowView(row))
+	}
+	return feedView{Rows: views, Total: total, Limit: f.Limit, Offset: f.Offset}, nil
+}
+
+// handleCall returns a single call entry by id (404 when absent). The request
+// detail page pairs this with GET /api/calls/{id}/trace.
+func (a *api) handleCall(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "call not found")
+		return
+	}
+	view, err := a.callData(id)
+	if err != nil {
+		a.writeDataErr(w, "get call", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// callData returns a single call entry, or a *apiError (404) when absent.
+func (a *api) callData(id int64) (entryView, error) {
+	e, err := a.store.GetCall(id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return entryView{}, notFoundErr("call not found")
+		}
+		return entryView{}, err
+	}
+	v := newEntryView(e)
+	hasTrace, err := a.store.HasPayloads([]int64{id})
+	if err != nil {
+		return entryView{}, err
+	}
+	v.HasTrace = hasTrace[id]
+	return v, nil
+}
+
+// handleSession returns one session's rollups, agent tree, and calls (404 when
+// no call carries the session id).
+func (a *api) handleSession(w http.ResponseWriter, r *http.Request) {
+	view, err := a.sessionData(r.PathValue("id"))
+	if err != nil {
+		a.writeDataErr(w, "get session", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// sessionData aggregates a session's calls into rollups + the main-loop→subagent
+// tree, and returns the calls oldest-first. A *apiError (404) is returned when
+// the session has no calls. Bounded to the store's 1000-call page.
+func (a *api) sessionData(id string) (sessionView, error) {
+	if id == "" {
+		return sessionView{}, notFoundErr("session not found")
+	}
+	entries, err := a.store.QueryCalls(store.CallFilter{SessionID: id, Limit: 1000})
+	if err != nil {
+		return sessionView{}, err
+	}
+	if len(entries) == 0 {
+		return sessionView{}, notFoundErr("session not found")
+	}
+	// QueryCalls returns newest-first; present the session oldest-first.
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+
+	var (
+		cost, in, out float64
+		errCount      int
+		modelsSet     = map[string]struct{}{}
+		vendorsSet    = map[string]struct{}{}
+		first         = entries[0].TS
+		last          = entries[0].TS
+		ids           = make([]int64, 0, len(entries))
+	)
+	for _, e := range entries {
+		cost += e.Cost
+		in += e.InputTokens
+		out += e.OutputTokens
+		if e.Status == 0 || e.Status >= 400 {
+			errCount++
+		}
+		if e.Model != "" {
+			modelsSet[e.Model] = struct{}{}
+		}
+		if e.Vendor != "" {
+			vendorsSet[e.Vendor] = struct{}{}
+		}
+		if e.TS.Before(first) {
+			first = e.TS
+		}
+		if e.TS.After(last) {
+			last = e.TS
+		}
+		ids = append(ids, e.ID)
+	}
+	hasTrace, err := a.store.HasPayloads(ids)
+	if err != nil {
+		return sessionView{}, err
+	}
+	entViews := make([]entryView, 0, len(entries))
+	for _, e := range entries {
+		v := newEntryView(e)
+		v.HasTrace = hasTrace[e.ID]
+		entViews = append(entViews, v)
+	}
+
+	return sessionView{
+		SessionID:    id,
+		Calls:        len(entries),
+		Cost:         cost,
+		InputTokens:  in,
+		OutputTokens: out,
+		ErrorCount:   errCount,
+		FirstTS:      first.UTC().Format(time.RFC3339),
+		LastTS:       last.UTC().Format(time.RFC3339),
+		Models:       sortedStringSet(modelsSet),
+		Vendors:      sortedStringSet(vendorsSet),
+		Agents:       buildAgentTree(entries),
+		Entries:      entViews,
+	}, nil
+}
+
+// buildAgentTree folds a session's calls by agent id into a forest, nesting each
+// agent under its parent (X-Claude-Code-Parent-Agent-Id). A root is an agent
+// whose parent is empty or absent from the session. Every node's rollups cover
+// its whole subtree (itself plus descendants). Agents appear in first-seen order.
+func buildAgentTree(entries []calls.Entry) []agentNodeView {
+	type agg struct {
+		calls         int
+		cost, in, out float64
+		parent        string
+	}
+	aggs := map[string]*agg{}
+	order := []string{}
+	for _, e := range entries {
+		a, ok := aggs[e.AgentID]
+		if !ok {
+			a = &agg{parent: e.ParentAgentID}
+			aggs[e.AgentID] = a
+			order = append(order, e.AgentID)
+		}
+		a.calls++
+		a.cost += e.Cost
+		a.in += e.InputTokens
+		a.out += e.OutputTokens
+	}
+
+	children := map[string][]string{}
+	var roots []string
+	for _, id := range order {
+		parent := aggs[id].parent
+		if _, present := aggs[parent]; parent == "" || !present {
+			roots = append(roots, id)
+		} else {
+			children[parent] = append(children[parent], id)
+		}
+	}
+
+	visited := map[string]bool{}
+	var build func(id string) agentNodeView
+	build = func(id string) agentNodeView {
+		visited[id] = true
+		a := aggs[id]
+		node := agentNodeView{
+			AgentID:      id,
+			Calls:        a.calls,
+			Cost:         a.cost,
+			InputTokens:  a.in,
+			OutputTokens: a.out,
+			Children:     []agentNodeView{},
+		}
+		for _, c := range children[id] {
+			if visited[c] {
+				continue // guard against a malformed parent cycle
+			}
+			ch := build(c)
+			node.Calls += ch.Calls
+			node.Cost += ch.Cost
+			node.InputTokens += ch.InputTokens
+			node.OutputTokens += ch.OutputTokens
+			node.Children = append(node.Children, ch)
+		}
+		return node
+	}
+
+	out := make([]agentNodeView, 0, len(roots))
+	for _, id := range roots {
+		out = append(out, build(id))
+	}
+	return out
+}
+
+// sortedStringSet returns a set's keys in ascending order.
+func sortedStringSet(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // handleListUsers returns all users with computed lifetime spend.

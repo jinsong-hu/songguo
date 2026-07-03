@@ -71,10 +71,17 @@ type entryView struct {
 	Err          string            `json:"err"`
 	Usage        map[string]any    `json:"usage"`
 	Cost         float64           `json:"cost"`
+	InputTokens  float64           `json:"input_tokens"`
+	OutputTokens float64           `json:"output_tokens"`
+	CachedTokens float64           `json:"cached_tokens"`
 	LatencyMS    int64             `json:"latency_ms"`
 	Stream       bool              `json:"stream"`
 	Tags         map[string]string `json:"tags"`
-	HasTrace     bool              `json:"has_trace"`
+	// Claude Code attribution (empty for non-Claude-Code traffic).
+	SessionID     string `json:"session_id"`
+	AgentID       string `json:"agent_id"`
+	ParentAgentID string `json:"parent_agent_id"`
+	HasTrace      bool   `json:"has_trace"`
 }
 
 // newEntryView converts a calls.Entry into its JSON view.
@@ -101,9 +108,15 @@ func newEntryView(e calls.Entry) entryView {
 		Err:          e.Err,
 		Usage:        usage,
 		Cost:         e.Cost,
+		InputTokens:  e.InputTokens,
+		OutputTokens: e.OutputTokens,
+		CachedTokens: e.CachedTokens,
 		LatencyMS:    e.LatencyMS,
 		Stream:       e.Stream,
 		Tags:         tags,
+		SessionID:     e.SessionID,
+		AgentID:       e.AgentID,
+		ParentAgentID: e.ParentAgentID,
 	}
 }
 
@@ -214,6 +227,102 @@ type callsView struct {
 	Total   int         `json:"total"`
 	Limit   int         `json:"limit"`
 	Offset  int         `json:"offset"`
+}
+
+// feedRowView is one row of the activity feed: an aggregated session or a
+// standalone request (see kind). Fields not relevant to a kind are zero-valued.
+type feedRowView struct {
+	Kind         string   `json:"kind"` // "session" | "request"
+	SessionID    string   `json:"session_id,omitempty"`
+	RequestID    int64    `json:"request_id,omitempty"`
+	Calls        int      `json:"calls"`
+	Cost         float64  `json:"cost"`
+	InputTokens  float64  `json:"input_tokens"`
+	OutputTokens float64  `json:"output_tokens"`
+	FirstTS      string   `json:"first_ts"`
+	LastTS       string   `json:"last_ts"`
+	ErrorCount   int      `json:"error_count"`
+	Models       []string `json:"models"`
+	Vendors      []string `json:"vendors"`
+	// Single-call fields, populated only for request rows.
+	Model      string `json:"model,omitempty"`
+	Vendor     string `json:"vendor,omitempty"`
+	Wire       string `json:"wire,omitempty"`
+	Confidence string `json:"confidence,omitempty"`
+	Modality   string `json:"modality,omitempty"`
+	Status     int    `json:"status,omitempty"`
+	LatencyMS  int64  `json:"latency_ms,omitempty"`
+	Stream     bool   `json:"stream,omitempty"`
+}
+
+// newFeedRowView converts a store.FeedRow into its JSON view.
+func newFeedRowView(r store.FeedRow) feedRowView {
+	models := r.Models
+	if models == nil {
+		models = []string{}
+	}
+	vendors := r.Vendors
+	if vendors == nil {
+		vendors = []string{}
+	}
+	return feedRowView{
+		Kind:         r.Kind,
+		SessionID:    r.SessionID,
+		RequestID:    r.RequestID,
+		Calls:        r.Calls,
+		Cost:         r.Cost,
+		InputTokens:  r.InputTokens,
+		OutputTokens: r.OutputTokens,
+		FirstTS:      r.FirstTS.UTC().Format(time.RFC3339),
+		LastTS:       r.LastTS.UTC().Format(time.RFC3339),
+		ErrorCount:   r.ErrorCount,
+		Models:       models,
+		Vendors:      vendors,
+		Model:        r.Model,
+		Vendor:       r.Vendor,
+		Wire:         r.Wire,
+		Confidence:   string(r.Confidence),
+		Modality:     string(r.Modality),
+		Status:       r.Status,
+		LatencyMS:    r.LatencyMS,
+		Stream:       r.Stream,
+	}
+}
+
+// feedView is the GET /api/feed response.
+type feedView struct {
+	Rows   []feedRowView `json:"rows"`
+	Total  int           `json:"total"`
+	Limit  int           `json:"limit"`
+	Offset int           `json:"offset"`
+}
+
+// agentNodeView is one node in a session's main-loop→subagent tree. Rollups
+// cover the whole subtree (this agent plus its descendants).
+type agentNodeView struct {
+	AgentID      string          `json:"agent_id"`
+	Calls        int             `json:"calls"`
+	Cost         float64         `json:"cost"`
+	InputTokens  float64         `json:"input_tokens"`
+	OutputTokens float64         `json:"output_tokens"`
+	Children     []agentNodeView `json:"children"`
+}
+
+// sessionView is the GET /api/sessions/{id} response: session-level rollups, the
+// agent tree, and the session's calls (oldest first).
+type sessionView struct {
+	SessionID    string          `json:"session_id"`
+	Calls        int             `json:"calls"`
+	Cost         float64         `json:"cost"`
+	InputTokens  float64         `json:"input_tokens"`
+	OutputTokens float64         `json:"output_tokens"`
+	ErrorCount   int             `json:"error_count"`
+	FirstTS      string          `json:"first_ts"`
+	LastTS       string          `json:"last_ts"`
+	Models       []string        `json:"models"`
+	Vendors      []string        `json:"vendors"`
+	Agents       []agentNodeView `json:"agents"`
+	Entries      []entryView     `json:"entries"`
 }
 
 // credentialView is a credential with its key masked. The raw key is NEVER
