@@ -32,7 +32,8 @@
         "claude-haiku-4-5": { "input": 1.0, "output": 5.0, "cached_input": 0.1, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text", "image"] }
       },
       "endpoints": [
-        { "wire": "anthropic/messages", "endpoint": "https://api.anthropic.com/v1/messages", "adapter": "anthropic-compatible", "docs": "https://docs.anthropic.com/en/api/messages", "note": "Authenticates with x-api-key + anthropic-version. Point the Anthropic SDK's base_url at http://<songguo>; it appends /v1/messages.", "models": ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"] }
+        { "wire": "anthropic/messages", "endpoint": "https://api.anthropic.com/v1/messages", "adapter": "anthropic-compatible", "docs": "https://docs.anthropic.com/en/api/messages", "note": "Authenticates with x-api-key + anthropic-version. Point the Anthropic SDK's base_url at http://<songguo>; it appends /v1/messages.", "models": ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"] },
+        { "wire": "anthropic/count_tokens", "endpoint": "https://api.anthropic.com/v1/messages/count_tokens", "adapter": "anthropic-compatible", "docs": "https://docs.anthropic.com/en/api/messages-count-tokens", "note": "Free token-counting endpoint (used by Claude Code). Same request shape as Messages; billed as zero-cost." }
       ]
     },
     {

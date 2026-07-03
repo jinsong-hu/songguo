@@ -14,6 +14,19 @@ func init() {
 		Extract:    anthropicExtract,
 		NewScanner: newAnthropicScanner,
 	})
+	// Token counting (POST /v1/messages/count_tokens). Same request shape and
+	// model as Messages, but Anthropic bills it as free, so it's ZeroCost: the
+	// call is logged for observability and never priced. Its longer suffix
+	// (/messages/count_tokens) always outranks /messages, so the two never
+	// collide. The response ({"input_tokens":N}, not a "usage" object) isn't
+	// parsed for billing.
+	register(Wire{
+		Name:     "anthropic/count_tokens",
+		Suffixes: []string{"/messages/count_tokens"},
+		Modality: calls.ModalityChat,
+		Extract:  zeroCostExtract,
+		ZeroCost: true,
+	})
 	// No anthropic/models wire: model listing is served by openai/models only.
 	// (Both claimed the /models suffix, so a provider exposing both adapters on
 	// one origin routed /v1/models ambiguously.)

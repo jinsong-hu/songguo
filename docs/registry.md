@@ -26,7 +26,7 @@ A **wire** is the protocol contract. A **Songguo endpoint** is its inbound face;
 
 | Layer | What it is | Static / dynamic | Cardinality |
 |---|---|---|---|
-| **Wire** | Protocol shape + metering contract (`openai/chat`). The fixed vocabulary. | Static (compiled-in, 10 today) | the catalogue |
+| **Wire** | Protocol shape + metering contract (`openai/chat`). The fixed vocabulary. | Static (compiled-in, 11 today) | the catalogue |
 | **Songguo endpoint** | The public path a consumer calls (`POST /v1/chat/completions`). Inbound face of a wire. | Static (matched by suffix) | → exactly 1 wire |
 | **Provider endpoint** | An **exact vendor URL** that speaks the same wire (`https://api.openai.com/v1/chat/completions`) + its credential. Outbound face. | Dynamic (operator-set, SQLite) | → exactly 1 wire |
 | **Routing** | Given `(wire)` pick the provider endpoint, by `header → model-string → default`. Exact match, no aliasing. | Dynamic (SQLite) | selector → provider |
@@ -71,7 +71,7 @@ Two consequences:
 - **Paths are always native — there is no `/x/<provider>/` prefix.** A model-less endpoint is reached at its plain vendor path (`GET /v1/models`, `POST /api/v3/tts/unidirectional`); the provider comes from the header or the default, never the path.
 - **Bare `GET /v1/models` works** and returns the selected provider's list. That is a passthrough of *one* provider's response — Songguo still never aggregates lists across providers (a merged list would be a synthesized response = transform).
 
-## The registry — everything supported today (10 wires)
+## The registry — everything supported today (11 wires)
 
 One row per wire. **Endpoint** = the native path the consumer calls; **bold** marks the suffix that's actually matched (the prefix is conventional). **Providers** = example vendors that speak the wire — the real set is operator-configured in SQLite, not fixed here. **Routing** = how the provider is picked once the wire is matched (full order is always `header → model → default`; see [Provider selection](#provider-selection)). `exact model` = model-bearing, keyed on the body `model`; `header · default` = model-less, no model step.
 
@@ -83,6 +83,7 @@ One row per wire. **Endpoint** = the native path the consumer calls; **bold** ma
 | `POST /v1`**`/responses`** | `openai/responses` | OpenAI | exact `model` |
 | `GET /v1`**`/models`** | `openai/models` | any OpenAI-compatible | header · default |
 | `POST /v1`**`/messages`** | `anthropic/messages` | Anthropic | exact `model` |
+| `POST /v1`**`/messages/count_tokens`** | `anthropic/count_tokens` | Anthropic | exact `model` |
 | `GET /v1`**`/models`** | `anthropic/models` | Anthropic | header · default |
 | `POST /api/v3`**`/tts/unidirectional`** | `volc/tts` | Volcengine | header · default |
 | `POST /api/v3`**`/tts/voice_clone`** · `GET /api/v3`**`/tts/get_voice`** | `volc/voice-clone` | Volcengine | header · default |
@@ -101,6 +102,7 @@ Read-only by design: if a usage shape isn't recognized the call still succeeds w
 - **`anthropic/messages`** — `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` folded into `InputTokens` (cache-create's 1.25× premium ignored, by design); `cache_read` also recorded as `CachedInputTokens`. Streaming merges `message_start.message.usage` (input) with `message_delta.usage` (output).
 - **`volc/tts`** — `usage.text_words` → `Chars` (per-char); streamed as NDJSON, and only returned when the client sets `X-Control-Require-Usage-Tokens-Return`, else coarse/unknown.
 - **`volc/asr`** — `audio_info.duration` (ms) → `Seconds` (per-second); the `submit` ack has no `audio_info` (meters zero), the `query` poll bills.
+- **`anthropic/count_tokens`** — zero-cost: Anthropic bills token counting as free, so the call is logged (for observability) but never priced; the response (`{"input_tokens":N}`, no `usage` object) is not parsed.
 - **`openai/models`, `anthropic/models`, `volc/voice-clone`** — zero-cost management endpoints, not parsed. (Voice-clone's slot fee is billed out-of-band on first synthesis.)
 
 ## Auth adapters

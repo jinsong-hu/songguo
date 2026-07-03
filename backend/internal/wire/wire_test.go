@@ -32,6 +32,34 @@ func TestResolveLongestSuffixWins(t *testing.T) {
 	}
 }
 
+// count_tokens shares the /messages stem, so its longer suffix must win and the
+// two must never resolve to each other's wire when both are enabled.
+func TestResolveCountTokensVsMessages(t *testing.T) {
+	enabled := []string{"anthropic/messages", "anthropic/count_tokens"}
+	cases := []struct {
+		path string
+		want string
+	}{
+		{"/v1/messages", "anthropic/messages"},
+		{"/v1/messages/", "anthropic/messages"},
+		{"/v1/messages/count_tokens", "anthropic/count_tokens"},
+		{"/v1/messages/count_tokens?beta=1", "anthropic/count_tokens"},
+	}
+	for _, c := range cases {
+		w, ok := Resolve(enabled, "POST", c.path)
+		if !ok {
+			t.Fatalf("Resolve(%q): no match", c.path)
+		}
+		if w.Name != c.want {
+			t.Errorf("Resolve(%q) = %q, want %q", c.path, w.Name, c.want)
+		}
+	}
+	// count_tokens is billed free.
+	if w, _ := Get("anthropic/count_tokens"); !w.ZeroCost {
+		t.Error("anthropic/count_tokens must be zero-cost")
+	}
+}
+
 func TestResolveNoMatch(t *testing.T) {
 	if _, ok := Resolve([]string{"openai/chat"}, "POST", "/v1/rerank"); ok {
 		t.Error("expected no match for /v1/rerank")
