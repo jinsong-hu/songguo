@@ -166,10 +166,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1b. WebSocket upgrade detection. A WS handshake must be relayed as a raw
-	// byte pipe (see handleWebSocket); it cannot be model-routed (the model
-	// lives only in the body, and there is no body to buffer here), so the caller
-	// pins the provider with X-Songguo-Provider. We branch BEFORE buffering the
-	// body so an upgrade is never read as an HTTP body.
+	// byte pipe (see handleWebSocket); it has no body to buffer, so it routes
+	// endpoint-first (by path) like every other request — no model, no required
+	// header, just the endpoint. We branch BEFORE buffering the body so an upgrade
+	// is never read as an HTTP body.
 	if isWebSocketUpgrade(r) {
 		h.handleWebSocket(w, r, user)
 		return

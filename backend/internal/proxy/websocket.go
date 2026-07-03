@@ -86,36 +86,61 @@ func wsCompressionNegotiated(h http.Header) bool {
 	return false
 }
 
-// handleWebSocket performs a transparent WebSocket passthrough. The request
-// carries no body, so it cannot be model-routed: the caller pins the provider
-// with the X-Songguo-Provider header (by provider id), and the inbound path is
-// relayed verbatim to the chosen vendor's origin. The provider can yield several
-// (origin, adapter) vendors; we prefer the one whose enabled wires match the
-// path and forward the handshake to the top candidate — a single attempt, no
-// failover (like the HTTP path).
+// handleWebSocket performs a transparent WebSocket passthrough. Routing is
+// endpoint-first, exactly like the HTTP path (resolve, proxy.go): the request
+// path — the endpoint the client dialed — selects the vendor. A WS upgrade
+// carries no body, so there is no model to route on, but routing was never only
+// model-routing: an endpoint is a complete selector on its own. So the client
+// "just changes the endpoint" and needs no songguo-specific header. An optional
+// X-Songguo-Provider pin only DISAMBIGUATES when several providers share one
+// realtime path; it is never required. With no pin we start from every vendor
+// and let the path narrow them. A provider can yield several (origin, adapter)
+// vendors; we forward the handshake to the top candidate whose wire matches —
+// a single attempt, no failover (like the HTTP path).
 func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user store.User) {
-	// 1. Resolve the provider pin and its candidate vendors.
+	// Billing model: ByteDance openspeech names the billed class in the
+	// X-Api-Resource-Id header (mirroring the HTTP path, proxy.go); fall back to
+	// the query model. This is what we meter/price as, never used for routing.
+	billingModel := r.Header.Get("X-Api-Resource-Id")
+	if billingModel == "" {
+		billingModel = r.URL.Query().Get("model")
+	}
+
+	// 1. Select candidate vendors, endpoint-first. A pin constrains to one
+	// provider's vendors; with no pin every vendor is a candidate and the path
+	// narrows them below — the same rule resolve() applies to HTTP.
 	pin := r.Header.Get("X-Songguo-Provider")
-	if pin == "" {
-		writeError(w, http.StatusBadRequest, "missing_provider",
-			"websocket upgrades must set X-Songguo-Provider (cannot be model-routed)")
-		return
+	var (
+		targets []router.Target
+		err     error
+	)
+	if pin != "" {
+		targets, err = h.router.CandidatesForProvider(pin)
+	} else {
+		targets, err = h.router.AllCandidates()
 	}
-
-	targets, err := h.router.CandidatesForProvider(pin)
 	if err != nil || len(targets) == 0 {
-		writeError(w, http.StatusBadGateway, "no_upstream", "no credentials for provider")
+		writeError(w, http.StatusBadGateway, "no_upstream", "no upstream serves this request")
 		return
 	}
-	// Prefer the vendor(s) whose enabled wires match this path; fall back to all
-	// of the provider's vendors when none declares the (realtime) wire. Keep the
-	// wire map so the chosen target can rewrite to its vendor's configured endpoint.
-	matchedTargets, wireMap, _ := resolveWires(targets, r.Method, r.URL.Path)
-	if len(matchedTargets) > 0 {
+
+	// 2. Narrow to the vendor(s) whose enabled wire matches this path (the
+	// endpoint), keeping the wire map so the chosen target rewrites to its
+	// vendor's configured endpoint. A pin is an explicit operator choice, so if it
+	// matches no wire we still trust it and keep all of its vendors (a vendor that
+	// serves the realtime path without declaring a wire). Without a pin there is
+	// nothing to trust: an unmatched path must 404 rather than pipe raw bytes to
+	// an arbitrary vendor origin — mirroring the HTTP path's denyUnmatched.
+	matchedTargets, wireMap, denied := resolveWires(targets, r.Method, r.URL.Path)
+	switch {
+	case len(matchedTargets) > 0:
 		targets = matchedTargets
+	case pin == "":
+		h.denyUnmatched(w, r, user.ID, billingModel, r.URL.Path, denied)
+		return
 	}
 
-	// 2. Policy, all BEFORE any hijack so rejections are normal HTTP responses.
+	// 3. Policy, all BEFORE any hijack so rejections are normal HTTP responses.
 	// Scope: a scoped token restricts which vendors it may address.
 	if len(user.Scope) > 0 {
 		targets = filterScopedVendors(targets, user.Scope)
@@ -138,15 +163,7 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 		return
 	}
 
-	// Billing model: ByteDance openspeech names the billed class in the
-	// X-Api-Resource-Id header (mirroring the HTTP path, proxy.go); fall back to
-	// the query model. This is what we meter/price as, never used for routing.
-	billingModel := r.Header.Get("X-Api-Resource-Id")
-	if billingModel == "" {
-		billingModel = r.URL.Query().Get("model")
-	}
-
-	// 3. Single attempt: forward to the top candidate only. Like the HTTP path,
+	// 4. Single attempt: forward to the top candidate only. Like the HTTP path,
 	// there is no failover — a bad origin, a dial error, or a non-101 handshake is
 	// surfaced verbatim (the upstream's own response when we have one, else a
 	// 502). targets[0] is the pick (priority -> weighted-RR).

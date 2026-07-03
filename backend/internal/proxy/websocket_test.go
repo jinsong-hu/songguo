@@ -146,8 +146,8 @@ vendors:
 // dialProxyWS opens a raw TCP connection to the proxy and writes a WebSocket
 // upgrade request for the given path with the given token, returning the conn
 // and a buffered reader positioned to read the handshake response. When provider
-// is non-empty it is sent as the X-Songguo-Provider pin (WS cannot be
-// model-routed, so the caller names the provider explicitly).
+// is non-empty it is sent as the optional X-Songguo-Provider pin; leaving it
+// empty exercises endpoint-first routing (the path alone selects the vendor).
 func dialProxyWS(t *testing.T, proxyURL, path, token, provider string) (net.Conn, *bufio.Reader) {
 	t.Helper()
 	u, err := url.Parse(proxyURL)
@@ -372,25 +372,52 @@ func TestWebSocketUnknownProvider(t *testing.T) {
 	}
 }
 
-// --- WS Test 4: WS upgrade with no provider pin -> 400 ---
+// --- WS Test 4a: no provider pin routes by endpoint (the "just change the
+// endpoint" invariant) — the path alone selects the vendor and the handshake
+// reaches the upstream with the credential swapped in. ---
 
-func TestWebSocketMissingProvider(t *testing.T) {
+func TestWebSocketNoProviderRoutesByEndpoint(t *testing.T) {
 	up := &wsMockUpstream{}
 	mock := wsMockServer(t, up)
 
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
-	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
+	// Vendor declares the volc/asr-stream-async wire, whose suffix matches the
+	// dialed path. No X-Songguo-Provider header is sent.
+	env := newEnv(t, snapshotFunc(t, volcSpeechVendorYAML(mock.URL)), st)
 
-	// No X-Songguo-Provider: a WS upgrade cannot be model-routed.
+	conn, br := dialProxyWS(t, env.server.URL, "/api/v3/sauc/bigmodel_async?model=seed-asr", key, "")
+	defer conn.Close()
+
+	if code := readStatusLine(t, br); code != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want 101 (endpoint-first routing, no pin)", code)
+	}
+	// The upstream was dialed purely off the endpoint — no pin, no model routing.
+	if !strings.Contains(up.lastPath, "/sauc/bigmodel_async") {
+		t.Errorf("upstream path = %q, want the dialed endpoint (upstream not reached?)", up.lastPath)
+	}
+}
+
+// --- WS Test 4b: no pin and a path that matches no enabled wire -> 404
+// wire_unmatched, never a blind pipe to an arbitrary vendor origin. ---
+
+func TestWebSocketNoProviderUnmatchedPath(t *testing.T) {
+	up := &wsMockUpstream{}
+	mock := wsMockServer(t, up)
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, volcSpeechVendorYAML(mock.URL)), st)
+
+	// This path matches no suffix of the vendor's one enabled wire.
 	conn, br := dialProxyWS(t, env.server.URL, "/v1/realtime", key, "")
 	defer conn.Close()
 
-	if code := readStatusLine(t, br); code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 for WS without a provider pin", code)
+	if code := readStatusLine(t, br); code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for an unmatched WS path without a pin", code)
 	}
-	if up.lastAuth != "" {
-		t.Errorf("upstream was dialed without a provider pin")
+	if up.lastPath != "" {
+		t.Errorf("upstream was dialed for an unmatched path")
 	}
 }
 

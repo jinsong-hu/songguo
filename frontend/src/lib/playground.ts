@@ -297,15 +297,16 @@ function resourceIdFor(wire: string, model: string): string {
 
 /**
  * Whether a wire still needs an explicit X-Songguo-Provider pin. The gateway
- * routes most HTTP wires by endpoint under Auto — model-routed and model-less
- * (ASR file, TTS) alike — so those never need a pin. Two cases still require
- * one: WebSocket wires (can't be Auto-routed), and ark/video, whose models the
+ * routes every wire by endpoint under Auto — model-routed HTTP, model-less
+ * HTTP (ASR file, TTS), and WebSocket alike — so the pin is optional almost
+ * everywhere. The one case that still requires it is ark/video, whose models the
  * vendor doesn't expose to Auto and whose submit→poll lifecycle must stay on one
- * provider (the task id is provider-specific).
+ * provider (the task id is provider-specific). WebSocket used to be listed here
+ * ("can't be Auto-routed"); it now routes by the dialed path like everything
+ * else, so it no longer forces a pin — a client just changes the endpoint.
  */
 export function wireNeedsProviderPin(wire: string): boolean {
-  if (wire === 'ark/video') return true;
-  return (TEST_ENDPOINT[wire] ?? '').startsWith('WS ');
+  return wire === 'ark/video';
 }
 
 // --- Code-sample tabs (curl / Claude Code / Python) ------------------------

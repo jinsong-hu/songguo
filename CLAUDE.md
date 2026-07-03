@@ -105,6 +105,37 @@ decision, like byte-transparency; don't re-litigate it behind a flag.
 > the automatic health cooldown. Routing is now priority → weighted-RR, one
 > attempt, no auto bring-down.
 
+## Interface transparency: the client just changes the endpoint
+
+Pointing a client at songguo is a **one-line change**: swap the base URL (and use
+a songguo user key). Nothing else about the client's request has to change — no
+songguo-specific header is ever *required* to get a request routed. This is a
+hard invariant, the interface-shaped sibling of byte- and behavior-transparency,
+**not** a nice-to-have. If a change would force every caller of some endpoint to
+add a header, a query param, or a body field just to reach a vendor, that change
+is wrong — fix the routing instead.
+
+Routing is therefore **endpoint-first on every path, HTTP and WebSocket alike**:
+the request path (plus the body `model`, when there is a body) selects the
+vendor. Because a WebSocket upgrade carries no body, it routes on the **endpoint
+alone** — the dialed path resolves to a wire, which resolves to a vendor. It does
+**not** require a pin.
+
+`X-Songguo-Provider` is an **optional disambiguator**, never a toll gate. It only
+does something when one endpoint is served by several providers and the caller
+wants to force one; absent it, the path narrows to the matching wire(s) and the
+router picks (priority → weighted-RR). An unmatched path is a `404`
+(`wire_unmatched`) — the fix is a **wire mapping in config**, never a header the
+client must send. The one asymmetry: an explicit pin is trusted enough to reach a
+provider's origin-only vendor that declares no wire; an unpinned request never
+blind-pipes to an arbitrary origin.
+
+> History: the WebSocket path once *required* `X-Songguo-Provider` and returned
+> `400 songguo_missing_provider` without it, on the reasoning that a bodyless
+> upgrade "cannot be model-routed." That conflated *can't model-route* with
+> *can't route*: endpoint-first routing needs no model. Removed 2026-07-04 — WS
+> now routes by endpoint like HTTP, and the pin is optional everywhere.
+
 ## Key docs
 
 | File | Purpose |
