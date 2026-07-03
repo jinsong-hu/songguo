@@ -42,7 +42,7 @@ interface AsrSession {
 /** The dev/prod ws(s):// URL for the test driver path. */
 function testWsUrl(path: string): string {
   const base = import.meta.env.DEV
-    ? `ws://${window.location.hostname}:8080`
+    ? `ws://${window.location.hostname}:12345`
     : window.location.origin.replace(/^http/, 'ws');
   return `${base}/api/test${path}`;
 }
