@@ -1,16 +1,21 @@
 // Package router selects a vendor for a requested model.
 //
-// For each model the router produces an ordered list of attempts ([]Target)
-// honoring, in order: priority groups (lower first), weighted round-robin
-// within a group, and health-based failover (vendors in cooldown pushed to the
-// back). Each vendor contributes exactly one attempt with its single
+// For each model the router produces an ordered list of candidates ([]Target)
+// honoring, in order: priority groups (lower first) then weighted round-robin
+// within a group. The proxy forwards to the first candidate only — there is no
+// per-call failover, and (today) no health-based demotion: a failing vendor is
+// NOT automatically brought down, so it stays selected until an operator changes
+// config. Each vendor contributes exactly one candidate with its single
 // credential; spreading load across multiple keys is done by configuring
 // multiple services that serve the same model.
 //
+// Automatically bringing a persistently-failing vendor down is deliberately not
+// implemented yet. When it is, it belongs here as a cross-request health
+// decision (steer the NEXT request), never as a per-call retry.
+//
 // It reads the live config Snapshot on every call so hot-reloads are honored,
-// and keeps only small per-(model,priority) rotation counters plus a vendor
-// health map. All mutable state is mutex-guarded; Candidates and Report are
-// safe for concurrent use.
+// and keeps only small per-(model,priority) rotation counters. The counters are
+// mutex-guarded; Candidates is safe for concurrent use.
 package router
 
 import (
@@ -18,7 +23,6 @@ import (
 	"sort"
 	"strconv"
 	"sync"
-	"time"
 
 	"github.com/songguo/songguo/internal/config"
 )
@@ -26,9 +30,6 @@ import (
 // ErrNoVendor is returned by Candidates when no configured vendor serves the
 // requested model.
 var ErrNoVendor = errors.New("router: no vendor serves model")
-
-// cooldown is how long a vendor stays demoted after a failure.
-const cooldown = 30 * time.Second
 
 // Target is a single attempt: a vendor paired with its credential.
 type Target struct {
@@ -39,27 +40,22 @@ type Target struct {
 // Router selects ordered upstream attempts for a model.
 type Router struct {
 	snapshot func() *config.Snapshot
-	now      func() time.Time // injectable clock for tests
 
-	mu       sync.Mutex
-	wrr      map[string]int       // "model\x00priority" -> next weighted-RR cursor
-	coolDown map[string]time.Time // vendor name -> cooldown expiry
+	mu  sync.Mutex
+	wrr map[string]int // "model\x00priority" -> next weighted-RR cursor
 }
 
 // New constructs a Router that reads config through snapshot on every call.
 func New(snapshot func() *config.Snapshot) *Router {
 	return &Router{
 		snapshot: snapshot,
-		now:      time.Now,
 		wrr:      make(map[string]int),
-		coolDown: make(map[string]time.Time),
 	}
 }
 
 // Candidates returns the ordered list of attempts for model. The order is:
-// priority group ascending; within a group, healthy vendors before cooling-down
-// vendors, each in weighted round-robin order. Returns ErrNoVendor if nothing
-// serves the model.
+// priority group ascending; within a group, weighted round-robin order. Returns
+// ErrNoVendor if nothing serves the model.
 func (r *Router) Candidates(model string) ([]Target, error) {
 	snap := r.snapshot()
 	var vendors []config.Vendor
@@ -113,15 +109,12 @@ func (r *Router) AllCandidates() ([]Target, error) {
 	return r.order("", vendors), nil
 }
 
-// order groups vendors by priority (ascending), orders each group by weighted
-// round-robin then health (cooling-down vendors last), and flattens to Targets.
-// key namespaces the round-robin cursor — the model, the provider id, or "" for
-// the global default.
+// order groups vendors by priority (ascending) and orders each group by
+// weighted round-robin, then flattens to Targets. key namespaces the
+// round-robin cursor — the model, the provider id, or "" for the global default.
 func (r *Router) order(key string, vendors []config.Vendor) []Target {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	now := r.now()
 
 	// Group vendors by priority, preserving declaration order within a group.
 	groups := make(map[int][]config.Vendor)
@@ -136,29 +129,11 @@ func (r *Router) order(key string, vendors []config.Vendor) []Target {
 
 	var targets []Target
 	for _, prio := range priorities {
-		ordered := r.orderGroup(key, prio, groups[prio], now)
-		for _, v := range ordered {
+		for _, v := range r.weightedOrder(key, prio, groups[prio]) {
 			targets = append(targets, Target{Vendor: v, Credential: v.Credential})
 		}
 	}
 	return targets
-}
-
-// orderGroup orders one priority group: weighted round-robin first, then a
-// stable partition placing cooling-down vendors after healthy ones.
-func (r *Router) orderGroup(key string, prio int, group []config.Vendor, now time.Time) []config.Vendor {
-	ordered := r.weightedOrder(key, prio, group)
-
-	healthy := make([]config.Vendor, 0, len(ordered))
-	cooling := make([]config.Vendor, 0, len(ordered))
-	for _, v := range ordered {
-		if until, ok := r.coolDown[v.Name]; ok && now.Before(until) {
-			cooling = append(cooling, v)
-		} else {
-			healthy = append(healthy, v)
-		}
-	}
-	return append(healthy, cooling...)
 }
 
 // weightedOrder returns the group's vendors in weighted round-robin order using
@@ -233,19 +208,6 @@ func interleave(group []config.Vendor) []config.Vendor {
 		slots = append(slots, group[best])
 	}
 	return slots
-}
-
-// Report records the outcome of an attempt. A transport error or a status of
-// 429 or >=500 puts the vendor into a cooldown; any other success clears it.
-func (r *Router) Report(vendorName, credentialID string, status int, err error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if err != nil || status == 429 || status >= 500 {
-		r.coolDown[vendorName] = r.now().Add(cooldown)
-		return
-	}
-	delete(r.coolDown, vendorName)
 }
 
 func wrrKey(key string, prio int) string {

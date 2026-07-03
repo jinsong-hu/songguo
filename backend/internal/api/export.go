@@ -14,7 +14,7 @@ import (
 // csvHeader is the fixed column order for CSV exports.
 var csvHeader = []string{
 	"ts", "token_id", "model", "modality", "vendor", "credential_id",
-	"attempt", "status", "cost", "latency_ms", "stream", "err",
+	"status", "cost", "latency_ms", "stream", "err",
 }
 
 // handleCallsExport streams a downloadable export of the filtered calls as
@@ -67,7 +67,6 @@ func (a *api) handleCallsExport(w http.ResponseWriter, r *http.Request) {
 				string(e.Modality),
 				e.Vendor,
 				e.CredentialID,
-				strconv.Itoa(e.Attempt),
 				strconv.Itoa(e.Status),
 				strconv.FormatFloat(e.Cost, 'f', -1, 64),
 				strconv.FormatInt(e.LatencyMS, 10),

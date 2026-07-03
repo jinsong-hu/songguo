@@ -2,10 +2,8 @@ package router
 
 import (
 	"errors"
-	"fmt"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/songguo/songguo/internal/config"
 )
@@ -139,136 +137,6 @@ vendors:
 	}
 }
 
-func TestCooldownDemotesAndRestores(t *testing.T) {
-	snap := buildSnapshot(t, `
-vendors:
-  - name: a
-    origin: https://a.example
-    served_models: [m]
-    priority: 1
-    credential: {id: a1, api_key: k}
-  - name: b
-    origin: https://b.example
-    served_models: [m]
-    priority: 1
-    credential: {id: b1, api_key: k}
-`)
-	r := New(staticSnap(snap))
-
-	// Fail vendor a -> it should be pushed to the back, but still present.
-	r.Report("a", "a1", 503, nil)
-	got, err := r.Candidates("m")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("want 2 targets, got %d", len(got))
-	}
-	if got[len(got)-1].Vendor.Name != "a" {
-		t.Fatalf("cooling vendor a should be last, order: %s, %s", got[0].Vendor.Name, got[1].Vendor.Name)
-	}
-
-	// A success on a clears the cooldown; healthy ordering resumes.
-	r.Report("a", "a1", 200, nil)
-	names := map[string]bool{}
-	got, _ = r.Candidates("m")
-	for _, tg := range got {
-		names[tg.Vendor.Name] = true
-	}
-	if !names["a"] || !names["b"] {
-		t.Fatalf("both vendors should be present after recovery: %+v", got)
-	}
-}
-
-func TestCooldownExpiresWithClock(t *testing.T) {
-	snap := buildSnapshot(t, `
-vendors:
-  - name: a
-    origin: https://a.example
-    served_models: [m]
-    priority: 1
-    credential: {id: a1, api_key: k}
-  - name: b
-    origin: https://b.example
-    served_models: [m]
-    priority: 1
-    credential: {id: b1, api_key: k}
-`)
-	r := New(staticSnap(snap))
-
-	now := time.Now()
-	r.now = func() time.Time { return now }
-
-	r.Report("a", "a1", 500, nil)
-	got, _ := r.Candidates("m")
-	if got[len(got)-1].Vendor.Name != "a" {
-		t.Fatalf("a should be demoted while cooling")
-	}
-
-	// Advance past the cooldown window; a is healthy again.
-	now = now.Add(cooldown + time.Second)
-	got, _ = r.Candidates("m")
-	// a re-enters healthy rotation; presence is what matters.
-	found := false
-	for _, tg := range got {
-		if tg.Vendor.Name == "a" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("a missing after cooldown expiry")
-	}
-}
-
-func TestAllCoolingStillReturnsAll(t *testing.T) {
-	snap := buildSnapshot(t, `
-vendors:
-  - name: a
-    origin: https://a.example
-    served_models: [m]
-    priority: 1
-    credential: {id: a1, api_key: k}
-  - name: b
-    origin: https://b.example
-    served_models: [m]
-    priority: 1
-    credential: {id: b1, api_key: k}
-`)
-	r := New(staticSnap(snap))
-	r.Report("a", "a1", 503, nil)
-	r.Report("b", "b1", 503, nil)
-	got, err := r.Candidates("m")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Even with everything cooling down, we never hard-block: both returned.
-	if len(got) != 2 {
-		t.Fatalf("all-cooling should still return all vendors, got %d", len(got))
-	}
-}
-
-func TestReportTransportErrorCools(t *testing.T) {
-	snap := buildSnapshot(t, `
-vendors:
-  - name: a
-    origin: https://a.example
-    served_models: [m]
-    priority: 1
-    credential: {id: a1, api_key: k}
-  - name: b
-    origin: https://b.example
-    served_models: [m]
-    priority: 1
-    credential: {id: b1, api_key: k}
-`)
-	r := New(staticSnap(snap))
-	r.Report("a", "a1", 0, fmt.Errorf("dial tcp: connection refused"))
-	got, _ := r.Candidates("m")
-	if got[len(got)-1].Vendor.Name != "a" {
-		t.Fatalf("transport error should cool vendor a")
-	}
-}
-
 func TestCandidatesForProvider(t *testing.T) {
 	// Two vendors derived from the same provider (the (origin, adapter) split):
 	// both carry the provider id c1 as their credential id, so a pin by c1
@@ -388,12 +256,6 @@ vendors:
 					t.Errorf("no candidates")
 					return
 				}
-				tg := got[0]
-				status := 200
-				if i%3 == 0 {
-					status = 500
-				}
-				r.Report(tg.Vendor.Name, tg.Credential.ID, status, nil)
 			}
 		}(g)
 	}

@@ -18,7 +18,7 @@ Songguo is **single-tenant, multi-token**: one owner, many scoped keys. No accou
 
 - **Transparent proxy** for OpenAI-compatible APIs (chat, embeddings), including **SSE streaming** — forwarded chunk-by-chunk, never buffered.
 - **One addressing model** — native vendor paths (`/v1/...`, `/api/v3/...`) with the provider selected by the `X-Songguo-Provider` header, else the body's model, else the wire default. Covers OpenAI-compatible SDKs, native/rerank, and model-less submit→poll APIs alike — no `/x/` mount (see below).
-- **号池 routing + failover** — multiple vendors per model and multiple credentials per vendor; priority → weighted round-robin, credential rotation, automatic failover on `429`/`5xx`.
+- **号池 routing** — multiple vendors per model and multiple credentials per vendor; priority → weighted round-robin. One attempt per request: the vendor's response — success or failure (`429`/`5xx`/transport error) — is surfaced verbatim. No per-call retry or failover, and no automatic health demotion today (a failing vendor stays selected until config changes).
 - **Budgets & scope** per token (hard cap, allowed models, per-token RPM). Over-budget calls are rejected, not transformed.
 - **Read-only metering** — usage sniffed from the native payload (with coarse fallback); a parse failure never blocks traffic. Per-model pricing yields true cost.
 - **Append-only call log** — one row per call attempt; every dashboard view is a query over it.
@@ -66,7 +66,7 @@ Services (an upstream's adapter, base URL, credential, and per-model prices) and
 Songguo's transparent proxy has **one resolution rule** — match the wire by path suffix, then select the provider — applied to every request. Consumers call **native vendor paths** (OpenAI/Anthropic-shaped APIs under `/v1/...`, Volcengine speech under `/api/v3/...`); there is no `/x/` mount. The provider is chosen by the first available selector:
 
 - **`X-Songguo-Provider` header** — an explicit pin (by provider id). It is a control header, stripped before forwarding. Use it to target a specific account, or to keep an async **submit→poll** lifecycle on one provider.
-- **the body's `model` string** — routed across every vendor that serves it (priority → weighted RR → failover).
+- **the body's `model` string** — routed across every vendor that serves it (priority → weighted RR; the top candidate is forwarded to, no per-call failover).
 - **the wire's default provider** — used when there is neither a header nor a model (e.g. a model-less `GET /v1/models` or `POST /api/v3/tts/unidirectional`).
 
 This makes model-less calls — model listings, the `volc/*` speech wires, and async submit→poll flows — first-class without a special path. **WebSocket upgrades** (realtime APIs) work the same way: they carry no body, so the caller pins the provider with `X-Songguo-Provider`; the handshake is replayed with the credential swapped and frames are piped untouched, metered by bytes + duration.
@@ -115,7 +115,7 @@ backend/
     calls/      call-log domain types
     pricing/    usage + price table -> cost
     meter/      read-only modality/usage sniffing (JSON + SSE)
-    router/     号池 candidate selection, weighted RR, health/failover
+    router/     号池 candidate selection, priority + weighted RR
     proxy/      the transparent /v1 + /x handler (adapter-aware auth)
     api/        admin /api handlers
     server/     HTTP wiring (proxy, api, dashboard, health)

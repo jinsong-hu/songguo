@@ -1,11 +1,18 @@
 // Package proxy transparently forwards AI requests, swapping only credentials.
 //
 // The handler is a gate plus a meter: it authenticates the consumer user,
-// enforces scope, budget and rate limits, routes the request to an upstream
-// vendor (with failover), and records every attempt as a call. It NEVER
+// enforces scope, budget and rate limits, routes the request to a single
+// upstream vendor, and records the attempt as a call. It NEVER
 // rewrites the request or response body — the credential headers are the only
 // mutation; request and response bytes are forwarded verbatim. Metering is
 // read-only sniffing and must never block or alter traffic.
+//
+// It forwards exactly one attempt: there is no per-call retry or failover. The
+// vendor's response — success or failure (429, 5xx, transport error) — is
+// surfaced to the client verbatim; a client that wants to retry retries itself.
+// Choosing among multiple candidates for a model is a routing decision (priority
+// then weighted round-robin); there is no automatic health demotion today, so a
+// failing vendor stays selected until an operator changes config.
 //
 // Every request must resolve to a wire (see internal/wire): the service's
 // enabled wire whose path pattern matches. The wire owns usage extraction and
@@ -20,7 +27,7 @@
 //   - the X-Songguo-Provider header (an explicit pin by provider id, stripped
 //     before forwarding), else
 //   - the body's model string (every vendor serving it; priority/weighted-RR/
-//     failover), else
+//     health-ordered), else
 //   - the default: every vendor serving the matched path, priority-ordered.
 //
 // For a vendor with a stored endpoint for the matched wire, the upstream URL is
@@ -181,8 +188,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Resolve the route: match the wire by path suffix and select the
 	// provider (X-Songguo-Provider header, else body model, else default).
-	// Resolution sets the model/modality, the candidate targets (with their
-	// failover policy), and the per-target upstream-URL builder.
+	// Resolution sets the model/modality, the ordered candidate targets, and the
+	// per-target upstream-URL builder. Forwarding uses only the first target.
 	rt, ok := h.resolve(w, r, user, body)
 	if !ok {
 		return
@@ -207,72 +214,53 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	tags := extractTags(r.Header.Get("X-Songguo-Tags"), body)
 
-	// 6. Forward with failover. The loop is identical for both modes; only the
-	// candidate set and the upstream URL (built by rt.upstreamURL) differ.
-	for i, t := range rt.targets {
-		attempt := i + 1
-		last := i == len(rt.targets)-1
-		rw := rt.wires[t.Vendor.Name]
-		modality := rt.modalityFor(t.Vendor.Name)
+	// 6. Forward exactly one attempt — no per-call retry or failover. songguo is
+	// a transparent gateway: it forwards the request to the selected upstream and
+	// surfaces whatever the vendor returns — success OR failure (429, 5xx, a
+	// transport error) — verbatim. A client that wants to retry retries itself.
+	//
+	// Choosing among multiple candidates is still a real decision, but a
+	// cross-request (server-side) one, not a per-call one: rt.targets is ordered
+	// by priority -> weighted round-robin, so targets[0] is the pick. There is no
+	// health demotion today — a failing vendor is NOT auto-brought-down, so it
+	// stays selected until an operator changes config (see router package).
+	t := rt.targets[0]
+	rw := rt.wires[t.Vendor.Name]
+	modality := rt.modalityFor(t.Vendor.Name)
 
-		upReq, err := h.buildUpstreamRequest(r, t, rt.upstreamURL(t), body)
-		if err != nil {
-			h.logger.Error("build upstream request failed", "err", err, "vendor", t.Vendor.Name)
-			h.recordFailure(user.ID, rt.model, modality, t, attempt, 0, err, 0, tags)
-			h.router.Report(t.Vendor.Name, t.Credential.ID, 0, err)
-			if last {
-				writeError(w, http.StatusBadGateway, "upstream_error", "failed to build upstream request")
-				return
-			}
-			continue
-		}
-
-		start := h.now()
-		resp, err := h.client.Do(upReq)
-		latency := h.now().Sub(start).Milliseconds()
-
-		// Transport error: failover-eligible.
-		if err != nil {
-			h.logger.Warn("upstream request failed",
-				"vendor", t.Vendor.Name, "model", rt.model, "credential", t.Credential.ID,
-				"url", upReq.URL.String(), "attempt", attempt, "latency_ms", latency,
-				"failover", !last, "err", err)
-			h.recordFailure(user.ID, rt.model, modality, t, attempt, 0, err, latency, tags)
-			h.router.Report(t.Vendor.Name, t.Credential.ID, 0, err)
-			if last {
-				// Transparency: surface the real transport failure verbatim
-				// (we have no upstream response to forward).
-				writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
-				return
-			}
-			continue
-		}
-
-		failover := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
-		if failover && !last {
-			h.logger.Warn("upstream returned failover status; trying next target",
-				"vendor", t.Vendor.Name, "model", rt.model, "credential", t.Credential.ID,
-				"status", resp.StatusCode, "attempt", attempt, "latency_ms", latency,
-				"body", errorSnippet(peekBody(resp)))
-			h.recordFailure(user.ID, rt.model, modality, t, attempt, resp.StatusCode,
-				fmt.Errorf("upstream status %d", resp.StatusCode), latency, tags)
-			h.router.Report(t.Vendor.Name, t.Credential.ID, resp.StatusCode, nil)
-			drainAndClose(resp.Body)
-			continue
-		}
-
-		// This is the chosen response (either a non-failover status, or the last
-		// target even if it failed). Report health, then forward verbatim.
-		h.router.Report(t.Vendor.Name, t.Credential.ID, resp.StatusCode, nil)
-		h.forward(w, r, resp, user.ID, rt.model, modality, rw, t, attempt, latency, tags, capture, body)
+	upReq, err := h.buildUpstreamRequest(r, t, rt.upstreamURL(t), body)
+	if err != nil {
+		h.logger.Error("build upstream request failed", "err", err, "vendor", t.Vendor.Name)
+		h.recordFailure(user.ID, rt.model, modality, t, 0, err, 0, tags)
+		writeError(w, http.StatusBadGateway, "upstream_error", "failed to build upstream request")
 		return
 	}
+
+	start := h.now()
+	resp, err := h.client.Do(upReq)
+	latency := h.now().Sub(start).Milliseconds()
+
+	// Transport error: we have no upstream response to forward, so surface the
+	// real failure verbatim.
+	if err != nil {
+		h.logger.Warn("upstream request failed",
+			"vendor", t.Vendor.Name, "model", rt.model, "credential", t.Credential.ID,
+			"url", upReq.URL.String(), "latency_ms", latency, "err", err)
+		h.recordFailure(user.ID, rt.model, modality, t, 0, err, latency, tags)
+		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
+		return
+	}
+
+	// Forward the vendor's response verbatim — including a 429/5xx. The client
+	// sees the real outcome and decides whether to retry.
+	h.forward(w, r, resp, user.ID, rt.model, modality, rw, t, latency, tags, capture, body)
 }
 
-// route is the resolved plan for a request: the targets to try (in order, with
-// their failover policy already encoded as a set of own credentials or a
-// cross-vendor list), the model/modality to record, a per-target builder for
-// the upstream URL, and the per-vendor resolved wire that owns metering.
+// route is the resolved plan for a request: the candidate targets in selection
+// order (priority -> weighted-RR; only the first is forwarded to, the rest are
+// context for a future server-side ejection decision), the model/modality to
+// record, a per-target builder for the upstream URL, and the per-vendor resolved
+// wire that owns metering.
 type route struct {
 	model       string
 	modality    calls.Modality
@@ -616,7 +604,7 @@ func (h *handler) captureOn() bool {
 // response body and persists the redacted request/response payload after the
 // call row is written.
 func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Response,
-	userID, model string, modality calls.Modality, rw resolvedWire, t router.Target, attempt int,
+	userID, model string, modality calls.Modality, rw resolvedWire, t router.Target,
 	latency int64, tags map[string]string, capture bool, reqBody []byte) {
 	defer resp.Body.Close()
 
@@ -674,7 +662,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	if resp.StatusCode >= 400 {
 		h.logger.Warn("upstream error response",
 			"vendor", t.Vendor.Name, "model", model, "credential", t.Credential.ID,
-			"wire", wireName, "status", resp.StatusCode, "attempt", attempt,
+			"wire", wireName, "status", resp.StatusCode,
 			"latency_ms", latency, "stream", stream, "body", errorSnippet(parseRespBody))
 	}
 
@@ -687,7 +675,6 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		CredentialID: t.Credential.ID,
 		Wire:         wireName,
 		Confidence:   ext.Confidence,
-		Attempt:      attempt,
 		Status:       resp.StatusCode,
 		Usage:        ext.Raw,
 		InputTokens:  ext.Norm.InputTokens,
@@ -794,9 +781,10 @@ func (h *handler) copyBody(w http.ResponseWriter, src io.Reader) []byte {
 	return body
 }
 
-// recordFailure appends a call row for a failed (failover-eligible) attempt.
+// recordFailure appends a call row for an attempt that never produced an
+// upstream response to forward — a build or transport error.
 func (h *handler) recordFailure(userID, model string, modality calls.Modality,
-	t router.Target, attempt, status int, err error, latency int64, tags map[string]string) {
+	t router.Target, status int, err error, latency int64, tags map[string]string) {
 	detail := ""
 	if err != nil {
 		detail = err.Error()
@@ -808,7 +796,6 @@ func (h *handler) recordFailure(userID, model string, modality calls.Modality,
 		Modality:     modality,
 		Vendor:       t.Vendor.Name,
 		CredentialID: t.Credential.ID,
-		Attempt:      attempt,
 		Status:       status,
 		Err:          detail,
 		Cost:         0,
@@ -902,16 +889,6 @@ func copyHeaders(dst, src http.Header) {
 	}
 }
 
-// drainAndClose discards and closes a response body so the connection can be
-// reused.
-func drainAndClose(body io.ReadCloser) {
-	if body == nil {
-		return
-	}
-	_, _ = io.Copy(io.Discard, body)
-	_ = body.Close()
-}
-
 // contains reports whether s contains v.
 func contains(s []string, v string) bool {
 	for _, x := range s {
@@ -964,17 +941,6 @@ func errorSnippet(b []byte) string {
 		return s[:max] + "…"
 	}
 	return s
-}
-
-// peekBody reads a bounded prefix of an upstream response body for logging. It
-// is used only on the failover path, where the body is discarded (drained and
-// closed) rather than forwarded, so consuming a prefix here is safe.
-func peekBody(resp *http.Response) []byte {
-	if resp == nil || resp.Body == nil {
-		return nil
-	}
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-	return b
 }
 
 // errorBody is the JSON error envelope returned for gateway-originated errors.

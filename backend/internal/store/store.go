@@ -114,7 +114,6 @@ func (s *Store) migrate() error {
 			modality      TEXT NOT NULL DEFAULT 'unknown',
 			vendor        TEXT NOT NULL DEFAULT '',
 			credential_id TEXT NOT NULL DEFAULT '',
-			attempt       INTEGER NOT NULL DEFAULT 1,
 			status        INTEGER NOT NULL DEFAULT 0,
 			err           TEXT NOT NULL DEFAULT '',
 			usage         TEXT NOT NULL DEFAULT '{}',
@@ -233,6 +232,18 @@ func (s *Store) migrate() error {
 	}
 	for _, a := range adds {
 		if err := s.addColumn(a.table, a.col, a.decl); err != nil {
+			return err
+		}
+	}
+
+	// Step 3b: Drop columns retired post-v1. calls.attempt tracked per-call
+	// failover, which no longer exists (one attempt per request); drop it from
+	// pre-existing databases so the schema matches the CREATE above.
+	drops := []struct{ table, col string }{
+		{"calls", "attempt"},
+	}
+	for _, d := range drops {
+		if err := s.dropColumn(d.table, d.col); err != nil {
 			return err
 		}
 	}
@@ -562,6 +573,20 @@ func (s *Store) addColumn(table, col, decl string) error {
 	}
 	if _, err := s.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, col, decl)); err != nil {
 		return fmt.Errorf("store: add column %s.%s: %w", table, col, err)
+	}
+	return nil
+}
+
+// dropColumn removes a column from a table if it is still present, the inverse
+// of addColumn and likewise idempotent (a no-op once the column is gone or on a
+// fresh DB that never had it). Requires SQLite ≥ 3.35 (bundled by the driver).
+func (s *Store) dropColumn(table, col string) error {
+	has, err := s.hasColumn(table, col)
+	if err != nil || !has {
+		return err
+	}
+	if _, err := s.db.Exec(fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", table, col)); err != nil {
+		return fmt.Errorf("store: drop column %s.%s: %w", table, col, err)
 	}
 	return nil
 }

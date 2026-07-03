@@ -254,24 +254,24 @@ func TestCallsAppendQueryAndAggregations(t *testing.T) {
 	entries := []calls.Entry{
 		{
 			TS: base, UserID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat,
-			Vendor: "openai", CredentialID: "c1", Attempt: 1, Status: 200,
+			Vendor: "openai", CredentialID: "c1", Status: 200,
 			Usage: map[string]any{"prompt_tokens": float64(10), "completion_tokens": float64(5)},
 			Cost:  0.10, LatencyMS: 120, Stream: true,
 			Tags: map[string]string{"team": "eng"},
 		},
 		{
 			TS: base.Add(1 * time.Minute), UserID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat,
-			Vendor: "openai", CredentialID: "c1", Attempt: 1, Status: 500, Err: "upstream error",
+			Vendor: "openai", CredentialID: "c1", Status: 500, Err: "upstream error",
 			Cost: 0.05, LatencyMS: 300,
 		},
 		{
 			TS: base.Add(2 * time.Minute), UserID: "tokB", Model: "text-embedding-3-small",
-			Modality: calls.ModalityEmbedding, Vendor: "openai", CredentialID: "c2", Attempt: 1, Status: 200,
+			Modality: calls.ModalityEmbedding, Vendor: "openai", CredentialID: "c2", Status: 200,
 			Usage: map[string]any{"total_tokens": float64(42)}, Cost: 0.02, LatencyMS: 40,
 		},
 		{
 			TS: base.Add(3 * time.Minute), UserID: "tokB", Model: "dall-e-3",
-			Modality: calls.ModalityImage, Vendor: "openai", CredentialID: "c2", Attempt: 2, Status: 200,
+			Modality: calls.ModalityImage, Vendor: "openai", CredentialID: "c2", Status: 200,
 			Cost: 0.40, LatencyMS: 900,
 		},
 	}
@@ -447,7 +447,7 @@ func TestCallsAppendQueryAndAggregations(t *testing.T) {
 func TestAppendCallDefaults(t *testing.T) {
 	s := openTestStore(t)
 	before := time.Now()
-	id, err := s.AppendCall(calls.Entry{UserID: "x"}) // zero TS, modality, attempt
+	id, err := s.AppendCall(calls.Entry{UserID: "x"}) // zero TS, modality
 	if err != nil {
 		t.Fatalf("AppendCall: %v", err)
 	}
@@ -461,9 +461,6 @@ func TestAppendCallDefaults(t *testing.T) {
 	}
 	if e.Modality != calls.ModalityUnknown {
 		t.Errorf("default Modality = %q, want unknown", e.Modality)
-	}
-	if e.Attempt != 1 {
-		t.Errorf("default Attempt = %d, want 1", e.Attempt)
 	}
 	if e.TS.Before(before.Add(-time.Second)) {
 		t.Errorf("default TS not set to ~now: %v", e.TS)

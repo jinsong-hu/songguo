@@ -104,7 +104,6 @@ export interface CallEntry {
   wire: string;
   /** Metering trustworthiness: measured | derived | unknown | "". */
   confidence: string;
-  attempt: number;
   status: number;
   err: string;
   usage: Record<string, unknown>;

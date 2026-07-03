@@ -35,17 +35,50 @@ decision, not a tradeoff to re-litigate.
 ## What "forward verbatim" costs (known, accepted)
 
 - The request body is **buffered** in RAM (so the proxy can read `model` for
-  routing and replay it across failover candidates) and forwarded verbatim —
-  buffering ≠ mutating. **There is no size ceiling.** The buffer grows to the
+  routing) and forwarded verbatim — buffering ≠ mutating. **There is no size
+  ceiling.** The buffer grows to the
   actual payload size; songguo is key-gated and single-tenant, so payloads are
   trusted. Consequence: memory = payload × concurrency, and a runaway
   authenticated client can OOM the box rather than get a clean 413 — accepted
   tradeoff. If that ever becomes a real problem, the fix is to **stream** the
   body (byte-for-byte relay, like the WebSocket path), NOT to re-add a cap.
 - Streaming the request body (byte-for-byte relay, like the WebSocket path
-  already does) is possible but not implemented for HTTP wires; it trades away
-  failover and needs mid-stream-truncation handling. Not a priority — raise the
+  already does) is possible but not implemented for HTTP wires; it needs
+  mid-stream-truncation handling. Not a priority — raise the
   cap / add a memory budget first if 413s or RAM become the real pain.
+
+## Behavioral transparency: one attempt, we never invent retries
+
+songguo forwards **exactly one attempt** per request and surfaces whatever the
+vendor returns — success **or** failure (`429`, `5xx`, a transport error) —
+**verbatim**. It does **not** auto-retry and does **not** fail a request over to
+another vendor mid-call. A client that wants to retry retries itself; that is the
+client's decision, not ours.
+
+This is byte-transparency's sibling on the behavior axis: just as we never invent
+new *bytes*, we never invent new *attempts*. Silently turning one client request
+into two or three against different vendors is exactly the kind of hidden
+behavior a transparent proxy must not have — it masks failures, and it can replay
+a request that had a side effect. So we don't.
+
+Choosing **which** vendor serves a request, when a model has several candidates,
+is a routing decision — priority → weighted round-robin, and the proxy forwards
+to the **first** one.
+
+There is **no automatic health demotion today**: a failing vendor is **not**
+brought down on its own, so it stays selected until an operator changes config.
+That is deliberate — "auto bring-down a bad provider" is a future, server-side
+feature we haven't built yet, and when we do it belongs in the router as a
+cross-request decision (steer the *next* request), **never** as a per-call retry.
+Do **not** re-add per-call failover to fake it in the meantime. This is a settled
+decision, like byte-transparency; don't re-litigate it behind a flag.
+
+> History: the HTTP wire path once walked the whole candidate list, retrying the
+> same request against the next vendor on `429`/`5xx`/transport error, and the
+> router auto-demoted a failing vendor into a ~30s health cooldown. Both were
+> removed 2026-07-03 — per-call failover on the HTTP **and** WebSocket paths, and
+> the automatic health cooldown. Routing is now priority → weighted-RR, one
+> attempt, no auto bring-down.
 
 ## Key docs
 

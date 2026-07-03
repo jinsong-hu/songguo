@@ -71,7 +71,7 @@ A model channel **or** an MCP channel.
 | `credentials[]` | The **号池** — one or more keys, rotated to spread per-key rate limits |
 | `weight` / `priority` | Routing policy inputs |
 | `per_model_price` | For true-cost metering + cheapest-route |
-| `health` | Read from upstream responses (429/5xx); drives failover |
+| `health` | Read from upstream responses (429/5xx) for observability. No auto bring-down today — a failing vendor is not demoted automatically (future, server-side) |
 
 ### 4.2 Token — a scoped budget
 | Field | Meaning |
@@ -85,7 +85,7 @@ Pure read-only metering output — chat / image / video / TTS / STT / embedding 
 
 | Field | Meaning |
 |-------|---------|
-| `serving_channel`, `credential_id`, `attempt#` | Which channel/key actually served it, incl. failovers |
+| `serving_channel`, `credential_id` | Which channel/key served it (one attempt per call — no failover, so no attempt counter) |
 | `model` / `modality` | What was called |
 | `usage`, `cost` | Supports **per-$ and per-call** metering (tools are often per-call/free) |
 | `latency`, `status` | Observability |
@@ -93,15 +93,15 @@ Pure read-only metering output — chat / image / video / TTS / STT / embedding 
 
 ---
 
-## 5. 号池 — routing & failover (a policy on Channel, not a new concept)
+## 5. 号池 — routing (a policy on Channel, not a new concept)
 
 For user-facing traffic you need a pool. It folds into Channel and **does not break the transparent principle**: routing = *pick destination + inject that upstream's credential + swap base_url*; the body is untouched.
 
 Two senses of 号池, both supported:
 1. **Multi-credential within one Channel** — rotate keys to dodge per-key rate limits.
-2. **Multi-Channel per model** — e.g. A=[opus, gpt-4o], B=[gpt-4o, deepseek]. A request for `gpt-4o` has candidates {A, B} → load-balance + failover.
+2. **Multi-Channel per model** — e.g. A=[opus, gpt-4o], B=[gpt-4o, deepseek]. A request for `gpt-4o` has candidates {A, B} → load-balance across them.
 
-The gateway **auto-derives** "which channels can serve model X" from each channel's `served_models`, then picks by policy (priority → weighted round-robin), failing over on 429/5xx. **No** New-API-style model-group / 模型重定向 / 倍率分组 config subsystem.
+The gateway **auto-derives** "which channels can serve model X" from each channel's `served_models`, then picks by policy (priority → weighted round-robin). It forwards to **one** candidate and surfaces the result verbatim — **no per-call failover**. A vendor that returns 429/5xx (or errors on the transport) is not auto-demoted today: the failing request sees the real error, the client decides whether to retry, and the vendor stays selected until an operator changes config. (Auto bring-down of a persistently-failing vendor is a future, server-side feature.) **No** New-API-style model-group / 模型重定向 / 倍率分组 config subsystem.
 
 ```
 Channel A: models=[opus, gpt-4o],     creds=[…], price=…
@@ -109,12 +109,18 @@ Channel B: models=[gpt-4o, deepseek], creds=[…], price=…
 
 opus     → {A}      → A
 deepseek → {B}      → B
-gpt-4o   → {A, B}   → policy pick; A down → failover B
+gpt-4o   → {A, B}   → policy pick (A on top by priority/weight)
 ```
 
 Falls out for free: per-channel price → **route-cheapest**, and the Ledger records the serving channel/credential, so cost is true even when A's and B's markups differ.
 
-> Edge deferred (don't solve in v1): failover mid-stream vs streaming billing → bill per-attempt actual consumption.
+> Superseded: earlier drafts had the proxy fail a request over to the next
+> candidate on 429/5xx mid-call, and the router auto-demoted a failing vendor
+> into a health cooldown. Both were dropped (2026-07-03) as inconsistent with
+> byte/behavior transparency — we surface the failure and let the client decide,
+> and we do not auto bring-down vendors today (a future server-side feature). So
+> the streaming-billing edge (bill per-attempt on mid-stream failover) no longer
+> arises.
 
 ---
 
@@ -195,7 +201,7 @@ One binary, single-tenant, **SQLite default**, self-hosted, near-zero ops. Auto-
 
 **v1 (sync first):**
 - Channel / Token / Ledger
-- 号池 routing + failover (priority → weighted RR, credential rotation)
+- 号池 routing (priority → weighted RR, credential rotation; one attempt, no per-call failover, no auto bring-down)
 - Budget enforcement (reject over-budget)
 - Sync modalities: chat, embedding, sync TTS/STT
 - Read-only metering with coarse fallback

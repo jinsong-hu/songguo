@@ -190,7 +190,6 @@ func (e *testEnv) callRows(t *testing.T) []callRow {
 		out[i] = callRow{
 			Vendor:     en.Vendor,
 			Status:     en.Status,
-			Attempt:    en.Attempt,
 			Model:      en.Model,
 			Cost:       en.Cost,
 			Stream:     en.Stream,
@@ -207,7 +206,6 @@ func (e *testEnv) callRows(t *testing.T) []callRow {
 type callRow struct {
 	Vendor     string
 	Status     int
-	Attempt    int
 	Model      string
 	Cost       float64
 	Stream     bool
@@ -477,9 +475,13 @@ func TestRateLimit(t *testing.T) {
 	}
 }
 
-// --- Test 7: failover A(500) -> B(200), two call rows ---
+// --- Test 7: no per-call failover — A(500) is surfaced, B(healthy) untouched ---
 
-func TestFailover(t *testing.T) {
+// Even when a healthy lower-priority vendor is available, songguo forwards a
+// single attempt and surfaces the top candidate's failure verbatim. It does NOT
+// replay the request against the next vendor, and (today) does not auto-demote
+// the failing vendor — routing is priority then weighted-RR only.
+func TestNoPerCallFailover(t *testing.T) {
 	upA := &mockUpstream{forceStatus: 500}
 	mockA := httptest.NewServer(upA.handler())
 	defer mockA.Close()
@@ -513,35 +515,22 @@ vendors:
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","messages":[]}`)
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (from B)", resp.StatusCode)
-	}
-	if upB.calls != 1 {
-		t.Errorf("vendorB calls = %d, want 1", upB.calls)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (A's failure surfaced, no failover)", resp.StatusCode)
 	}
 	if upA.calls != 1 {
 		t.Errorf("vendorA calls = %d, want 1", upA.calls)
 	}
+	if upB.calls != 0 {
+		t.Errorf("vendorB calls = %d, want 0 (must not fail over)", upB.calls)
+	}
 
 	rows := env.callRows(t)
-	if len(rows) != 2 {
-		t.Fatalf("call rows = %d, want 2", len(rows))
+	if len(rows) != 1 {
+		t.Fatalf("call rows = %d, want 1 (single attempt)", len(rows))
 	}
-	// Rows are ts DESC; find by vendor.
-	var aRow, bRow *callRow
-	for i := range rows {
-		switch rows[i].Vendor {
-		case "vendorA":
-			aRow = &rows[i]
-		case "vendorB":
-			bRow = &rows[i]
-		}
-	}
-	if aRow == nil || aRow.Status != 500 || aRow.Attempt != 1 {
-		t.Errorf("vendorA row = %+v, want status 500 attempt 1", aRow)
-	}
-	if bRow == nil || bRow.Status != 200 || bRow.Attempt != 2 {
-		t.Errorf("vendorB row = %+v, want status 200 attempt 2", bRow)
+	if rows[0].Vendor != "vendorA" || rows[0].Status != 500 {
+		t.Errorf("row = %+v, want vendorA status 500", rows[0])
 	}
 }
 
@@ -1210,8 +1199,9 @@ func TestNativeScope(t *testing.T) {
 // --- Test 16: a single provider serving the model is a single attempt ---
 
 func TestNativeSingleAttempt(t *testing.T) {
-	// The mock 500s; with only one provider serving the model there is nothing
-	// to fail over to, so the error is surfaced to the client, not retried.
+	// The mock 500s; songguo forwards a single attempt and surfaces the error to
+	// the client verbatim — never retried (there is no per-call failover, even
+	// when other providers exist; see TestNoPerCallFailover).
 	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer key1" {
 			t.Errorf("Authorization = %q, want Bearer key1", r.Header.Get("Authorization"))

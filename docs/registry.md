@@ -59,8 +59,10 @@ Because matching is suffix-based, the path _prefix_ is conventional. The canonic
 Every request resolves the same way — there are **no addressing "modes."** Once the wire is fixed by path suffix, the provider is chosen by the first available selector:
 
 1. **`X-Songguo-Provider: <name>` header** — explicit pin. A control header (like `X-Control-Require-Usage-Tokens-Return`): **stripped before forwarding**, never part of the body, so it stays inside no-transform. Use it to pick a specific account/provider, or to keep a submit→poll lifecycle on the same provider (affinity).
-2. **The body's `model` string** — for model-bearing wires, picks the provider(s) that declare `(wire, model)`; pooling + failover apply.
-3. **The default provider** — when neither a header nor a model is present, every vendor serving the matched wire is a candidate, ordered by the existing priority → weighted-RR → health ranking; the top one is the default and the rest are failover. (No separate "default" flag — it reuses provider priority.)
+2. **The body's `model` string** — for model-bearing wires, picks the provider(s) that declare `(wire, model)`; pooling applies (priority → weighted-RR), and the top candidate is forwarded to.
+3. **The default provider** — when neither a header nor a model is present, every vendor serving the matched wire is a candidate, ordered by the existing priority → weighted-RR ranking; the top one is the default. (No separate "default" flag — it reuses provider priority.)
+
+Only the top candidate is forwarded to: songguo makes **one attempt** per request and surfaces the vendor's response verbatim. There is no per-call retry or failover, and no automatic health demotion today — a failing vendor stays selected until an operator changes config. The remaining candidates are just the ranked pool, not a replay list.
 
 If none resolves, the call is denied with a clear error.
 

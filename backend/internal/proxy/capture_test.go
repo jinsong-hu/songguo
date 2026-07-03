@@ -133,15 +133,18 @@ func TestCaptureOffStoresNothing(t *testing.T) {
 	}
 }
 
-// --- failover: only the served (final) attempt gets a payload ---
+// --- a transport-failed attempt records a row but captures no payload ---
 
-func TestCaptureServedAttemptOnly(t *testing.T) {
-	upA := &mockUpstream{forceStatus: 500}
-	mockA := httptest.NewServer(upA.handler())
-	defer mockA.Close()
-	upB := &mockUpstream{}
-	mockB := httptest.NewServer(upB.handler())
-	defer mockB.Close()
+// With no failover, the only way an attempt lands without a forwarded response
+// is a failure before the response exists (a transport/dial error). That still
+// records a call row, but there is nothing to capture — GetPayload must miss.
+// (A forwarded error status, e.g. a 500, IS captured: it is the served response.)
+func TestCaptureNoPayloadOnTransportFailure(t *testing.T) {
+	// A server we immediately close, so its origin refuses connections — the
+	// single attempt fails at dial and never produces a response to forward.
+	dead := httptest.NewServer((&mockUpstream{}).handler())
+	deadURL := dead.URL
+	dead.Close()
 
 	yaml := fmt.Sprintf(`
 settings:
@@ -156,15 +159,7 @@ vendors:
     credential: {id: credA, api_key: keyA}
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
-  - name: vendorB
-    origin: %s/v1
-    served_models: [gpt-4o]
-    priority: 2
-    wires: [openai/chat]
-    credential: {id: credB, api_key: keyB}
-    prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
-`, mockA.URL, mockB.URL)
+`, deadURL)
 
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
@@ -172,31 +167,19 @@ vendors:
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","messages":[]}`)
 	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (transport failure surfaced verbatim)", resp.StatusCode)
+	}
 
-	// Two call rows: vendorA (500, attempt 1) and vendorB (200, attempt 2).
 	entries, err := st.QueryCalls(storeFilterAll())
 	if err != nil {
 		t.Fatalf("QueryCalls: %v", err)
 	}
-	if len(entries) != 2 {
-		t.Fatalf("call rows = %d, want 2", len(entries))
+	if len(entries) != 1 {
+		t.Fatalf("call rows = %d, want 1", len(entries))
 	}
-	var served, failed int64
-	for _, e := range entries {
-		switch e.Vendor {
-		case "vendorB":
-			served = e.ID
-		case "vendorA":
-			failed = e.ID
-		}
-	}
-	// The served (vendorB) attempt has a payload.
-	if _, err := st.GetPayload(served); err != nil {
-		t.Errorf("served attempt should have a payload, got %v", err)
-	}
-	// The failed-over (vendorA) attempt does NOT.
-	if _, err := st.GetPayload(failed); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("failed-over attempt should have no payload, got %v", err)
+	if _, err := st.GetPayload(entries[0].ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("transport-failed attempt should have no payload, got %v", err)
 	}
 }
 

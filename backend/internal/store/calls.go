@@ -36,17 +36,13 @@ func (s *Store) AppendCall(e calls.Entry) (int64, error) {
 	if modality == "" {
 		modality = calls.ModalityUnknown
 	}
-	attempt := e.Attempt
-	if attempt == 0 {
-		attempt = 1
-	}
 
 	res, err := s.db.Exec(
 		`INSERT INTO calls
-		 (ts, user_id, model, modality, vendor, credential_id, attempt, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (ts, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ts.UnixMilli(), e.UserID, e.Model, string(modality), e.Vendor, e.CredentialID,
-		attempt, e.Status, e.Err, usageJSON, e.Cost, e.LatencyMS, boolToInt(e.Stream), tagsJSON,
+		e.Status, e.Err, usageJSON, e.Cost, e.LatencyMS, boolToInt(e.Stream), tagsJSON,
 		e.Wire, string(e.Confidence), e.InputTokens, e.OutputTokens, e.CachedTokens,
 	)
 	if err != nil {
@@ -107,7 +103,7 @@ func (f CallFilter) where() (string, []any) {
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
-const callsSelect = `SELECT id, ts, user_id, model, modality, vendor, credential_id, attempt, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens FROM calls`
+const callsSelect = `SELECT id, ts, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens FROM calls`
 
 // QueryCalls returns matching entries ordered by ts DESC. Limit defaults to
 // 100 and is capped at 1000.
@@ -258,7 +254,7 @@ func scanEntry(rows *sql.Rows) (calls.Entry, error) {
 	)
 	if err := rows.Scan(
 		&e.ID, &tsMillis, &e.UserID, &e.Model, &modality, &e.Vendor, &e.CredentialID,
-		&e.Attempt, &e.Status, &e.Err, &usageJSON, &e.Cost, &e.LatencyMS, &stream, &tagsJSON,
+		&e.Status, &e.Err, &usageJSON, &e.Cost, &e.LatencyMS, &stream, &tagsJSON,
 		&e.Wire, &confidence, &e.InputTokens, &e.OutputTokens, &e.CachedTokens,
 	); err != nil {
 		return calls.Entry{}, err

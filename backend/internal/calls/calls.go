@@ -1,9 +1,8 @@
 // Package calls records per-user usage and enforces budgets.
 //
 // It holds only pure domain types: an append-only Entry is written for every
-// proxied call attempt (including each failover attempt). Persistence lives in
-// the store package; budget enforcement and dashboard views are queries over
-// the resulting call log.
+// proxied call. Persistence lives in the store package; budget enforcement and
+// dashboard views are queries over the resulting call log.
 package calls
 
 import "time"
@@ -50,7 +49,6 @@ type Entry struct {
 	CredentialID string         // which credential in the 号池 served it
 	Wire         string         // matched wire name (e.g. "openai/chat"); "" if unmatched
 	Confidence   Confidence     // metering trustworthiness
-	Attempt      int            // 1-based attempt number (failover increments)
 	Status       int            // upstream HTTP status (0 if no response)
 	Err          string         // error detail if any
 	Usage        map[string]any // raw extracted usage (tokens/images/seconds/...), JSON-encoded in DB

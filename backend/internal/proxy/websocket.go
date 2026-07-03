@@ -9,8 +9,10 @@ package proxy
 // directions, untouched, for the life of the session. WebSocket frames are
 // NEVER parsed — we relay the TCP stream and meter only bytes + duration.
 //
-// All policy (scope, budget, RPM) and credential failover happen BEFORE any
-// hijack, so a rejection or an upstream non-101 is a normal HTTP response.
+// All policy (scope, budget, RPM) and credential selection happen BEFORE any
+// hijack, so a rejection or an upstream non-101 is a normal HTTP response. Like
+// the HTTP path, the handshake is a single attempt — no failover across
+// credentials; a non-101 is relayed verbatim.
 
 import (
 	"bufio"
@@ -89,7 +91,8 @@ func wsCompressionNegotiated(h http.Header) bool {
 // with the X-Songguo-Provider header (by provider id), and the inbound path is
 // relayed verbatim to the chosen vendor's origin. The provider can yield several
 // (origin, adapter) vendors; we prefer the one whose enabled wires match the
-// path, then try each as a credential/origin attempt until one returns 101.
+// path and forward the handshake to the top candidate — a single attempt, no
+// failover (like the HTTP path).
 func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user store.User) {
 	// 1. Resolve the provider pin and its candidate vendors.
 	pin := r.Header.Get("X-Songguo-Provider")
@@ -106,7 +109,7 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 	}
 	// Prefer the vendor(s) whose enabled wires match this path; fall back to all
 	// of the provider's vendors when none declares the (realtime) wire. Keep the
-	// wire map so each attempt can rewrite to its vendor's configured endpoint.
+	// wire map so the chosen target can rewrite to its vendor's configured endpoint.
 	matchedTargets, wireMap, _ := resolveWires(targets, r.Method, r.URL.Path)
 	if len(matchedTargets) > 0 {
 		targets = matchedTargets
@@ -143,75 +146,53 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 		billingModel = r.URL.Query().Get("model")
 	}
 
-	// 3. Try each candidate until one yields 101. Each target carries its own
-	// origin (the provider's per-wire host), so the dial target is per-attempt.
-	// We hold dial/handshake state for the winning attempt; failed attempts
-	// surface their last HTTP response.
+	// 3. Single attempt: forward to the top candidate only. Like the HTTP path,
+	// there is no failover — a bad origin, a dial error, or a non-101 handshake is
+	// surfaced verbatim (the upstream's own response when we have one, else a
+	// 502). targets[0] is the pick (priority -> weighted-RR).
+	t := targets[0]
+
 	var (
 		upConn    net.Conn
 		upReader  *bufio.Reader
 		upResp    *http.Response
-		chosen    router.Target
-		attempt   int
 		handshake time.Duration
 	)
-	for i, t := range targets {
-		last := i == len(targets)-1
 
-		host, useTLS, requestTarget, terr := wsUpstreamTarget(t, wireMap[t.Vendor.Name], r.URL.Path, r.URL.RawQuery)
-		if terr != nil {
-			h.logger.Error("vendor origin invalid", "err", terr, "vendor", t.Vendor.Name)
-			h.router.Report(t.Vendor.Name, t.Credential.ID, 0, terr)
-			if last {
-				writeError(w, http.StatusBadGateway, "upstream_error", "vendor origin invalid")
-				return
-			}
-			continue
-		}
+	host, useTLS, requestTarget, terr := wsUpstreamTarget(t, wireMap[t.Vendor.Name], r.URL.Path, r.URL.RawQuery)
+	if terr != nil {
+		h.logger.Error("vendor origin invalid", "err", terr, "vendor", t.Vendor.Name)
+		writeError(w, http.StatusBadGateway, "upstream_error", "vendor origin invalid")
+		return
+	}
 
-		start := h.now()
-		conn, reader, resp, derr := h.dialWSUpstream(host, useTLS, requestTarget, r, t)
-		if derr != nil {
-			h.router.Report(t.Vendor.Name, t.Credential.ID, 0, derr)
-			if last {
-				h.logger.Error("websocket dial failed", "err", derr, "vendor", t.Vendor.Name)
-				writeError(w, http.StatusBadGateway, "upstream_error", derr.Error())
-				return
-			}
-			continue
-		}
+	start := h.now()
+	conn, reader, resp, derr := h.dialWSUpstream(host, useTLS, requestTarget, r, t)
+	if derr != nil {
+		h.logger.Error("websocket dial failed", "err", derr, "vendor", t.Vendor.Name)
+		writeError(w, http.StatusBadGateway, "upstream_error", derr.Error())
+		return
+	}
+	handshake = h.now().Sub(start)
 
-		if resp.StatusCode == http.StatusSwitchingProtocols {
-			upConn, upReader, upResp = conn, reader, resp
-			chosen, attempt = t, i+1
-			handshake = h.now().Sub(start)
-			h.router.Report(t.Vendor.Name, t.Credential.ID, resp.StatusCode, nil)
-			break
-		}
-
-		// Non-101: this credential failed the upgrade. Remember the response so we
-		// can relay the last one, then try the next credential.
-		h.router.Report(t.Vendor.Name, t.Credential.ID, resp.StatusCode, nil)
-		if last {
-			upResp = resp
-			chosen, attempt = t, i+1
-			handshake = h.now().Sub(start)
-			_ = conn.Close()
-			break
-		}
-		drainAndClose(resp.Body)
+	if resp.StatusCode == http.StatusSwitchingProtocols {
+		upConn, upReader, upResp = conn, reader, resp
+	} else {
+		// Non-101: relay the upstream's handshake response verbatim (we have NOT
+		// hijacked yet); close the raw conn since we won't pipe it.
+		upResp = resp
 		_ = conn.Close()
 	}
 
-	// 4a. No 101 from any credential: relay the last upstream response verbatim
-	// over the normal ResponseWriter (we have NOT hijacked yet) and record it.
+	// 4a. No 101: relay the upstream response verbatim over the normal
+	// ResponseWriter and record it.
 	if upConn == nil {
-		h.relayFailedHandshake(w, upResp, user.ID, billingModel, chosen.Vendor.Name, chosen, attempt, handshake)
+		h.relayFailedHandshake(w, upResp, user.ID, billingModel, t.Vendor.Name, t, handshake)
 		return
 	}
 
 	// 4b. Got 101: hijack the client conn and pipe raw bytes both directions.
-	h.pipeWebSocket(w, r, upConn, upReader, upResp, user.ID, billingModel, chosen.Vendor.Name, wireMap[chosen.Vendor.Name], chosen, attempt, handshake)
+	h.pipeWebSocket(w, r, upConn, upReader, upResp, user.ID, billingModel, t.Vendor.Name, wireMap[t.Vendor.Name], t, handshake)
 }
 
 // dialWSUpstream dials the upstream (TLS for wss), writes the replayed
@@ -306,7 +287,7 @@ func buildWSHandshake(host, requestTarget string, r *http.Request, adapter, apiK
 // client verbatim (status + headers + body) and records a realtime call row
 // with the upstream status and zero bytes.
 func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Response,
-	userID, model, vendorName string, t router.Target, attempt int, handshake time.Duration) {
+	userID, model, vendorName string, t router.Target, handshake time.Duration) {
 	status := http.StatusBadGateway
 	if resp != nil {
 		defer resp.Body.Close()
@@ -317,14 +298,14 @@ func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Respons
 		body, _ := io.ReadAll(resp.Body)
 		h.logger.Warn("websocket upstream refused upgrade",
 			"vendor", vendorName, "model", model, "credential", t.Credential.ID,
-			"status", status, "attempt", attempt, "handshake_ms", handshake.Milliseconds(),
+			"status", status, "handshake_ms", handshake.Milliseconds(),
 			"body", errorSnippet(body))
 		w.WriteHeader(status)
 		_, _ = w.Write(body)
 	} else {
 		h.logger.Warn("websocket upstream refused upgrade (no response)",
 			"vendor", vendorName, "model", model, "credential", t.Credential.ID,
-			"attempt", attempt, "handshake_ms", handshake.Milliseconds())
+			"handshake_ms", handshake.Milliseconds())
 		writeError(w, status, "upstream_error", "upstream refused websocket upgrade")
 	}
 
@@ -335,7 +316,6 @@ func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Respons
 		Modality:     calls.ModalityRealtime,
 		Vendor:       vendorName,
 		CredentialID: t.Credential.ID,
-		Attempt:      attempt,
 		Status:       status,
 		Usage:        map[string]any{"bytes_up": int64(0), "bytes_down": int64(0), "duration_ms": int64(0)},
 		Cost:         0,
@@ -352,7 +332,7 @@ func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Respons
 // usage and price the session; the relay itself is never blocked by metering.
 func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 	upConn net.Conn, upReader *bufio.Reader, upResp *http.Response,
-	userID, billingModel, vendorName string, rw resolvedWire, t router.Target, attempt int, handshake time.Duration) {
+	userID, billingModel, vendorName string, rw resolvedWire, t router.Target, handshake time.Duration) {
 	defer upConn.Close()
 	defer upResp.Body.Close()
 
@@ -468,7 +448,7 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 	// can't decode (bad config, post-upgrade auth failure), so flag it loudly.
 	args := []any{
 		"vendor", vendorName, "model", billingModel, "credential", t.Credential.ID,
-		"attempt", attempt, "handshake_ms", handshake.Milliseconds(),
+		"handshake_ms", handshake.Milliseconds(),
 		"bytes_up", bu, "bytes_down", bd, "duration_ms", duration.Milliseconds(),
 		"cost", cost,
 	}
@@ -486,7 +466,6 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 		Vendor:       vendorName,
 		CredentialID: t.Credential.ID,
 		Confidence:   confidence,
-		Attempt:      attempt,
 		Status:       http.StatusSwitchingProtocols,
 		Usage:        usage,
 		Cost:         cost,
