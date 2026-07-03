@@ -246,20 +246,16 @@ func (h *handler) dialWSUpstream(host string, useTLS bool, requestTarget string,
 // is a transparent relay of a real client's handshake; browser-specific test
 // traffic uses the dedicated /api/test driver (see wstest.go), not this path.
 func buildWSHandshake(host, requestTarget string, r *http.Request, adapter, apiKey string) []byte {
-	// Header names the adapter owns; we strip any client-sent value and write
-	// our own so the upstream only ever sees the vendor credential.
-	credHeader := "Authorization"
-	if adapter == config.AdapterVolcSpeech {
-		credHeader = "X-Api-Key"
-	}
-
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "GET %s HTTP/1.1\r\n", requestTarget)
 	fmt.Fprintf(&b, "Host: %s\r\n", hostHeader(host))
 
 	for key, vals := range r.Header {
 		canon := http.CanonicalHeaderKey(key)
-		if canon == "Authorization" || canon == http.CanonicalHeaderKey(credHeader) || canon == "Host" {
+		// Strip both credential headers regardless of adapter: the client may
+		// have presented its songguo key in either (see clientKey), and neither
+		// must leak upstream. We write the vendor credential below.
+		if canon == "Authorization" || canon == "X-Api-Key" || canon == "Host" {
 			continue
 		}
 		_, isHandshake := wsHandshakeHeaders[canon]

@@ -105,13 +105,20 @@ Read-only by design: if a usage shape isn't recognized the call still succeeds w
 
 ## Auth adapters
 
-Derived from the wire name prefix — the operator never picks it.
+Derived from the wire name prefix — the operator never picks it. This is the
+**egress** scheme (how songguo presents the *vendor* key upstream).
 
 | Adapter | Wires | Scheme |
 |---|---|---|
 | `openai-compatible` | `openai/*` | `Authorization: Bearer <key>` |
 | `anthropic-compatible` | `anthropic/*` | `x-api-key: <key>` + `anthropic-version` header |
 | `volc-speech` | `volc/*` | `x-api-key: <key>` |
+
+**Ingress** (how the *client* presents its songguo key) is independent of the wire:
+songguo reads it from `Authorization: Bearer <key>` **or** `X-Api-Key: <key>`
+(Authorization wins if both are sent), so an `X-Api-Key`-native SDK — Anthropic,
+ByteDance ASR/TTS — switches to songguo by changing only the endpoint. Both
+credential headers are stripped before the vendor key is written upstream.
 
 ## Resolved decisions
 

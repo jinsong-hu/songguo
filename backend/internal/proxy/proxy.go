@@ -146,8 +146,10 @@ func defaultHTTPClient() *http.Client {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// 1. Auth.
-	key := bearerToken(r.Header.Get("Authorization"))
+	// 1. Auth. The client presents its songguo key in whichever header its
+	// native SDK uses — Authorization: Bearer (OpenAI-style) or X-Api-Key
+	// (Anthropic, ByteDance ASR/TTS) — so the endpoint swap needs no other change.
+	key := clientKey(r)
 	if key == "" {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "missing authorization")
 		return
@@ -470,20 +472,26 @@ func (h *handler) buildUpstreamRequest(r *http.Request, t router.Target, upURL s
 // applyUpstreamAuth swaps in the upstream credential using the header style the
 // vendor's adapter expects. This is the proxy's only request mutation; the body
 // is never touched. An unknown/empty adapter defaults to OpenAI-style bearer.
+//
+// The client authenticated to songguo with its own key in whichever header its
+// native SDK uses (Authorization: Bearer or X-Api-Key; see clientKey). Both
+// credential headers are stripped first so the client's songguo key never leaks
+// upstream, regardless of which one it arrived in; only the exact X-Api-Key
+// credential is removed, so volc-speech's other X-Api-* headers (resource id,
+// request id) still pass through verbatim.
 func applyUpstreamAuth(req *http.Request, adapter, key string) {
+	req.Header.Del("Authorization")
+	req.Header.Del("X-Api-Key")
 	switch adapter {
 	case config.AdapterAnthropic:
 		// Anthropic authenticates with x-api-key and requires an API version
-		// header; strip any inherited bearer so only the upstream key is sent.
-		req.Header.Del("Authorization")
+		// header.
 		req.Header.Set("X-Api-Key", key)
 		if req.Header.Get("Anthropic-Version") == "" {
 			req.Header.Set("Anthropic-Version", "2023-06-01")
 		}
 	case config.AdapterVolcSpeech:
-		// ByteDance openspeech APIs authenticate with X-Api-Key alone; the
-		// client supplies the other X-Api-* headers (resource id, request id).
-		req.Header.Del("Authorization")
+		// ByteDance openspeech APIs authenticate with X-Api-Key alone.
 		req.Header.Set("X-Api-Key", key)
 	default:
 		req.Header.Set("Authorization", "Bearer "+key)
@@ -842,6 +850,19 @@ func redactHeaders(h http.Header) map[string]string {
 		}
 	}
 	return out
+}
+
+// clientKey extracts the caller's songguo key from the request, accepting it in
+// whichever header the client's native SDK carries the credential: Authorization
+// (Bearer or raw) or, for X-Api-Key-style wires (Anthropic, ByteDance ASR/TTS),
+// the X-Api-Key header. Authorization wins when both are present so existing
+// OpenAI-style callers are unaffected. This is the ingress half of songguo's
+// "change only the endpoint" promise; the egress half lives in applyUpstreamAuth.
+func clientKey(r *http.Request) string {
+	if k := bearerToken(r.Header.Get("Authorization")); k != "" {
+		return k
+	}
+	return strings.TrimSpace(r.Header.Get("X-Api-Key"))
 }
 
 // bearerToken extracts the key from an Authorization header value, accepting

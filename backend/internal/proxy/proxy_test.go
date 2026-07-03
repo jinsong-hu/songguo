@@ -318,6 +318,60 @@ vendors:
 	}
 }
 
+// --- Test 1b: ingress key in X-Api-Key (drop-in swap for X-Api-Key SDKs) ---
+
+// A client whose native SDK carries the key in X-Api-Key (Anthropic, ByteDance
+// ASR/TTS) must authenticate by changing only the endpoint. The songguo key
+// arrives in X-Api-Key with no Authorization header; the caller is still
+// authenticated, and the client's key never leaks upstream.
+func TestChatIngressXApiKey(t *testing.T) {
+	up := &mockUpstream{}
+	mock := httptest.NewServer(up.handler())
+	defer mock.Close()
+
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: vendorA
+    origin: %s/v1
+    served_models: [gpt-4o]
+    priority: 1
+    wires: [openai/chat, openai/completions, openai/embeddings, openai/models]
+    credential: {id: credA, api_key: vendor-secret-key}
+    prices:
+      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+`, mock.URL)
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
+	req, err := http.NewRequest(http.MethodPost, env.server.URL+"/v1/chat/completions", strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	// Client presents its songguo key in X-Api-Key ONLY — no Authorization.
+	req.Header.Set("X-Api-Key", key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := env.client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (X-Api-Key ingress must authenticate)", resp.StatusCode)
+	}
+	// Egress: openai vendor still gets the vendor key via Authorization, and the
+	// client's songguo key is stripped from X-Api-Key so it never leaks upstream.
+	if up.lastAuth != "Bearer vendor-secret-key" {
+		t.Errorf("upstream Authorization = %q, want vendor key", up.lastAuth)
+	}
+	if got := up.lastHeaders.Get("X-Api-Key"); got != "" {
+		t.Errorf("upstream X-Api-Key = %q, want empty (client key must not leak)", got)
+	}
+}
+
 // --- Test 2: embeddings happy path ---
 
 func TestEmbeddingsHappyPath(t *testing.T) {

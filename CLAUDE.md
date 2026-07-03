@@ -32,6 +32,31 @@ decision, not a tradeoff to re-litigate.
 > of never touching the bytes. If a caller wants stream usage, the caller sets
 > the option.
 
+## The credential header: the one header we own, read from wherever the client puts it
+
+songguo's promise is a **drop-in endpoint swap** — the client points its existing
+SDK at songguo, changes the base URL, and changes *nothing else*. The credential is
+the one piece we must rewrite on both ends, so we handle it on the client's terms,
+not ours:
+
+- **Ingress (reading the caller's songguo key).** We accept it from
+  `Authorization: Bearer <key>` (OpenAI-style) **or** `X-Api-Key: <key>`
+  (Anthropic SDKs, ByteDance/Volcengine ASR & TTS). Authorization wins if both are
+  present. So a client that natively authenticates with `X-Api-Key` needs no header
+  surgery — the endpoint swap is enough. (See `clientKey` in `proxy.go`.)
+- **Egress (presenting the vendor key).** We swap in the vendor credential using the
+  header that vendor's adapter expects — `Authorization: Bearer` for
+  openai-compatible, `X-Api-Key` for anthropic-compatible and volc-speech (see
+  `applyUpstreamAuth` / `buildWSHandshake`).
+- **No leak across headers.** Both credential headers are stripped from the outbound
+  request before the vendor key is written, so the client's songguo key never
+  reaches the vendor regardless of which header carried it. Non-credential
+  `X-Api-*` headers (volc resource id, request id) still pass through verbatim.
+
+This is a **header rewrite only** — fully consistent with byte-transparency above.
+The body is never touched; we just read the credential from, and write it to,
+whichever header the two ends use.
+
 ## What "forward verbatim" costs (known, accepted)
 
 - The request body is **buffered** in RAM (so the proxy can read `model` for
