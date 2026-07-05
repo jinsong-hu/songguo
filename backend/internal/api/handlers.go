@@ -215,8 +215,49 @@ func (a *api) overviewData(since, until time.Time) (overviewView, error) {
 	}, nil
 }
 
-// handleUsageSeries returns cost/request/error totals bucketed over time for
-// the spend-over-time chart. Window defaults to the last 7 days; bucket defaults
+// handleSessionsOverview returns aggregate stats over Claude Code sessions in
+// the window (default last 30d): count, inferred outcomes, subagent fan-out, and
+// turns/tokens/duration totals and percentiles. It powers the Sessions section
+// of the overview dashboard.
+func (a *api) handleSessionsOverview(w http.ResponseWriter, r *http.Request) {
+	now := a.now().UTC()
+	since := now.AddDate(0, 0, -30)
+	until := now
+	if v, ok := parseUnixTime(r, "since"); ok {
+		since = *v
+	}
+	if v, ok := parseUnixTime(r, "until"); ok {
+		until = *v
+	}
+
+	st, err := a.store.SessionStats(&since, &until)
+	if err != nil {
+		a.writeDataErr(w, "sessions overview", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sessionStatsView{
+		Range:         rangeView{Since: since.Unix(), Until: until.Unix()},
+		Sessions:      st.Sessions,
+		Completed:     st.Completed,
+		Errored:       st.Errored,
+		Interrupted:   st.Interrupted,
+		WithSubagents: st.WithSubagents,
+		TotalTurns:    st.TotalTurns,
+		TotalTokens:   st.TotalTokens,
+		AvgTurns:      st.AvgTurns,
+		AvgTokens:     st.AvgTokens,
+		AvgDuration:   st.AvgDuration,
+		TurnsP50:      st.TurnsP50,
+		TurnsP95:      st.TurnsP95,
+		TokensP50:     st.TokensP50,
+		TokensP95:     st.TokensP95,
+		DurationP50:   st.DurationP50,
+		DurationP95:   st.DurationP95,
+	})
+}
+
+// handleUsageSeries returns cost/request/error totals bucketed over time for the
+// spend-over-time chart. Window defaults to the last 7 days; bucket defaults
 // to "day" when the range exceeds 2 days, else "hour". Only "hour"/"day" are
 // accepted.
 func (a *api) handleUsageSeries(w http.ResponseWriter, r *http.Request) {

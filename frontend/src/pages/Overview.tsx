@@ -14,7 +14,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Activity, Coins, DollarSign, ShieldCheck, Users } from 'lucide-react';
+import { Activity, Clock, Coins, DollarSign, GitBranch, MessageSquare, ShieldCheck, Users } from 'lucide-react';
 import { api } from '../api/client';
 import type { Bucket, BreakdownRow } from '../api/types';
 import { ContextSunburst } from '../components/ContextSunburst';
@@ -30,7 +30,7 @@ import {
   type ChartConfig,
 } from '../components/ui/chart';
 import { LIVE_REFRESH_MS, useFetch, useLiveTick } from '../lib/useFetch';
-import { bucketLabel, int, money, ms, percent } from '../lib/format';
+import { bucketLabel, duration, int, money, ms, percent } from '../lib/format';
 import { ActivityFeed } from './ActivityFeed';
 import styles from './Overview.module.css';
 
@@ -67,6 +67,7 @@ export function OverviewPage() {
 
   const opts = { intervalMs: REFRESH_MS };
   const overview = useFetch(() => api.overview(since, until), [since, until], opts);
+  const sessions = useFetch(() => api.sessionsOverview(since, until), [since, until], opts);
   const series = useFetch(
     () => api.series(since, until, range.bucket),
     [since, until, range.bucket],
@@ -85,6 +86,7 @@ export function OverviewPage() {
   const errs = useFetch(() => api.errors(since, until), [since, until], opts);
 
   const ov = overview.data;
+  const ss = sessions.data;
 
   // Time-series rows with derived ratios for the charts.
   const points = useMemo(() => {
@@ -496,6 +498,49 @@ export function OverviewPage() {
         </Frame>
       </div>
 
+      {/* Sessions */}
+      <SectionTitle name="Sessions" hint="Claude Code runs — outcome inferred from each session's last call" />
+      <div className={styles.kpiGrid}>
+        <Kpi
+          icon={<GitBranch size={14} />}
+          label={`Sessions (${range.label})`}
+          loading={sessions.initialLoading}
+          value={ss ? int(ss.sessions) : '—'}
+          sub={ss ? `${int(ss.with_subagents)} used subagents` : undefined}
+        />
+        <Kpi
+          icon={<MessageSquare size={14} />}
+          label="Turns / session"
+          loading={sessions.initialLoading}
+          value={ss ? ss.avg_turns.toFixed(1) : '—'}
+          sub={ss ? `p50 ${int(ss.turns_p50)} · p95 ${int(ss.turns_p95)}` : undefined}
+        />
+        <Kpi
+          icon={<Clock size={14} />}
+          label="Duration / session"
+          loading={sessions.initialLoading}
+          value={ss ? duration(ss.avg_duration) : '—'}
+          sub={ss ? `p50 ${duration(ss.duration_p50)} · p95 ${duration(ss.duration_p95)}` : undefined}
+        />
+        <Kpi
+          icon={<Coins size={14} />}
+          label="Tokens / session"
+          loading={sessions.initialLoading}
+          value={ss ? compact(ss.avg_tokens) : '—'}
+          sub={ss ? `p50 ${compact(ss.tokens_p50)} · p95 ${compact(ss.tokens_p95)}` : undefined}
+        />
+      </div>
+      <div className={`card ${styles.panel}`}>
+        <div className={styles.panelHead}>
+          <span className={styles.panelTitle}>Outcomes</span>
+        </div>
+        <Frame r={sessions} height="" empty={!ss || ss.sessions === 0}>
+          {ss ? (
+            <OutcomeBar completed={ss.completed} interrupted={ss.interrupted} errored={ss.errored} />
+          ) : null}
+        </Frame>
+      </div>
+
       {/* Recent activity */}
       <SectionTitle name="Recent activity" />
       <ActivityFeed since={since} until={until} />
@@ -646,4 +691,57 @@ function compact(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return `${Math.round(n)}`;
+}
+
+// Inferred session outcomes, in bar/legend order.
+const OUTCOMES = [
+  { key: 'completed', label: 'Completed', color: 'var(--chart-1)' },
+  { key: 'interrupted', label: 'Interrupted', color: 'var(--chart-3)' },
+  { key: 'errored', label: 'Errored', color: 'var(--danger)' },
+] as const;
+
+/** Stacked proportion bar + legend for a session's completed/interrupted/errored mix. */
+function OutcomeBar({
+  completed,
+  interrupted,
+  errored,
+}: {
+  completed: number;
+  interrupted: number;
+  errored: number;
+}) {
+  const counts = { completed, interrupted, errored };
+  const total = completed + interrupted + errored;
+  return (
+    <div className={styles.outcome}>
+      <div className={styles.outcomeBar}>
+        {OUTCOMES.map((o) => {
+          const v = counts[o.key];
+          if (v === 0 || total === 0) return null;
+          return (
+            <div
+              key={o.key}
+              className={styles.outcomeSeg}
+              style={{ width: `${(v / total) * 100}%`, background: o.color }}
+              title={`${o.label}: ${v}`}
+            />
+          );
+        })}
+      </div>
+      <div className={styles.outcomeLegend}>
+        {OUTCOMES.map((o) => {
+          const v = counts[o.key];
+          const pct = total > 0 ? (v / total) * 100 : 0;
+          return (
+            <div key={o.key} className={styles.outcomeItem}>
+              <span className={styles.outcomeDot} style={{ background: o.color }} />
+              <span className={styles.outcomeLabel}>{o.label}</span>
+              <span className={styles.outcomeCount}>{int(v)}</span>
+              <span className={styles.outcomePct}>{pct.toFixed(0)}%</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }

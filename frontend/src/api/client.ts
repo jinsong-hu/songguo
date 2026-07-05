@@ -20,6 +20,7 @@ import type {
   Service,
   SessionContext,
   SessionDetail,
+  SessionStats,
   Settings,
   User,
   UsageSeries,
@@ -151,6 +152,10 @@ export const api = {
 
   overview: (since: number, until: number) =>
     request<Overview>(`/overview${qs({ since, until })}`),
+
+  /** Aggregate stats over Claude Code sessions in the window. */
+  sessionsOverview: (since: number, until: number) =>
+    request<SessionStats>(`/sessions/overview${qs({ since, until })}`),
 
   series: (since: number, until: number, bucket: 'hour' | 'day') =>
     request<UsageSeries>(`/usage/series${qs({ since, until, bucket })}`),

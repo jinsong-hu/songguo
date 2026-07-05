@@ -37,6 +37,33 @@ export interface Overview {
 
 export type Bucket = 'hour' | 'day';
 
+/**
+ * Aggregate stats over Claude Code sessions in a window (GET /api/sessions/overview).
+ * Outcome (completed/errored/interrupted) is inferred from each session's last
+ * call — an interaction-level signal off the ledger, not a judgment on the
+ * coding task. Durations are in seconds.
+ */
+export interface SessionStats {
+  range: Range;
+  sessions: number;
+  completed: number;
+  errored: number;
+  interrupted: number;
+  /** Sessions that spawned at least one subagent. */
+  with_subagents: number;
+  total_turns: number;
+  total_tokens: number;
+  avg_turns: number;
+  avg_tokens: number;
+  avg_duration: number;
+  turns_p50: number;
+  turns_p95: number;
+  tokens_p50: number;
+  tokens_p95: number;
+  duration_p50: number;
+  duration_p95: number;
+}
+
 export interface SeriesPoint {
   ts: string;
   cost: number;

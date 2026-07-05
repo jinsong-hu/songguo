@@ -51,6 +51,22 @@ export function percent(fraction: number): string {
   return `${(fraction * 100).toFixed(1)}%`;
 }
 
+/**
+ * Format a duration given in seconds as a compact human string, e.g. "45s",
+ * "3m 20s", "1h 4m". Zero and sub-second values render as "0s".
+ */
+export function duration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0s';
+  const s = Math.round(seconds);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  const d = Math.floor(h / 24);
+  return `${d}d ${h % 24}h`;
+}
+
 const dateTimeFmt = new Intl.DateTimeFormat(undefined, {
   month: 'short',
   day: 'numeric',

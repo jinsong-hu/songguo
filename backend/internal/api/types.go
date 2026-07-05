@@ -160,6 +160,31 @@ type overviewView struct {
 	RunwayDays    *float64 `json:"runway_days"`
 }
 
+// sessionStatsView is the GET /api/sessions/overview response: aggregate stats
+// over Claude Code sessions in the window. Outcome (completed/errored/
+// interrupted) is inferred from each session's last call — an interaction-level
+// signal off the ledger, not a judgment on the coding task itself.
+type sessionStatsView struct {
+	Range       rangeView `json:"range"`
+	Sessions    int       `json:"sessions"`
+	Completed   int       `json:"completed"`
+	Errored     int       `json:"errored"`
+	Interrupted int       `json:"interrupted"`
+	// WithSubagents: sessions that spawned at least one subagent.
+	WithSubagents int     `json:"with_subagents"`
+	TotalTurns    int     `json:"total_turns"`
+	TotalTokens   float64 `json:"total_tokens"`
+	AvgTurns      float64 `json:"avg_turns"`
+	AvgTokens     float64 `json:"avg_tokens"`
+	AvgDuration   float64 `json:"avg_duration"` // seconds
+	TurnsP50      int64   `json:"turns_p50"`
+	TurnsP95      int64   `json:"turns_p95"`
+	TokensP50     int64   `json:"tokens_p50"`
+	TokensP95     int64   `json:"tokens_p95"`
+	DurationP50   int64   `json:"duration_p50"` // seconds
+	DurationP95   int64   `json:"duration_p95"` // seconds
+}
+
 // seriesPoint is one bucket in the GET /api/usage/series response.
 type seriesPoint struct {
 	TS           string  `json:"ts"`
