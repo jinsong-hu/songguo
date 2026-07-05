@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/songguo/songguo/internal/calls"
+	"github.com/songguo/songguo/internal/compose"
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/store"
 )
@@ -490,4 +491,46 @@ func maskKey(key string) string {
 		return "••••"
 	}
 	return key[:3] + ellipsis + key[len(key)-2:]
+}
+
+// contextCompositionView is the GET /api/context/composition response: the
+// aggregated context-window decomposition over a window. Sources reuse
+// compose.Source, whose JSON ({key, tokens, cached, children:[{key,tokens}]})
+// matches the frontend SourceSlice/ProducerSlice contract exactly.
+type contextCompositionView struct {
+	Range    rangeView        `json:"range"`
+	Requests int              `json:"requests"`
+	AvgTotal float64          `json:"avg_total"`
+	Sources  []compose.Source `json:"sources"`
+}
+
+// sessionContextView is the GET /api/sessions/{id}/context response: per-turn
+// composition, the latest turn's full snapshot (with producers), and a dwell
+// list (empty until lineage tracking lands).
+type sessionContextView struct {
+	SessionID string            `json:"session_id"`
+	Turns     []contextTurnView `json:"turns"`
+	Snapshot  []compose.Source  `json:"snapshot"`
+	Dwell     []dwellBlockView  `json:"dwell"`
+}
+
+// contextTurnView is one turn's composition. Sources maps top-level source key
+// to tokens only (producers and cached are dropped from this map).
+type contextTurnView struct {
+	Seq     int              `json:"seq"`
+	TS      string           `json:"ts"`
+	AgentID string           `json:"agent_id"`
+	Total   int64            `json:"total"`
+	Cached  int64            `json:"cached"`
+	Sources map[string]int64 `json:"sources"`
+}
+
+// dwellBlockView describes how long a producer's block has persisted in the
+// context across turns. Reserved for a later lineage phase; currently unused.
+type dwellBlockView struct {
+	Label    string `json:"label"`
+	Producer string `json:"producer"`
+	Tokens   int64  `json:"tokens"`
+	Turns    int    `json:"turns"`
+	Dwell    int    `json:"dwell"`
 }

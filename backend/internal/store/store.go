@@ -143,6 +143,17 @@ func (s *Store) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_ts ON calls(ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_user_id ON calls(user_id)`,
+		// context_composition holds the estimated context-window decomposition for
+		// a chat call, 1:1 with calls.id. `total`/`cached` mirror the vendor's
+		// official input/cache-read token counts; `sources` is the JSON-encoded
+		// []compose.Source partition. Written read-only, off the hot path.
+		`CREATE TABLE IF NOT EXISTS context_composition (
+			call_id    INTEGER PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE,
+			total      REAL NOT NULL,
+			cached     REAL NOT NULL,
+			sources    TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_model ON calls(model)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_vendor ON calls(vendor)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status)`,

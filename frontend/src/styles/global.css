@@ -21,6 +21,8 @@
   --chart-3: #b97e12;
   --chart-4: #7a5ea8;
   --chart-5: #bf6b4b;
+  --chart-6: #3f6f9f;
+  --chart-7: #8a7f76;
 
   /* No "Inter" here on purpose: the API-reference page (Scalar) registers an
      Inter @font-face at runtime, and if Inter were a candidate the whole app's
@@ -58,6 +60,8 @@
   --chart-3: #d9a441;
   --chart-4: #a78bd0;
   --chart-5: #d98a6a;
+  --chart-6: #6f9fd0;
+  --chart-7: #a89b90;
 
   --shadow: none;
 

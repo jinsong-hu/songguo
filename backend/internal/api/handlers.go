@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/songguo/songguo/internal/calls"
+	"github.com/songguo/songguo/internal/compose"
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/store"
 )
@@ -644,6 +645,77 @@ func (a *api) sessionData(id string) (sessionView, error) {
 		Agents:       buildAgentTree(entries),
 		Entries:      entViews,
 	}, nil
+}
+
+// handleContextComposition returns the aggregated context-window decomposition
+// over a window (defaults to the last 30 days, like the overview).
+func (a *api) handleContextComposition(w http.ResponseWriter, r *http.Request) {
+	now := a.now().UTC()
+	since := now.AddDate(0, 0, -30)
+	until := now
+	if v, ok := parseUnixTime(r, "since"); ok {
+		since = *v
+	}
+	if v, ok := parseUnixTime(r, "until"); ok {
+		until = *v
+	}
+
+	agg, err := a.store.AggregateComposition(&since, &until)
+	if err != nil {
+		a.writeDataErr(w, "context composition", err)
+		return
+	}
+	sources := agg.Sources
+	if sources == nil {
+		sources = []compose.Source{}
+	}
+	writeJSON(w, http.StatusOK, contextCompositionView{
+		Range:    rangeView{Since: since.Unix(), Until: until.Unix()},
+		Requests: agg.Requests,
+		AvgTotal: agg.AvgTotal,
+		Sources:  sources,
+	})
+}
+
+// handleSessionContext returns one session's per-turn context composition, the
+// latest turn's full snapshot, and a (currently empty) dwell list.
+func (a *api) handleSessionContext(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	rows, err := a.store.SessionComposition(id)
+	if err != nil {
+		a.writeDataErr(w, "session context", err)
+		return
+	}
+
+	turns := make([]contextTurnView, 0, len(rows))
+	snapshot := []compose.Source{}
+	for i, row := range rows {
+		srcMap := make(map[string]int64, len(row.C.Sources))
+		for _, s := range row.C.Sources {
+			srcMap[s.Key] = s.Tokens
+		}
+		turns = append(turns, contextTurnView{
+			Seq:     i,
+			TS:      row.TS.UTC().Format(time.RFC3339),
+			AgentID: row.AgentID,
+			Total:   row.C.Total,
+			Cached:  row.C.Cached,
+			Sources: srcMap,
+		})
+		if i == len(rows)-1 {
+			snapshot = row.C.Sources
+			if snapshot == nil {
+				snapshot = []compose.Source{}
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, sessionContextView{
+		SessionID: id,
+		Turns:     turns,
+		Snapshot:  snapshot,
+		Dwell:     []dwellBlockView{},
+	})
 }
 
 // buildAgentTree folds a session's calls by agent id into a forest, nesting each

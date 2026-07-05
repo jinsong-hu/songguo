@@ -51,6 +51,7 @@ import (
 	"time"
 
 	"github.com/songguo/songguo/internal/calls"
+	"github.com/songguo/songguo/internal/compose"
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/meter"
 	"github.com/songguo/songguo/internal/parse"
@@ -768,6 +769,23 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	if err != nil {
 		h.logger.Error("call append failed", "err", err, "vendor", t.Vendor.Name, "model", model)
 		return
+	}
+
+	// Context-window composition: read-only sniff of the already-buffered request
+	// body to estimate how the official input-token count decomposes across
+	// sources (system, tool schemas, tool results, ...). This measures BYTES for
+	// ratios only and re-anchors every subtotal to the vendor's official usage —
+	// it never counts tokens itself and never touches the bytes (same category as
+	// reading `model` or metering `usage`). It runs after the client response is
+	// already sent, so it adds no client latency, and is NOT gated by capture.
+	// Any failure is logged and never surfaced to the client.
+	if modality == calls.ModalityChat && rw.matched && ext.Norm.InputTokens > 0 {
+		if comp, ok := compose.Compose(rw.wire.Name, reqBody,
+			int64(ext.Norm.InputTokens), int64(ext.Norm.CachedInputTokens)); ok {
+			if err := h.store.SaveComposition(id, comp); err != nil {
+				h.logger.Error("save composition failed", "err", err, "call_id", id)
+			}
+		}
 	}
 
 	if capture {

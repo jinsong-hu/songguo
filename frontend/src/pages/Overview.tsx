@@ -17,6 +17,7 @@ import {
 import { Activity, Coins, DollarSign, ShieldCheck, Users } from 'lucide-react';
 import { api } from '../api/client';
 import type { Bucket, BreakdownRow } from '../api/types';
+import { ContextSunburst } from '../components/ContextSunburst';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
 import { Skeleton } from '../components/Skeleton';
@@ -80,6 +81,7 @@ export function OverviewPage() {
   const byVendor = useFetch(() => api.breakdown('vendor', since, until), [since, until], opts);
   const byUser = useFetch(() => api.breakdown('user', since, until), [since, until], opts);
   const byModality = useFetch(() => api.breakdown('modality', since, until), [since, until], opts);
+  const composition = useFetch(() => api.contextComposition(since, until), [since, until], opts);
   const errs = useFetch(() => api.errors(since, until), [since, until], opts);
 
   const ov = overview.data;
@@ -406,6 +408,14 @@ export function OverviewPage() {
             </ChartContainer>
           </Frame>
         </Panel>
+      </div>
+
+      {/* Context distribution */}
+      <SectionTitle name="Context distribution" hint="Where the average context window goes" />
+      <div className={`card ${styles.panel}`}>
+        <Frame r={composition} height="" empty={(composition.data?.sources.length ?? 0) === 0}>
+          {composition.data ? <ContextSunburst data={composition.data} /> : null}
+        </Frame>
       </div>
 
       {/* Reliability */}

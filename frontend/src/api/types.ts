@@ -209,6 +209,66 @@ export interface SessionDetail {
   entries: CallEntry[];
 }
 
+// --- Context distribution (where the context window goes) ---
+
+/** A producer sub-slice of a source bucket (e.g. Read under tool results). */
+export interface ProducerSlice {
+  /** e.g. "read" | "bash" | "grep" | "mcp:chrome" | "task" | "skill" | "builtin" | "claude_md". */
+  key: string;
+  tokens: number;
+}
+
+/** One top-level source bucket of the context window. */
+export interface SourceSlice {
+  /** "tool_results" | "tool_schemas" | "system" | "reasoning" | "actions" | "user" | "attachments". */
+  key: string;
+  tokens: number;
+  /** Portion of this slice served from cache (cache_read) — for the cache cross-cut. */
+  cached: number;
+  /** Producer drill-down; present for tool_results and tool_schemas. */
+  children?: ProducerSlice[];
+}
+
+/** GET /api/context/composition: aggregated window composition over a range. */
+export interface ContextComposition {
+  range: Range;
+  /** Requests contributing to the aggregate. */
+  requests: number;
+  /** Mean full-window tokens (input + cache_read + cache_creation) per request. */
+  avg_total: number;
+  sources: SourceSlice[];
+}
+
+/** Per-turn context snapshot for the session growth chart. */
+export interface ContextTurn {
+  seq: number;
+  ts: string;
+  agent_id: string;
+  total: number;
+  cached: number;
+  /** Tokens per source key. */
+  sources: Record<string, number>;
+}
+
+/** A resident block ranked by dwell (tokens × turns resident). */
+export interface DwellBlock {
+  label: string;
+  producer: string;
+  tokens: number;
+  turns: number;
+  dwell: number;
+}
+
+/** GET /api/sessions/{id}/context: growth series, snapshot, dwell. */
+export interface SessionContext {
+  session_id: string;
+  turns: ContextTurn[];
+  /** Latest-window composition tree (snapshot). */
+  snapshot: SourceSlice[];
+  /** Top resident blocks by dwell (empty until lineage tracking lands). */
+  dwell: DwellBlock[];
+}
+
 export interface User {
   id: string;
   name: string;

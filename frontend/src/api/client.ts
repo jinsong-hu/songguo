@@ -6,6 +6,7 @@ import type {
   CallEntry,
   CallTrace,
   Catalog,
+  ContextComposition,
   CreateProviderBody,
   CreateUserBody,
   ErrorBreakdown,
@@ -17,6 +18,7 @@ import type {
   PricingRow,
   Provider,
   Service,
+  SessionContext,
   SessionDetail,
   Settings,
   User,
@@ -172,6 +174,14 @@ export const api = {
 
   /** Fetch one session's rollups, agent tree, and calls. 404 if absent. */
   session: (id: string) => request<SessionDetail>(`/sessions/${encodeURIComponent(id)}`),
+
+  /** Aggregated context-window composition over a range (Overview sunburst). */
+  contextComposition: (since: number, until: number) =>
+    request<ContextComposition>(`/context/composition${qs({ since, until })}`),
+
+  /** Per-turn context growth, snapshot, and dwell for one session. */
+  sessionContext: (id: string) =>
+    request<SessionContext>(`/sessions/${encodeURIComponent(id)}/context`),
 
   /** Fetch the captured request/response trace for a call. 404 if none. */
   trace: (id: number) => request<CallTrace>(`/calls/${id}/trace`),
