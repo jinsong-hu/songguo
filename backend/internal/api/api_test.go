@@ -944,3 +944,54 @@ func approxF(a, b float64) bool {
 	}
 	return d < 1e-9
 }
+
+// TestCreateUserIdempotentAdopt covers the idempotent create path: a same-name
+// request with idempotent=true adopts the existing user (same id + key, no
+// duplicate) and updates its budget, while the default path still creates a
+// duplicate.
+func TestCreateUserIdempotentAdopt(t *testing.T) {
+	s := newTestStore(t)
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
+
+	rec := do(h, "POST", "/api/users", "secret", strings.NewReader(`{"name":"hi-standard-x-abc","budget":10.0}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	var first userView
+	decodeBody(t, rec, &first)
+
+	// Idempotent same-name create → adopt: identical id + key, budget reconciled.
+	rec = do(h, "POST", "/api/users", "secret", strings.NewReader(`{"name":"hi-standard-x-abc","budget":25.0,"idempotent":true}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("adopt: %d %s", rec.Code, rec.Body.String())
+	}
+	var adopted userView
+	decodeBody(t, rec, &adopted)
+	if adopted.ID != first.ID {
+		t.Errorf("adopt id = %q, want %q (must not create a duplicate)", adopted.ID, first.ID)
+	}
+	if adopted.Key == "" || adopted.Key != first.Key {
+		t.Errorf("adopt key = %q, want unchanged %q (no rotation)", adopted.Key, first.Key)
+	}
+	if adopted.Budget == nil || *adopted.Budget != 25.0 {
+		t.Errorf("adopt budget = %v, want 25 (updated)", adopted.Budget)
+	}
+
+	rec = do(h, "GET", "/api/users", "secret", nil)
+	var list []userView
+	decodeBody(t, rec, &list)
+	if len(list) != 1 {
+		t.Fatalf("after adopt, users = %d, want 1 (no duplicate)", len(list))
+	}
+
+	// Default (non-idempotent) same-name create still makes a second user.
+	rec = do(h, "POST", "/api/users", "secret", strings.NewReader(`{"name":"hi-standard-x-abc","budget":5.0}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("dup create: %d", rec.Code)
+	}
+	rec = do(h, "GET", "/api/users", "secret", nil)
+	decodeBody(t, rec, &list)
+	if len(list) != 2 {
+		t.Fatalf("after non-idempotent create, users = %d, want 2", len(list))
+	}
+}

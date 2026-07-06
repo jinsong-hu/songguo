@@ -912,6 +912,12 @@ type createUserReq struct {
 	Budget *float64  `json:"budget,omitempty"`
 	Scope  *[]string `json:"scope,omitempty"`
 	RPM    *int      `json:"rpm,omitempty"`
+	// Idempotent: when true, if a non-revoked user with this name already exists,
+	// return it (with its plaintext key) and update its budget to the requested
+	// value, instead of creating a duplicate. Lets a caller that lost its local
+	// record — or a second instance sharing this gateway — re-adopt the existing
+	// token rather than mint another with the same name.
+	Idempotent bool `json:"idempotent,omitempty"`
 }
 
 // handleCreateUser creates a user and returns it once with the plaintext key.
@@ -930,10 +936,23 @@ func (a *api) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // createUserData creates a user, returning the view with the plaintext key set
-// (the only time it is ever exposed). A missing name is a *apiError (400).
+// (the only time it is ever exposed). A missing name is a *apiError (400). When
+// req.Idempotent is set and a non-revoked user with the same name already exists,
+// it adopts that user (returning its key) and updates its budget, instead of
+// minting a duplicate.
 func (a *api) createUserData(req createUserReq) (userView, error) {
 	if req.Name == "" {
 		return userView{}, badRequestErr("name is required")
+	}
+	if req.Idempotent {
+		existing, err := a.store.GetUserByName(req.Name)
+		if err == nil {
+			return a.adoptExistingUser(existing, req)
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			return userView{}, err
+		}
+		// Not found → fall through and create it.
 	}
 	nu := store.NewUser{Name: req.Name, Budget: req.Budget}
 	if req.Scope != nil {
@@ -950,6 +969,34 @@ func (a *api) createUserData(req createUserReq) (userView, error) {
 	v := newUserView(usr, 0)
 	v.Key = plaintext
 	return v, nil
+}
+
+// adoptExistingUser returns an existing user for an idempotent create — its view
+// carries the plaintext key (from KeyFull) so the caller can reuse the token —
+// after updating its budget to the requested value if it changed. Only budget is
+// reconciled; the token id/key are untouched (no rotation).
+func (a *api) adoptExistingUser(u store.User, req createUserReq) (userView, error) {
+	if req.Budget != nil && !sameFloatPtr(u.Budget, req.Budget) {
+		updated, err := a.store.UpdateUser(u.ID, store.UserUpdate{Budget: req.Budget})
+		if err != nil {
+			return userView{}, err
+		}
+		u = updated
+	}
+	spent, err := a.store.SpendByUser(u.ID, nil)
+	if err != nil {
+		return userView{}, err
+	}
+	return newUserView(u, spent), nil // newUserView carries KeyFull as Key
+}
+
+// sameFloatPtr reports whether two optional floats are equal (both nil, or both
+// set to the same value).
+func sameFloatPtr(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // patchUserReq distinguishes "omitted" from "present" for each field via

@@ -223,6 +223,22 @@ func (s *Store) GetUserByKey(plaintext string) (User, error) {
 	return u, nil
 }
 
+// GetUserByName returns the most recent active (non-revoked) user with the given
+// name, including its plaintext key (KeyFull). Missing yields ErrNotFound. Used by
+// the idempotent create path to adopt an existing token instead of minting a
+// duplicate with the same name.
+func (s *Store) GetUserByName(name string) (User, error) {
+	row := s.db.QueryRow(userSelect+` WHERE name = ? AND revoked_at IS NULL ORDER BY created_at DESC, id LIMIT 1`, name)
+	u, err := scanUser(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, fmt.Errorf("store: user by name: %w", ErrNotFound)
+	}
+	if err != nil {
+		return User{}, fmt.Errorf("store: get user by name: %w", err)
+	}
+	return u, nil
+}
+
 // ListUsers returns all users, newest first.
 func (s *Store) ListUsers() ([]User, error) {
 	rows, err := s.db.Query(userSelect + ` ORDER BY created_at DESC, id`)

@@ -837,6 +837,7 @@ components:
         scope: { type: array, items: { type: string }, description: "Allowed model strings." }
         rpm: { type: integer }
         capture: { type: boolean }
+        idempotent: { type: boolean, description: "If true and a non-revoked user with this name exists, adopt it (returning its key) and update its budget instead of creating a duplicate." }
     PatchUser:
       type: object
       properties:
