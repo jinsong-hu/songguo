@@ -29,9 +29,9 @@ import (
 type mockUpstream struct {
 	mu sync.Mutex
 
-	forceStatus int    // if non-zero, every request returns this status
-	lastAuth    string // Authorization header observed on the last request
-	lastBody    []byte // request body observed on the last request
+	forceStatus int         // if non-zero, every request returns this status
+	lastAuth    string      // Authorization header observed on the last request
+	lastBody    []byte      // request body observed on the last request
 	lastHeaders http.Header // all headers observed on the last request
 	calls       int
 }
@@ -1669,6 +1669,91 @@ vendors:
 	if up.lastHeaders.Get("X-Claude-Code-Session-Id") != "sess-42" {
 		t.Errorf("upstream session header = %q, want sess-42 (forwarded verbatim)",
 			up.lastHeaders.Get("X-Claude-Code-Session-Id"))
+	}
+}
+
+func TestCapturesCodexSessionAttribution(t *testing.T) {
+	up := &mockUpstream{}
+	mock := httptest.NewServer(up.handler())
+	defer mock.Close()
+
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: vendorA
+    origin: %s/v1
+    served_models: [gpt-4o]
+    priority: 1
+    wires: [openai/chat]
+    credential: {id: credA, api_key: vendor-secret-key}
+    prices:
+      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+`, mock.URL)
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	req, err := http.NewRequest(http.MethodPost, env.server.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Originator", "codex-tui")
+	req.Header.Set("Session-Id", "codex-session-42")
+	req.Header.Set("Thread-Id", "codex-thread-99")
+	req.Header.Set("X-Codex-Turn-Metadata", `{"session_id":"codex-session-42","thread_id":"codex-thread-99","turn_id":"turn-1"}`)
+	resp, err := env.client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	entries, err := st.QueryCalls(storeFilterAll())
+	if err != nil {
+		t.Fatalf("QueryCalls: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if entries[0].SessionID != "codex-session-42" {
+		t.Errorf("SessionID = %q, want codex-session-42", entries[0].SessionID)
+	}
+	if entries[0].AgentID != "" || entries[0].ParentAgentID != "" {
+		t.Errorf("Codex agent attribution = %q/%q, want empty/empty",
+			entries[0].AgentID, entries[0].ParentAgentID)
+	}
+
+	if up.lastHeaders.Get("Session-Id") != "codex-session-42" {
+		t.Errorf("upstream Session-Id = %q, want codex-session-42 (forwarded verbatim)",
+			up.lastHeaders.Get("Session-Id"))
+	}
+}
+
+func TestExtractAttributionCodexFallbacksAndGuards(t *testing.T) {
+	h := http.Header{}
+	h.Set("Originator", "codex-tui")
+	h.Set("X-Codex-Turn-Metadata", `{"session_id":"meta-session","thread_id":"meta-thread"}`)
+	if got := extractAttribution(h); got.session != "meta-session" {
+		t.Fatalf("metadata session = %q, want meta-session", got.session)
+	}
+
+	h = http.Header{}
+	h.Set("User-Agent", "codex-tui/0.142.5")
+	h.Set("Thread-Id", "thread-only")
+	if got := extractAttribution(h); got.session != "thread-only" {
+		t.Fatalf("thread fallback session = %q, want thread-only", got.session)
+	}
+
+	h = http.Header{}
+	h.Set("Session-Id", "generic-session")
+	if got := extractAttribution(h); got.session != "" {
+		t.Fatalf("generic Session-Id was captured as %q, want empty", got.session)
 	}
 }
 

@@ -9,9 +9,9 @@ import (
 	"github.com/songguo/songguo/internal/calls"
 )
 
-// FeedRow is one row of the activity feed: either an aggregated Claude Code
+// FeedRow is one row of the activity feed: either an aggregated coding-agent
 // session (Kind == "session") or a standalone request that carried no session id
-// (Kind == "request"). Calls sharing an X-Claude-Code-Session-Id collapse into a
+// (Kind == "request"). Calls sharing a captured session id collapse into a
 // single session row; every other call is its own request row.
 type FeedRow struct {
 	Kind         string // "session" | "request"

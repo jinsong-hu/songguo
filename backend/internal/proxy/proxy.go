@@ -77,12 +77,12 @@ var hopByHopHeaders = map[string]struct{}{
 
 // Deps are the collaborators a Handler needs.
 type Deps struct {
-	Snapshot     func() *config.Snapshot
-	Store        *store.Store
-	Router       *router.Router
-	Logger       *slog.Logger
-	HTTPClient   *http.Client     // optional; default constructed if nil
-	Now          func() time.Time // optional; defaults to time.Now (for tests)
+	Snapshot   func() *config.Snapshot
+	Store      *store.Store
+	Router     *router.Router
+	Logger     *slog.Logger
+	HTTPClient *http.Client     // optional; default constructed if nil
+	Now        func() time.Time // optional; defaults to time.Now (for tests)
 }
 
 // handler is the concrete http.Handler returned by NewHandler.
@@ -294,7 +294,7 @@ type route struct {
 	upstreamURL func(router.Target) string
 	wires       map[string]resolvedWire // keyed by vendor name
 	tags        map[string]string       // call tags (header + body metadata)
-	attr        attribution             // Claude Code attribution ids
+	attr        attribution             // agent-session attribution ids
 }
 
 // resolvedWire is the metering plan for one candidate vendor: the matched wire
@@ -745,23 +745,23 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	}
 
 	id, err := h.store.AppendCall(calls.Entry{
-		TS:           h.now(),
-		UserID:       userID,
-		Model:        model,
-		Modality:     modality,
-		Vendor:       t.Vendor.Name,
-		CredentialID: t.Credential.ID,
-		Wire:         wireName,
-		Confidence:   ext.Confidence,
-		Status:       resp.StatusCode,
-		Usage:        ext.Raw,
-		InputTokens:  ext.Norm.InputTokens,
-		OutputTokens: ext.Norm.OutputTokens,
-		CachedTokens: ext.Norm.CachedInputTokens,
-		Cost:         cost,
-		LatencyMS:    latency,
-		Stream:       stream,
-		Tags:         tags,
+		TS:            h.now(),
+		UserID:        userID,
+		Model:         model,
+		Modality:      modality,
+		Vendor:        t.Vendor.Name,
+		CredentialID:  t.Credential.ID,
+		Wire:          wireName,
+		Confidence:    ext.Confidence,
+		Status:        resp.StatusCode,
+		Usage:         ext.Raw,
+		InputTokens:   ext.Norm.InputTokens,
+		OutputTokens:  ext.Norm.OutputTokens,
+		CachedTokens:  ext.Norm.CachedInputTokens,
+		Cost:          cost,
+		LatencyMS:     latency,
+		Stream:        stream,
+		Tags:          tags,
 		SessionID:     attr.session,
 		AgentID:       attr.agent,
 		ParentAgentID: attr.parentAgent,
@@ -987,24 +987,67 @@ func contains(s []string, v string) bool {
 	return false
 }
 
-// attribution carries the Claude Code request-attribution ids sniffed from the
-// request headers (read-only; the bytes are forwarded untouched). All fields are
-// "" for non-Claude-Code traffic.
+// attribution carries request-attribution ids sniffed from known coding-agent
+// headers (read-only; the bytes are forwarded untouched). All fields are "" for
+// non-agent traffic.
 type attribution struct {
 	session     string
 	agent       string
 	parentAgent string
 }
 
-// extractAttribution reads the Claude Code attribution headers. These identify
-// the client session and the main-loop→subagent that issued the call, letting
-// the ledger aggregate a run's calls and reconstruct its agent tree.
+// extractAttribution reads coding-agent attribution headers. Claude Code
+// exposes session + agent tree headers; Codex exposes a stable Session-Id (and
+// also repeats it in X-Codex-Turn-Metadata). SessionID lets the ledger aggregate
+// a run's calls. AgentID + ParentAgentID reconstruct the main-loop→subagent tree
+// when the client provides that information.
 func extractAttribution(h http.Header) attribution {
-	return attribution{
-		session:     h.Get("X-Claude-Code-Session-Id"),
-		agent:       h.Get("X-Claude-Code-Agent-Id"),
-		parentAgent: h.Get("X-Claude-Code-Parent-Agent-Id"),
+	attr := attribution{
+		session:     strings.TrimSpace(h.Get("X-Claude-Code-Session-Id")),
+		agent:       strings.TrimSpace(h.Get("X-Claude-Code-Agent-Id")),
+		parentAgent: strings.TrimSpace(h.Get("X-Claude-Code-Parent-Agent-Id")),
 	}
+	if attr.session != "" || !isCodexRequest(h) {
+		return attr
+	}
+
+	if sid := strings.TrimSpace(h.Get("Session-Id")); sid != "" {
+		attr.session = sid
+		return attr
+	}
+	if sid := codexMetadataSessionID(h.Get("X-Codex-Turn-Metadata")); sid != "" {
+		attr.session = sid
+		return attr
+	}
+	// Last resort for older/future Codex clients that carry only a thread id.
+	attr.session = strings.TrimSpace(h.Get("Thread-Id"))
+	return attr
+}
+
+func isCodexRequest(h http.Header) bool {
+	originator := strings.ToLower(strings.TrimSpace(h.Get("Originator")))
+	ua := strings.ToLower(h.Get("User-Agent"))
+	return strings.HasPrefix(originator, "codex") ||
+		strings.Contains(ua, "codex") ||
+		h.Get("X-Codex-Turn-Metadata") != "" ||
+		h.Get("X-Codex-Window-Id") != ""
+}
+
+func codexMetadataSessionID(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	var meta struct {
+		SessionID string `json:"session_id"`
+		ThreadID  string `json:"thread_id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &meta); err != nil {
+		return ""
+	}
+	if sid := strings.TrimSpace(meta.SessionID); sid != "" {
+		return sid
+	}
+	return strings.TrimSpace(meta.ThreadID)
 }
 
 // extractTags builds the call tags from, in order of precedence, the

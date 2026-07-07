@@ -7,8 +7,8 @@ import (
 	"github.com/songguo/songguo/internal/calls"
 )
 
-// TestAppendCallRoundTripsAttribution checks the Claude Code attribution columns
-// persist and read back through AppendCall/QueryCalls/GetCall.
+// TestAppendCallRoundTripsAttribution checks the coding-agent attribution
+// columns persist and read back through AppendCall/QueryCalls/GetCall.
 func TestAppendCallRoundTripsAttribution(t *testing.T) {
 	s := openTestStore(t)
 

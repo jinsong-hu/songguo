@@ -38,7 +38,7 @@ export interface Overview {
 export type Bucket = 'hour' | 'day';
 
 /**
- * Aggregate stats over Claude Code sessions in a window (GET /api/sessions/overview).
+ * Aggregate stats over coding-agent sessions in a window (GET /api/sessions/overview).
  * Outcome (completed/errored/interrupted) is inferred from each session's last
  * call — an interaction-level signal off the ledger, not a judgment on the
  * coding task. Durations are in seconds.
@@ -141,7 +141,7 @@ export interface CallEntry {
   latency_ms: number;
   stream: boolean;
   tags: Record<string, string>;
-  /** Claude Code attribution (empty for non-Claude-Code traffic). */
+  /** Coding-agent attribution (empty for ordinary API traffic). */
   session_id: string;
   agent_id: string;
   parent_agent_id: string;
@@ -173,13 +173,13 @@ export interface CallsPage {
 }
 
 /**
- * One row of the activity feed: either an aggregated Claude Code session
+ * One row of the activity feed: either an aggregated coding-agent session
  * (kind === "session") or a standalone request (kind === "request"). Fields not
  * relevant to a kind are absent/zero.
  */
 export interface FeedRow {
   kind: 'session' | 'request';
-  /** Set for session rows — the X-Claude-Code-Session-Id to link to. */
+  /** Set for session rows — captured coding-agent session id to link to. */
   session_id?: string;
   /** Set for request rows — the call id to link to. */
   request_id?: number;

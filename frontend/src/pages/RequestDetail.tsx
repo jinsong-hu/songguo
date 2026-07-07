@@ -49,7 +49,7 @@ export function RequestDetailPage() {
           {data.session_id && (
             <div className={`card ${styles.banner}`}>
               <GitBranch size={15} />
-              <span>Part of a Claude Code session.</span>
+              <span>Part of an agent session.</span>
               <Link to={`/sessions/${encodeURIComponent(data.session_id)}`} className="btn btn-sm">
                 View session
               </Link>

@@ -158,6 +158,21 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/FeedPage" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/sessions/overview:
+    get:
+      tags: [calls]
+      summary: Aggregate coding-agent session stats over a window
+      operationId: getSessionsOverview
+      parameters:
+        - $ref: "#/components/parameters/Since"
+        - $ref: "#/components/parameters/Until"
+      responses:
+        "200":
+          description: Session aggregate stats
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionStats" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /api/calls:
     get:
       tags: [calls]
@@ -730,9 +745,9 @@ components:
         latency_ms: { type: integer, format: int64 }
         stream: { type: boolean }
         tags: { type: object, additionalProperties: { type: string } }
-        session_id: { type: string, description: "X-Claude-Code-Session-Id (empty for non-Claude-Code traffic)" }
-        agent_id: { type: string, description: "X-Claude-Code-Agent-Id" }
-        parent_agent_id: { type: string, description: "X-Claude-Code-Parent-Agent-Id" }
+        session_id: { type: string, description: "Captured coding-agent session id, e.g. X-Claude-Code-Session-Id or Codex Session-Id (empty for ordinary API traffic)" }
+        agent_id: { type: string, description: "Captured coding-agent id when available, e.g. X-Claude-Code-Agent-Id" }
+        parent_agent_id: { type: string, description: "Captured parent agent id when available, e.g. X-Claude-Code-Parent-Agent-Id" }
         has_trace: { type: boolean }
     CallsPage:
       type: object
@@ -772,6 +787,27 @@ components:
         total: { type: integer }
         limit: { type: integer }
         offset: { type: integer }
+    SessionStats:
+      type: object
+      description: Aggregate coding-agent session stats over a window.
+      properties:
+        range: { $ref: "#/components/schemas/Range" }
+        sessions: { type: integer }
+        completed: { type: integer }
+        errored: { type: integer }
+        interrupted: { type: integer }
+        with_subagents: { type: integer }
+        total_turns: { type: integer }
+        total_tokens: { type: number }
+        avg_turns: { type: number }
+        avg_tokens: { type: number }
+        avg_duration: { type: number, description: Seconds }
+        turns_p50: { type: integer, format: int64 }
+        turns_p95: { type: integer, format: int64 }
+        tokens_p50: { type: integer, format: int64 }
+        tokens_p95: { type: integer, format: int64 }
+        duration_p50: { type: integer, format: int64, description: Seconds }
+        duration_p95: { type: integer, format: int64, description: Seconds }
     AgentNode:
       type: object
       description: One node in a session's agent tree; rollups cover the whole subtree.

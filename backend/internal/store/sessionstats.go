@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-// SessionStats summarizes Claude Code sessions — calls sharing a non-empty
-// X-Claude-Code-Session-Id — over a time window. Non-session traffic (calls with
-// an empty session id) is ignored entirely; this is a Claude-Code-only view.
+// SessionStats summarizes coding-agent sessions — calls sharing a non-empty
+// captured session id — over a time window. Non-session traffic (calls with an
+// empty session id) is ignored entirely.
 //
 // Outcome is inferred from each session's LAST call by timestamp. It is a purely
 // interaction-level signal read off the ledger — NOT a judgment about whether the
@@ -28,7 +28,8 @@ type SessionStats struct {
 	Interrupted int
 
 	// WithSubagents counts sessions that spawned at least one subagent (any call
-	// carried a non-empty parent_agent_id) — a Claude-Code fan-out signal.
+	// carried a non-empty parent_agent_id) when the client exposes agent-tree
+	// headers.
 	WithSubagents int
 
 	// Totals and means for headline cards.
@@ -59,14 +60,14 @@ type sessionAgg struct {
 	hasSubagent bool
 }
 
-// SessionStats aggregates Claude Code sessions over the optional [since, until)
+// SessionStats aggregates coding-agent sessions over the optional [since, until)
 // window. It streams the window's session-bearing calls ordered by session then
 // time, folds them into per-session aggregates in Go (mirroring OverviewStats),
 // then derives outcomes, totals, and percentiles.
 func (s *Store) SessionStats(since, until *time.Time) (SessionStats, error) {
 	clause, args := windowClause(since, until)
-	// Restrict to Claude Code traffic. windowClause emits a leading " WHERE ..."
-	// or "", so splice the session-id predicate in accordingly.
+	// Restrict to session-bearing traffic. windowClause emits a leading
+	// " WHERE ..." or "", so splice the session-id predicate in accordingly.
 	if clause == "" {
 		clause = " WHERE session_id != ''"
 	} else {

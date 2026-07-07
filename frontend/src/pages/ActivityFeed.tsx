@@ -29,7 +29,7 @@ const STATUS_GROUPS: { value: StatusGroup; label: string }[] = [
 
 /**
  * ActivityFeed is the Overview's recent-activity table. Each row is either an
- * aggregated Claude Code session or a standalone request; clicking a row opens
+ * aggregated coding-agent session or a standalone request; clicking a row opens
  * the matching detail page. It replaces the old inline-expand calls table — the
  * captured trace now lives on the request page.
  */
@@ -237,7 +237,7 @@ function FeedRowView({ row, onOpen }: { row: FeedRow; onOpen: () => void }) {
       <td>
         {isSession ? (
           <span className={styles.timeCell}>
-            <span className="chip" title="Claude Code session">
+            <span className="chip" title="Agent session">
               <Layers size={11} style={{ marginRight: 4 }} />
               session
             </span>

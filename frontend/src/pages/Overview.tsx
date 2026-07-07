@@ -499,7 +499,7 @@ export function OverviewPage() {
       </div>
 
       {/* Sessions */}
-      <SectionTitle name="Sessions" hint="Claude Code runs — outcome inferred from each session's last call" />
+      <SectionTitle name="Sessions" hint="Agent runs — outcome inferred from each session's last call" />
       <div className={styles.kpiGrid}>
         <Kpi
           icon={<GitBranch size={14} />}

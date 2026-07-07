@@ -49,8 +49,8 @@ func TestSessionStats(t *testing.T) {
 	if st.WithSubagents != 1 {
 		t.Errorf("WithSubagents = %d, want 1", st.WithSubagents)
 	}
-	if st.TotalTurns != 5 {
-		t.Errorf("TotalTurns = %d, want 5 (3+1+2, standalone excluded)", st.TotalTurns)
+	if st.TotalTurns != 6 {
+		t.Errorf("TotalTurns = %d, want 6 (3+1+2, standalone excluded)", st.TotalTurns)
 	}
 	// Tokens: sess-done 45, sess-cut 4, sess-err 6 → 55; standalone (198) excluded.
 	if st.TotalTokens != 55 {
@@ -65,8 +65,8 @@ func TestSessionStats(t *testing.T) {
 	if st.TurnsP50 != 2 || st.TurnsP95 != 3 {
 		t.Errorf("turns p50/p95 = %d/%d, want 2/3", st.TurnsP50, st.TurnsP95)
 	}
-	if st.AvgTurns != 5.0/3.0 {
-		t.Errorf("AvgTurns = %v, want %v", st.AvgTurns, 5.0/3.0)
+	if st.AvgTurns != 2.0 {
+		t.Errorf("AvgTurns = %v, want 2", st.AvgTurns)
 	}
 }
 

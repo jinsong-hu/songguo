@@ -233,9 +233,10 @@ func (s *Store) migrate() error {
 		{"calls", "input_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"calls", "output_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"calls", "cached_tokens", "REAL NOT NULL DEFAULT 0"},
-		// Claude Code attribution headers, captured read-only so the ledger can be
-		// grouped by session and by the main-loop→subagent tree. Empty for
-		// non-Claude-Code traffic (and for rows written before these columns).
+		// Coding-agent attribution headers, captured read-only so the ledger can be
+		// grouped by session and by the main-loop→subagent tree when available.
+		// Empty for ordinary API traffic (and for rows written before these
+		// columns).
 		{"calls", "session_id", "TEXT NOT NULL DEFAULT ''"},
 		{"calls", "agent_id", "TEXT NOT NULL DEFAULT ''"},
 		{"calls", "parent_agent_id", "TEXT NOT NULL DEFAULT ''"},

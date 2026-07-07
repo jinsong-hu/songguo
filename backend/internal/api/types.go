@@ -78,7 +78,7 @@ type entryView struct {
 	LatencyMS    int64             `json:"latency_ms"`
 	Stream       bool              `json:"stream"`
 	Tags         map[string]string `json:"tags"`
-	// Claude Code attribution (empty for non-Claude-Code traffic).
+	// Coding-agent attribution (empty for ordinary API traffic).
 	SessionID     string `json:"session_id"`
 	AgentID       string `json:"agent_id"`
 	ParentAgentID string `json:"parent_agent_id"`
@@ -96,25 +96,25 @@ func newEntryView(e calls.Entry) entryView {
 		tags = map[string]string{}
 	}
 	return entryView{
-		ID:           e.ID,
-		TS:           e.TS.UTC().Format(time.RFC3339),
-		UserID:       e.UserID,
-		Model:        e.Model,
-		Modality:     string(e.Modality),
-		Vendor:       e.Vendor,
-		CredentialID: e.CredentialID,
-		Wire:         e.Wire,
-		Confidence:   string(e.Confidence),
-		Status:       e.Status,
-		Err:          e.Err,
-		Usage:        usage,
-		Cost:         e.Cost,
-		InputTokens:  e.InputTokens,
-		OutputTokens: e.OutputTokens,
-		CachedTokens: e.CachedTokens,
-		LatencyMS:    e.LatencyMS,
-		Stream:       e.Stream,
-		Tags:         tags,
+		ID:            e.ID,
+		TS:            e.TS.UTC().Format(time.RFC3339),
+		UserID:        e.UserID,
+		Model:         e.Model,
+		Modality:      string(e.Modality),
+		Vendor:        e.Vendor,
+		CredentialID:  e.CredentialID,
+		Wire:          e.Wire,
+		Confidence:    string(e.Confidence),
+		Status:        e.Status,
+		Err:           e.Err,
+		Usage:         usage,
+		Cost:          e.Cost,
+		InputTokens:   e.InputTokens,
+		OutputTokens:  e.OutputTokens,
+		CachedTokens:  e.CachedTokens,
+		LatencyMS:     e.LatencyMS,
+		Stream:        e.Stream,
+		Tags:          tags,
 		SessionID:     e.SessionID,
 		AgentID:       e.AgentID,
 		ParentAgentID: e.ParentAgentID,
@@ -161,7 +161,7 @@ type overviewView struct {
 }
 
 // sessionStatsView is the GET /api/sessions/overview response: aggregate stats
-// over Claude Code sessions in the window. Outcome (completed/errored/
+// over coding-agent sessions in the window. Outcome (completed/errored/
 // interrupted) is inferred from each session's last call — an interaction-level
 // signal off the ledger, not a judgment on the coding task itself.
 type sessionStatsView struct {

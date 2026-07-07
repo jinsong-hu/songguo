@@ -215,7 +215,7 @@ func (a *api) overviewData(since, until time.Time) (overviewView, error) {
 	}, nil
 }
 
-// handleSessionsOverview returns aggregate stats over Claude Code sessions in
+// handleSessionsOverview returns aggregate stats over coding-agent sessions in
 // the window (default last 30d): count, inferred outcomes, subagent fan-out, and
 // turns/tokens/duration totals and percentiles. It powers the Sessions section
 // of the overview dashboard.
@@ -532,7 +532,7 @@ func (a *api) callTraceData(id int64) (traceView, error) {
 	return newTraceView(p), nil
 }
 
-// handleFeed returns the activity feed: one row per Claude Code session
+// handleFeed returns the activity feed: one row per coding-agent session
 // (aggregated) or per standalone request, newest activity first.
 func (a *api) handleFeed(w http.ResponseWriter, r *http.Request) {
 	view, err := a.feedData(callFilterFromQuery(r, defaultCallsAPILimit, maxCallsAPILimit))
@@ -760,9 +760,10 @@ func (a *api) handleSessionContext(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildAgentTree folds a session's calls by agent id into a forest, nesting each
-// agent under its parent (X-Claude-Code-Parent-Agent-Id). A root is an agent
-// whose parent is empty or absent from the session. Every node's rollups cover
-// its whole subtree (itself plus descendants). Agents appear in first-seen order.
+// agent under its parent when parent-agent attribution is available. A root is
+// an agent whose parent is empty or absent from the session. Every node's
+// rollups cover its whole subtree (itself plus descendants). Agents appear in
+// first-seen order.
 func buildAgentTree(entries []calls.Entry) []agentNodeView {
 	type agg struct {
 		calls         int
