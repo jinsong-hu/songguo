@@ -1,7 +1,11 @@
 package api
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/base64"
+	"io"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -494,17 +498,46 @@ func newTraceSide(headers map[string]string, body []byte, contentType string) tr
 	if headers == nil {
 		headers = map[string]string{}
 	}
+	displayBody := body
+	if decoded, ok := decodeGzipBody(body, headers["Content-Encoding"]); ok {
+		displayBody = decoded
+	}
 	side := traceSideView{
 		Headers:     headers,
 		ContentType: contentType,
 	}
-	if utf8.Valid(body) {
-		side.Body = string(body)
+	if utf8.Valid(displayBody) {
+		side.Body = string(displayBody)
 	} else {
-		side.Body = base64.StdEncoding.EncodeToString(body)
+		side.Body = base64.StdEncoding.EncodeToString(displayBody)
 		side.BodyBase64 = true
 	}
 	return side
+}
+
+func decodeGzipBody(body []byte, contentEncoding string) ([]byte, bool) {
+	if len(body) == 0 || !traceHasGzipEncoding(contentEncoding) {
+		return nil, false
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return nil, false
+	}
+	defer zr.Close()
+	decoded, err := io.ReadAll(zr)
+	if err != nil {
+		return nil, false
+	}
+	return decoded, true
+}
+
+func traceHasGzipEncoding(contentEncoding string) bool {
+	for _, enc := range strings.Split(contentEncoding, ",") {
+		if strings.EqualFold(strings.TrimSpace(enc), "gzip") {
+			return true
+		}
+	}
+	return false
 }
 
 // maskKey returns a masked preview of an API key: first 3 + "…" + last 2 chars,

@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -315,6 +316,76 @@ vendors:
 	}
 	if r.Vendor != "vendorA" || r.Status != 200 || r.Model != "gpt-4o" {
 		t.Errorf("row = %+v", r)
+	}
+}
+
+func TestStreamingGzipResponseMetersUsage(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.WriteHeader(http.StatusOK)
+		zw := gzip.NewWriter(w)
+		_, _ = io.WriteString(zw, "event: response.output_text.delta\n")
+		_, _ = io.WriteString(zw, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n")
+		_, _ = io.WriteString(zw, "event: response.completed\n")
+		_, _ = io.WriteString(zw, "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":77,\"output_tokens\":9,\"input_tokens_details\":{\"cached_tokens\":50}}}}\n\n")
+		_ = zw.Close()
+	}))
+	defer up.Close()
+
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: vendorA
+    origin: %s/v1
+    served_models: [gpt-5.5]
+    priority: 1
+    wires: [openai/responses]
+    credential: {id: credA, api_key: vendor-secret-key}
+    prices:
+      gpt-5.5: { input: 1.00, output: 2.00, cached_input: 0.50, unit: per_1m_tokens }
+`, up.URL)
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	req, err := http.NewRequest(http.MethodPost, env.server.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-5.5","stream":true}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp, err := env.client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.Header.Get("Content-Encoding") != "gzip" {
+		t.Fatalf("content-encoding = %q, want gzip", resp.Header.Get("Content-Encoding"))
+	}
+	if len(body) < 2 || body[0] != 0x1f || body[1] != 0x8b {
+		t.Fatalf("client body was not forwarded as gzip: first bytes % x", body[:min(len(body), 4)])
+	}
+
+	rows := env.callRows(t)
+	if len(rows) != 1 {
+		t.Fatalf("call rows = %d, want 1", len(rows))
+	}
+	if rows[0].Confidence != string(calls.ConfidenceMeasured) {
+		t.Errorf("confidence = %q, want measured", rows[0].Confidence)
+	}
+	if got := rows[0].Usage["input_tokens"]; got != float64(77) {
+		t.Errorf("usage input_tokens = %v, want 77", got)
+	}
+	if got := rows[0].Usage["output_tokens"]; got != float64(9) {
+		t.Errorf("usage output_tokens = %v, want 9", got)
+	}
+	wantCost := 0.50*50/1e6 + 1.00*(77-50)/1e6 + 2.00*9/1e6
+	if !approxEqual(rows[0].Cost, wantCost) {
+		t.Errorf("cost = %v, want %v", rows[0].Cost, wantCost)
 	}
 }
 

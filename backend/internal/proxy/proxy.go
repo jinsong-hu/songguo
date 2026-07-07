@@ -38,6 +38,8 @@
 package proxy
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -701,8 +703,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		if rw.matched && rw.wire.NewScanner != nil {
 			scanner = rw.wire.NewScanner(rw.quirks)
 		}
-		respBody = h.streamBody(r.Context(), w, resp.Body, capture, scanner)
-		parseRespBody = respBody
+		respBody, parseRespBody = h.streamBody(r.Context(), w, resp.Body, capture, scanner, resp.Header.Get("Content-Encoding"))
 		if scanner != nil {
 			ext = scanner.Result()
 		} else {
@@ -711,9 +712,9 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	} else {
 		full := h.copyBody(w, resp.Body)
 		respBody = full
-		parseRespBody = full
+		parseRespBody = bodyForMeter(full, resp.Header.Get("Content-Encoding"), h.logger)
 		if rw.matched {
-			ext = rw.wire.Extract(full, rw.quirks)
+			ext = rw.wire.Extract(parseRespBody, rw.quirks)
 		} else {
 			ext = wire.Extraction{Confidence: calls.ConfidenceUnknown}
 		}
@@ -834,8 +835,10 @@ func (h *handler) savePayload(callID int64, r *http.Request, reqBody []byte,
 // given), and (when capture is on) an in-memory buffer, flushing after each
 // chunk so nothing is buffered for the client. It returns the captured body, or
 // nil when capture is off.
-func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.Reader, capture bool, scanner wire.StreamScanner) []byte {
+func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.Reader, capture bool, scanner wire.StreamScanner, contentEncoding string) ([]byte, []byte) {
 	flusher, _ := w.(http.Flusher)
+	scanWrite, scanFinish := meteringScannerWriter(scanner, contentEncoding, h.logger)
+	defer scanFinish()
 
 	var captured []byte
 	buf := make([]byte, 32*1024)
@@ -849,9 +852,7 @@ func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.
 			if _, werr := w.Write(chunk); werr != nil {
 				break
 			}
-			if scanner != nil {
-				_, _ = scanner.Write(chunk)
-			}
+			scanWrite(chunk)
 			if capture {
 				captured = append(captured, chunk...)
 			}
@@ -863,7 +864,88 @@ func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.
 			break
 		}
 	}
-	return captured
+	if !capture {
+		return nil, nil
+	}
+	return captured, bodyForMeter(captured, contentEncoding, h.logger)
+}
+
+func meteringScannerWriter(scanner wire.StreamScanner, contentEncoding string, logger *slog.Logger) (func([]byte), func()) {
+	if scanner == nil {
+		return func([]byte) {}, func() {}
+	}
+	if !hasGzipEncoding(contentEncoding) {
+		return func(chunk []byte) { _, _ = scanner.Write(chunk) }, func() {}
+	}
+
+	pr, pw := io.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer pr.Close()
+
+		zr, err := gzip.NewReader(pr)
+		if err != nil {
+			if logger != nil {
+				logger.Warn("gzip metering disabled", "err", err)
+			}
+			return
+		}
+		defer zr.Close()
+
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := zr.Read(buf)
+			if n > 0 {
+				_, _ = scanner.Write(buf[:n])
+			}
+			if err != nil {
+				if err != io.EOF && logger != nil {
+					logger.Warn("gzip metering read failed", "err", err)
+				}
+				return
+			}
+		}
+	}()
+
+	return func(chunk []byte) {
+			_, _ = pw.Write(chunk)
+		}, func() {
+			_ = pw.Close()
+			<-done
+		}
+}
+
+func bodyForMeter(body []byte, contentEncoding string, logger *slog.Logger) []byte {
+	if len(body) == 0 || !hasGzipEncoding(contentEncoding) {
+		return body
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		if logger != nil {
+			logger.Warn("gzip body decode failed", "err", err)
+		}
+		return body
+	}
+	defer zr.Close()
+
+	decoded, err := io.ReadAll(zr)
+	if err != nil {
+		if logger != nil {
+			logger.Warn("gzip body read failed", "err", err)
+		}
+		return body
+	}
+	return decoded
+}
+
+func hasGzipEncoding(contentEncoding string) bool {
+	for _, enc := range strings.Split(contentEncoding, ",") {
+		if strings.EqualFold(strings.TrimSpace(enc), "gzip") {
+			return true
+		}
+	}
+	return false
 }
 
 // copyBody reads the full non-streaming body and writes it to the client
