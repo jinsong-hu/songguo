@@ -18,6 +18,7 @@ import { Activity, Clock, Coins, DollarSign, GitBranch, MessageSquare, ShieldChe
 import { api } from '../api/client';
 import type { Bucket, BreakdownRow } from '../api/types';
 import { ContextSunburst } from '../components/ContextSunburst';
+import { InfoHint } from '../components/InfoHint';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
 import { Skeleton } from '../components/Skeleton';
@@ -413,7 +414,7 @@ export function OverviewPage() {
       </div>
 
       {/* Context distribution */}
-      <SectionTitle name="Context distribution" hint="Where the average context window goes" />
+      <SectionTitle name="Context distribution" hint="Where the average context window goes" info={<InfoHint />} />
       <div className={`card ${styles.panel}`}>
         <Frame r={composition} height="" empty={(composition.data?.sources.length ?? 0) === 0}>
           {composition.data ? <ContextSunburst data={composition.data} /> : null}
@@ -572,10 +573,13 @@ function Kpi({ icon, label, value, sub, loading, danger }: KpiProps) {
   );
 }
 
-function SectionTitle({ name, hint, control }: { name: string; hint?: string; control?: React.ReactNode }) {
+function SectionTitle({ name, hint, info, control }: { name: string; hint?: string; info?: React.ReactNode; control?: React.ReactNode }) {
   return (
     <div className={styles.sectionTitle}>
-      <span className={styles.sectionName}>{name}</span>
+      <span className={styles.sectionName}>
+        {name}
+        {info}
+      </span>
       {control ?? (hint ? <span className={styles.sectionHint}>{hint}</span> : null)}
     </div>
   );

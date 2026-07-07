@@ -4,9 +4,14 @@ go 1.26.4
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.5.0
+	github.com/pkoukk/tiktoken-go v0.1.7
+	github.com/pkoukk/tiktoken-go-loader v0.0.1
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.52.0
 )
+
+require github.com/dlclark/regexp2 v1.11.4 // indirect
+
 
 require (
 	github.com/coder/websocket v1.8.15 // indirect

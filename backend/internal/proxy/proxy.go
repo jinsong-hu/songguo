@@ -772,16 +772,18 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	}
 
 	// Context-window composition: read-only sniff of the already-buffered request
-	// body to estimate how the official input-token count decomposes across
-	// sources (system, tool schemas, tool results, ...). This measures BYTES for
-	// ratios only and re-anchors every subtotal to the vendor's official usage —
-	// it never counts tokens itself and never touches the bytes (same category as
+	// body to decompose the input context across sources (system, tool schemas,
+	// tool results, ...). Tokens are counted LOCALLY (o200k_base) per block for a
+	// stable, vendor-independent breakdown — deliberately decoupled from official
+	// usage (which stays authoritative for billing). The official cache-read total
+	// is the one number passed through, so the cache cross-cut stays real. This
+	// never counts against billing and never touches the bytes (same category as
 	// reading `model` or metering `usage`). It runs after the client response is
 	// already sent, so it adds no client latency, and is NOT gated by capture.
 	// Any failure is logged and never surfaced to the client.
 	if modality == calls.ModalityChat && rw.matched && ext.Norm.InputTokens > 0 {
 		if comp, ok := compose.Compose(rw.wire.Name, reqBody,
-			int64(ext.Norm.InputTokens), int64(ext.Norm.CachedInputTokens)); ok {
+			int64(ext.Norm.CachedInputTokens)); ok {
 			if err := h.store.SaveComposition(id, comp); err != nil {
 				h.logger.Error("save composition failed", "err", err, "call_id", id)
 			}

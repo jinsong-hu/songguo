@@ -1,13 +1,20 @@
 // Package compose estimates how a chat request's input context window
 // decomposes across sources (system prompt, tool schemas, tool results, ...).
 //
-// The one invariant: we never count tokens ourselves. We measure BYTES only to
-// derive per-block ratios, then multiply the vendor's official input-token total
-// by those ratios. Every displayed total/subtotal equals a vendor usage field;
-// only the proportions between sources are byte-estimated. Distribution uses
-// largest-remainder rounding so the integer per-source tokens sum EXACTLY to the
-// official input total, and the cached split front-fills the official
-// cache-read total across blocks in prompt order so it too sums exactly.
+// It counts tokens LOCALLY with the o200k_base tokenizer (tiktoken), per block,
+// and sums them — deliberately decoupled from the vendor's official usage. This
+// buys STABILITY: the same block of text always counts the same, so a caller
+// tuning prompt-cache reuse sees a fixed number for an unchanged prefix instead
+// of a value that wobbles as the rest of the window shifts. The tradeoff, taken
+// on purpose, is that these counts do NOT match the vendor's official input
+// total (a different, proprietary tokenizer, plus message framing we don't see).
+// So: official usage is authoritative for billing/totals; this decomposition is
+// for proportions and growth trends only, and the UI labels it an estimate.
+//
+// The one number we cannot self-count is the cached (cache-read) portion — only
+// the vendor knows which blocks were served from cache. So the official
+// cache-read total is front-filled across blocks in prompt order; Cached is
+// clamped to Total (our own accounting can't cache more than it holds).
 //
 // This is pure, read-only sniffing of the already-buffered request body — the
 // same category as reading `model` or metering `usage`. It never mutates bytes.
@@ -18,7 +25,37 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"sync"
+
+	"github.com/pkoukk/tiktoken-go"
+	tiktoken_loader "github.com/pkoukk/tiktoken-go-loader"
 )
+
+// enc is the shared o200k_base tokenizer, loaded once from the embedded offline
+// vocab (no network fetch at runtime). If loading ever fails, encErr is set and
+// Compose returns ok=false — the caller records no composition and never fails
+// the request.
+var (
+	encOnce sync.Once
+	enc     *tiktoken.Tiktoken
+	encErr  error
+)
+
+func encoder() (*tiktoken.Tiktoken, error) {
+	encOnce.Do(func() {
+		tiktoken.SetBpeLoader(tiktoken_loader.NewOfflineLoader())
+		enc, encErr = tiktoken.GetEncoding("o200k_base")
+	})
+	return enc, encErr
+}
+
+// countTokens returns the o200k_base token count of s (0 for empty).
+func countTokens(e *tiktoken.Tiktoken, s string) int64 {
+	if s == "" {
+		return 0
+	}
+	return int64(len(e.Encode(s, nil, nil)))
+}
 
 // Producer is one attributed origin within a source (e.g. a tool that produced
 // a result, or the server that owns an MCP tool schema).
@@ -36,9 +73,10 @@ type Source struct {
 	Children []Producer `json:"children,omitempty"`
 }
 
-// Composition is the full decomposition for one request. Total and Cached equal
-// the vendor's official input and cache-read token counts; Sources partitions
-// Total exactly.
+// Composition is the full decomposition for one request. Total is the sum of
+// the locally counted per-block tokens (NOT the vendor's official input); Cached
+// is the official cache-read total, front-filled and clamped to Total. Sources
+// partitions Total exactly.
 type Composition struct {
 	Total   int64    `json:"total"`
 	Cached  int64    `json:"cached"`
@@ -46,18 +84,20 @@ type Composition struct {
 }
 
 // unit is one indivisible block in render order (tools → system → messages).
-// bytes is the compact-JSON byte length used as the estimation weight.
+// text is the exact string tokenized to weigh the block.
 type unit struct {
-	src   string
-	prod  string
-	bytes int64
+	src  string
+	prod string
+	text string
 }
 
-// Compose decomposes body's input context across sources, distributing
-// inputTokens (and cachedTokens) by byte weight. It returns ok=false when the
-// wire is unsupported, the body cannot be parsed, or nothing weighable is found
-// — in which case the caller records no composition and never fails the request.
-func Compose(wireName string, body []byte, inputTokens, cachedTokens int64) (Composition, bool) {
+// Compose decomposes body's input context across sources, counting each block's
+// tokens locally (o200k_base) and summing them into Total. cachedTokens is the
+// vendor's official cache-read total, front-filled across blocks and clamped to
+// Total. It returns ok=false when the wire is unsupported, the body cannot be
+// parsed, the tokenizer is unavailable, or nothing weighable is found — in which
+// case the caller records no composition and never fails the request.
+func Compose(wireName string, body []byte, cachedTokens int64) (Composition, bool) {
 	var units []unit
 	switch {
 	case strings.Contains(wireName, "anthropic"):
@@ -67,63 +107,45 @@ func Compose(wireName string, body []byte, inputTokens, cachedTokens int64) (Com
 	default:
 		return Composition{}, false
 	}
-	if len(units) == 0 || inputTokens <= 0 {
+	if len(units) == 0 {
+		return Composition{}, false
+	}
+	e, err := encoder()
+	if err != nil {
 		return Composition{}, false
 	}
 
-	tokens := distribute(units, inputTokens)
-	cached := frontFill(units, tokens, cachedTokens)
+	tokens := make([]int64, len(units))
+	var total int64
+	for i, u := range units {
+		tokens[i] = countTokens(e, u.text)
+		total += tokens[i]
+	}
+	if total <= 0 {
+		return Composition{}, false
+	}
+
+	cached := frontFill(tokens, cachedTokens)
+	var cachedSum int64
+	for _, c := range cached {
+		cachedSum += c
+	}
 
 	return Composition{
-		Total:   inputTokens,
-		Cached:  cachedTokens,
+		Total:   total,
+		Cached:  cachedSum,
 		Sources: aggregate(units, tokens, cached),
 	}, true
 }
 
-// distribute splits total across units proportional to each unit's byte weight,
-// using largest-remainder rounding so the integer results sum to total EXACTLY.
-func distribute(units []unit, total int64) []int64 {
-	n := len(units)
-	out := make([]int64, n)
-
-	var totalBytes int64
-	for _, u := range units {
-		totalBytes += u.bytes
-	}
-	if totalBytes <= 0 || total <= 0 {
-		return out
-	}
-
-	type rem struct {
-		idx int
-		num int64 // remainder numerator (larger = rounds up first)
-	}
-	rems := make([]rem, n)
-	var allocated int64
-	for i, u := range units {
-		prod := total * u.bytes
-		out[i] = prod / totalBytes
-		rems[i] = rem{idx: i, num: prod % totalBytes}
-		allocated += out[i]
-	}
-	leftover := total - allocated
-
-	// Stable sort by remainder desc; ties keep original (render) order.
-	sort.SliceStable(rems, func(a, b int) bool { return rems[a].num > rems[b].num })
-	for k := int64(0); k < leftover && k < int64(n); k++ {
-		out[rems[k].idx]++
-	}
-	return out
-}
-
-// frontFill walks units in prompt order and assigns the cached (cache-read)
-// token total front-to-back: unit.cached = min(unit.tokens, remaining). The
-// result sums to cachedTokens exactly (assuming cachedTokens <= sum tokens).
-func frontFill(units []unit, tokens []int64, cachedTokens int64) []int64 {
-	out := make([]int64, len(units))
+// frontFill walks blocks in prompt order and assigns the cached (cache-read)
+// token total front-to-back: block.cached = min(block.tokens, remaining). The
+// result sums to min(cachedTokens, Σtokens) — the official cache-read total,
+// clamped so our accounting never caches more tokens than it holds.
+func frontFill(tokens []int64, cachedTokens int64) []int64 {
+	out := make([]int64, len(tokens))
 	remaining := cachedTokens
-	for i := range units {
+	for i := range tokens {
 		if remaining <= 0 {
 			break
 		}
@@ -188,30 +210,30 @@ func aggregate(units []unit, tokens, cached []int64) []Source {
 	return sources
 }
 
-// compactLen returns the byte length of raw re-encoded as compact JSON, falling
-// back to the raw length if it is not valid JSON.
-func compactLen(raw []byte) int64 {
+// compactStr returns raw re-encoded as compact JSON, falling back to the raw
+// string if it is not valid JSON.
+func compactStr(raw []byte) string {
 	if len(raw) == 0 {
-		return 0
+		return ""
 	}
 	var buf bytes.Buffer
 	if err := json.Compact(&buf, raw); err != nil {
-		return int64(len(raw))
+		return string(raw)
 	}
-	return int64(buf.Len())
+	return buf.String()
 }
 
-// rawContentLen measures a message content field that may be a JSON string (use
-// the unescaped string length) or a JSON array/object (use its compact length).
-func rawContentLen(raw json.RawMessage) int64 {
+// rawContentStr returns a message content field that may be a JSON string (use
+// the unescaped string) or a JSON array/object (use its compact form).
+func rawContentStr(raw json.RawMessage) string {
 	if len(raw) == 0 {
-		return 0
+		return ""
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		return int64(len(s))
+		return s
 	}
-	return compactLen(raw)
+	return compactStr(raw)
 }
 
 // toolProducer maps a Claude Code tool name to its producer key (used for
@@ -284,11 +306,11 @@ func parseAnthropic(body []byte) []unit {
 			Name string `json:"name"`
 		}
 		_ = json.Unmarshal(raw, &t)
-		units = append(units, unit{src: "tool_schemas", prod: schemaProducer(t.Name), bytes: compactLen(raw)})
+		units = append(units, unit{src: "tool_schemas", prod: schemaProducer(t.Name), text: compactStr(raw)})
 	}
 
-	if n := systemBytes(req.System); n > 0 {
-		units = append(units, unit{src: "system", bytes: n})
+	if s := systemText(req.System); s != "" {
+		units = append(units, unit{src: "system", text: s})
 	}
 
 	// First pass: map tool_use id → tool name from assistant blocks.
@@ -318,8 +340,8 @@ func parseAnthropic(body []byte) []unit {
 			if m.Role == "assistant" {
 				src = "actions"
 			}
-			if n := int64(len(str)); n > 0 {
-				units = append(units, unit{src: src, bytes: n})
+			if str != "" {
+				units = append(units, unit{src: src, text: str})
 			}
 			continue
 		}
@@ -333,7 +355,7 @@ func parseAnthropic(body []byte) []unit {
 			if src == "" {
 				continue
 			}
-			units = append(units, unit{src: src, prod: prod, bytes: compactLen(raw)})
+			units = append(units, unit{src: src, prod: prod, text: compactStr(raw)})
 		}
 	}
 	return units
@@ -366,17 +388,17 @@ func anthClassify(role, typ, toolUseID string, idToName map[string]string) (src,
 	return "actions", ""
 }
 
-// systemBytes returns the byte weight for the system field: string length for a
-// plain string, compact length for the structured (array) form.
-func systemBytes(raw json.RawMessage) int64 {
+// systemText returns the text weight for the system field: the string itself
+// for a plain string, the compact form for the structured (array) form.
+func systemText(raw json.RawMessage) string {
 	if len(raw) == 0 {
-		return 0
+		return ""
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		return int64(len(s))
+		return s
 	}
-	return compactLen(raw)
+	return compactStr(raw)
 }
 
 // anthBlocks returns the array-form content blocks, or nil for non-array content.
@@ -422,7 +444,7 @@ func parseOpenAI(body []byte) []unit {
 		if strings.HasPrefix(t.Function.Name, "mcp") {
 			prod = "mcp"
 		}
-		units = append(units, unit{src: "tool_schemas", prod: prod, bytes: compactLen(raw)})
+		units = append(units, unit{src: "tool_schemas", prod: prod, text: compactStr(raw)})
 	}
 
 	// Map tool_call id → function name across all assistant messages.
@@ -438,20 +460,20 @@ func parseOpenAI(body []byte) []unit {
 	for _, m := range req.Messages {
 		switch m.Role {
 		case "system":
-			if n := rawContentLen(m.Content); n > 0 {
-				units = append(units, unit{src: "system", bytes: n})
+			if s := rawContentStr(m.Content); s != "" {
+				units = append(units, unit{src: "system", text: s})
 			}
 		case "user":
-			if n := rawContentLen(m.Content); n > 0 {
-				units = append(units, unit{src: "user", bytes: n})
+			if s := rawContentStr(m.Content); s != "" {
+				units = append(units, unit{src: "user", text: s})
 			}
 		case "assistant":
-			if n := rawContentLen(m.Content); n > 0 {
-				units = append(units, unit{src: "actions", bytes: n})
+			if s := rawContentStr(m.Content); s != "" {
+				units = append(units, unit{src: "actions", text: s})
 			}
 			for _, tc := range m.ToolCalls {
 				raw, _ := json.Marshal(tc)
-				units = append(units, unit{src: "actions", bytes: compactLen(raw)})
+				units = append(units, unit{src: "actions", text: compactStr(raw)})
 			}
 		case "tool":
 			name, ok := idToName[m.ToolCallID]
@@ -459,8 +481,8 @@ func parseOpenAI(body []byte) []unit {
 			if ok {
 				prod = toolProducer(name)
 			}
-			if n := rawContentLen(m.Content); n > 0 {
-				units = append(units, unit{src: "tool_results", prod: prod, bytes: n})
+			if s := rawContentStr(m.Content); s != "" {
+				units = append(units, unit{src: "tool_results", prod: prod, text: s})
 			}
 		}
 	}

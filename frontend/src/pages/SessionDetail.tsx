@@ -5,6 +5,7 @@ import { Area, AreaChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from 'rec
 import { api } from '../api/client';
 import type { AgentNode } from '../api/types';
 import { ContextSunburst, srcColor, srcLabel } from '../components/ContextSunburst';
+import { InfoHint } from '../components/InfoHint';
 import { CopyButton } from '../components/CopyButton';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -113,7 +114,10 @@ export function SessionDetailPage() {
           {turns.length > 0 && (
             <div className="card" style={{ padding: 16 }}>
               <div className={styles.ctxHead}>
-                <div className={styles.fieldLabel}>Context growth</div>
+                <div className={styles.fieldLabel} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  Context growth
+                  <InfoHint />
+                </div>
                 <div className={styles.seg} role="tablist" aria-label="Colour by">
                   {(['source', 'cache'] as const).map((a) => (
                     <button
@@ -157,8 +161,9 @@ export function SessionDetailPage() {
 
           {snapshot.length > 0 && (
             <div className="card" style={{ padding: 16 }}>
-              <div className={styles.fieldLabel} style={{ marginBottom: 12 }}>
+              <div className={styles.fieldLabel} style={{ marginBottom: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 Composition — latest turn
+                <InfoHint />
               </div>
               <ContextSunburst data={{ avg_total: lastTotal, sources: snapshot }} centerLabel="window" />
             </div>

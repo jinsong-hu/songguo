@@ -50,43 +50,53 @@ func sum(src []Source) (tokens, cached int64) {
 	return
 }
 
+func min64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func TestComposeInvariants(t *testing.T) {
 	cases := []struct {
 		name         string
 		wire         string
 		body         string
-		inputTokens  int64
 		cachedTokens int64
 	}{
-		{"anthropic", "anthropic-messages", sampleAnthropic, 1000, 640},
-		{"anthropic-no-cache", "anthropic-messages", sampleAnthropic, 733, 0},
-		{"openai", "openai-chat", sampleOpenAI, 137, 41},
-		{"openai-full-cache", "openai-chat", sampleOpenAI, 200, 200},
+		{"anthropic", "anthropic-messages", sampleAnthropic, 640},
+		{"anthropic-no-cache", "anthropic-messages", sampleAnthropic, 0},
+		{"openai", "openai-chat", sampleOpenAI, 41},
+		{"openai-over-cache", "openai-chat", sampleOpenAI, 100000}, // exceeds total → clamps
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			comp, ok := Compose(tc.wire, []byte(tc.body), tc.inputTokens, tc.cachedTokens)
+			comp, ok := Compose(tc.wire, []byte(tc.body), tc.cachedTokens)
 			if !ok {
 				t.Fatalf("Compose returned ok=false")
 			}
-			if comp.Total != tc.inputTokens {
-				t.Errorf("Total = %d, want %d", comp.Total, tc.inputTokens)
-			}
-			if comp.Cached != tc.cachedTokens {
-				t.Errorf("Cached = %d, want %d", comp.Cached, tc.cachedTokens)
+
+			// Total is our own local token count: positive and non-anchored.
+			if comp.Total <= 0 {
+				t.Errorf("Total = %d, want > 0", comp.Total)
 			}
 
 			gotTokens, gotCached := sum(comp.Sources)
-			// INVARIANT 1: per-source tokens sum EXACTLY to the official input total.
-			if gotTokens != tc.inputTokens {
-				t.Errorf("sum(sources.tokens) = %d, want %d", gotTokens, tc.inputTokens)
+			// INVARIANT 1: per-source tokens partition Total exactly.
+			if gotTokens != comp.Total {
+				t.Errorf("sum(sources.tokens) = %d, want Total %d", gotTokens, comp.Total)
 			}
-			// INVARIANT 2: per-source cached sum EXACTLY to the official cache-read total.
-			if gotCached != tc.cachedTokens {
-				t.Errorf("sum(sources.cached) = %d, want %d", gotCached, tc.cachedTokens)
+			// INVARIANT 2: cached is the official cache-read total front-filled and
+			// clamped to Total; per-source cached sums back to it.
+			wantCached := min64(tc.cachedTokens, comp.Total)
+			if comp.Cached != wantCached {
+				t.Errorf("Cached = %d, want min(official, total) = %d", comp.Cached, wantCached)
+			}
+			if gotCached != comp.Cached {
+				t.Errorf("sum(sources.cached) = %d, want Cached %d", gotCached, comp.Cached)
 			}
 
-			// Producer tokens never exceed their source's tokens.
+			// Producer tokens never exceed their source's tokens; cached ≤ tokens.
 			for _, s := range comp.Sources {
 				var pt int64
 				for _, p := range s.Children {
@@ -103,8 +113,30 @@ func TestComposeInvariants(t *testing.T) {
 	}
 }
 
+// TestComposeDeterministic is the whole point of self-counting: an unchanged
+// body always yields the same counts, so a caller tuning prompt-cache reuse
+// sees a stable number for a fixed prefix.
+func TestComposeDeterministic(t *testing.T) {
+	a, ok1 := Compose("anthropic-messages", []byte(sampleAnthropic), 300)
+	b, ok2 := Compose("anthropic-messages", []byte(sampleAnthropic), 300)
+	if !ok1 || !ok2 {
+		t.Fatal("ok=false")
+	}
+	if a.Total != b.Total || a.Cached != b.Cached {
+		t.Fatalf("non-deterministic totals: %+v vs %+v", a, b)
+	}
+	if len(a.Sources) != len(b.Sources) {
+		t.Fatalf("source count differs: %d vs %d", len(a.Sources), len(b.Sources))
+	}
+	for i := range a.Sources {
+		if a.Sources[i].Key != b.Sources[i].Key || a.Sources[i].Tokens != b.Sources[i].Tokens {
+			t.Errorf("source %d differs: %+v vs %+v", i, a.Sources[i], b.Sources[i])
+		}
+	}
+}
+
 func TestComposeAnthropicSources(t *testing.T) {
-	comp, ok := Compose("anthropic-messages", []byte(sampleAnthropic), 1000, 0)
+	comp, ok := Compose("anthropic-messages", []byte(sampleAnthropic), 0)
 	if !ok {
 		t.Fatal("ok=false")
 	}
@@ -137,13 +169,13 @@ func TestComposeAnthropicSources(t *testing.T) {
 }
 
 func TestComposeUnsupportedWire(t *testing.T) {
-	if _, ok := Compose("volc-speech-tts", []byte(`{}`), 100, 0); ok {
+	if _, ok := Compose("volc-speech-tts", []byte(`{}`), 0); ok {
 		t.Error("expected ok=false for unsupported wire")
 	}
 }
 
 func TestComposeBadBody(t *testing.T) {
-	if _, ok := Compose("anthropic-messages", []byte(`not json`), 100, 0); ok {
+	if _, ok := Compose("anthropic-messages", []byte(`not json`), 0); ok {
 		t.Error("expected ok=false for unparseable body")
 	}
 }

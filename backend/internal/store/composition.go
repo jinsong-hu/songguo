@@ -27,11 +27,13 @@ func (s *Store) SaveComposition(callID int64, c compose.Composition) error {
 	return nil
 }
 
-// AggComposition is the aggregated context decomposition over a window. Sources
-// partition OfficialInput exactly (a synthetic "unattributed" source absorbs any
-// input tokens from calls that carry no composition), so it equals the Overview
-// Tokens KPI. Requests counts window calls with input_tokens>0; AvgTotal is
-// OfficialInput/Requests.
+// AggComposition is the aggregated context decomposition over a window. Tokens
+// are locally counted (o200k_base) per block and summed — deliberately NOT
+// anchored to the vendor's official input total, so proportions stay stable for
+// an unchanged prompt. It therefore covers only the requests we could decompose
+// (chat calls with a parseable body); it does not reconcile to the Overview
+// Tokens KPI. Requests counts those decomposed calls; AvgTotal is their mean
+// self-counted window size.
 type AggComposition struct {
 	Sources  []compose.Source
 	Requests int
@@ -39,26 +41,13 @@ type AggComposition struct {
 }
 
 // AggregateComposition sums context decompositions over the optional [since,
-// until) window. Totals stay anchored to the vendor's official input tokens: it
-// sums input_tokens over ALL calls in the window (every modality) and adds a
-// synthetic "unattributed" source for whatever the composition rows did not
-// account for. Sources are sorted by tokens desc.
+// until) window. Every total/subtotal is our own local token count; there is no
+// official-anchored "unattributed" bucket — calls without a composition are
+// simply absent from this view (the KPI, which is official, covers them). The
+// window clause filters on the joined calls' bare `ts`, unambiguous here since
+// only calls carries a ts column. Sources are sorted by tokens desc.
 func (s *Store) AggregateComposition(since, until *time.Time) (AggComposition, error) {
-	// Official input over every call in the window (all modalities), plus the
-	// request count (calls that actually carried input tokens).
 	clause, args := windowClause(since, until)
-	var officialInput float64
-	var requests int
-	if err := s.db.QueryRow(
-		`SELECT COALESCE(SUM(input_tokens), 0),
-		        COALESCE(SUM(CASE WHEN input_tokens > 0 THEN 1 ELSE 0 END), 0)
-		   FROM calls`+clause, args...,
-	).Scan(&officialInput, &requests); err != nil {
-		return AggComposition{}, fmt.Errorf("store: aggregate composition totals: %w", err)
-	}
-
-	// Composition rows joined to their window calls. The window clause filters on
-	// bare `ts`, which is unambiguous here — only calls carries a ts column.
 	rows, err := s.db.Query(
 		`SELECT cc.total, cc.sources
 		   FROM context_composition cc
@@ -76,14 +65,16 @@ func (s *Store) AggregateComposition(since, until *time.Time) (AggComposition, e
 	}
 	byKey := map[string]*acc{}
 	var order []string
-	var attributed int64
+	var totalTokens int64
+	var requests int
 	for rows.Next() {
 		var total float64
 		var raw string
 		if err := rows.Scan(&total, &raw); err != nil {
 			return AggComposition{}, fmt.Errorf("store: scan composition: %w", err)
 		}
-		attributed += int64(total)
+		requests++
+		totalTokens += int64(total)
 		var sources []compose.Source
 		if err := json.Unmarshal([]byte(raw), &sources); err != nil {
 			// A corrupt row must not sink the aggregate; skip it.
@@ -107,7 +98,7 @@ func (s *Store) AggregateComposition(since, until *time.Time) (AggComposition, e
 		return AggComposition{}, fmt.Errorf("store: aggregate composition rows: %w", err)
 	}
 
-	out := make([]compose.Source, 0, len(order)+1)
+	out := make([]compose.Source, 0, len(order))
 	for _, key := range order {
 		a := byKey[key]
 		src := compose.Source{Key: key, Tokens: a.tokens, Cached: a.cached}
@@ -123,13 +114,6 @@ func (s *Store) AggregateComposition(since, until *time.Time) (AggComposition, e
 		out = append(out, src)
 	}
 
-	// Synthetic "unattributed" source: input tokens from calls without a
-	// composition (or non-chat modalities). Guarantees Σ sources.tokens ==
-	// officialInput == the Overview Tokens KPI.
-	if unattributed := int64(officialInput) - attributed; unattributed > 0 {
-		out = append(out, compose.Source{Key: "unattributed", Tokens: unattributed})
-	}
-
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Tokens != out[j].Tokens {
 			return out[i].Tokens > out[j].Tokens
@@ -139,7 +123,7 @@ func (s *Store) AggregateComposition(since, until *time.Time) (AggComposition, e
 
 	avg := 0.0
 	if requests > 0 {
-		avg = officialInput / float64(requests)
+		avg = float64(totalTokens) / float64(requests)
 	}
 	return AggComposition{Sources: out, Requests: requests, AvgTotal: avg}, nil
 }
