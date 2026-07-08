@@ -42,6 +42,23 @@ const sampleOpenAI = `{
   ]
 }`
 
+const sampleOpenAIResponses = `{
+  "model": "gpt-x",
+  "instructions": "You are a coding agent.",
+  "tools": [
+    {"type": "function", "name": "exec_command", "description": "Run a command", "parameters": {"type": "object"}},
+    {"type": "function", "name": "mcp__github__list_prs", "description": "List PRs", "parameters": {"type": "object"}}
+  ],
+  "input": [
+    {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Follow sandbox rules."}]},
+    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Inspect this repo."}]},
+    {"type": "reasoning", "summary": [], "encrypted_content": "gAAAA-test"},
+    {"type": "function_call", "name": "exec_command", "arguments": "{\"cmd\":\"pwd\"}", "call_id": "call_1"},
+    {"type": "function_call_output", "call_id": "call_1", "output": "Output:\n/Users/example/project\n"},
+    {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "I found the project root."}]}
+  ]
+}`
+
 func sum(src []Source) (tokens, cached int64) {
 	for _, s := range src {
 		tokens += s.Tokens
@@ -67,6 +84,7 @@ func TestComposeInvariants(t *testing.T) {
 		{"anthropic", "anthropic-messages", sampleAnthropic, 640},
 		{"anthropic-no-cache", "anthropic-messages", sampleAnthropic, 0},
 		{"openai", "openai-chat", sampleOpenAI, 41},
+		{"openai-responses", "openai/responses", sampleOpenAIResponses, 60},
 		{"openai-over-cache", "openai-chat", sampleOpenAI, 100000}, // exceeds total → clamps
 	}
 	for _, tc := range cases {
@@ -164,6 +182,43 @@ func TestComposeAnthropicSources(t *testing.T) {
 		}
 		if !prods["builtin"] || !prods["mcp:github"] {
 			t.Errorf("tool_schemas producers = %v, want builtin + mcp:github", prods)
+		}
+	}
+}
+
+func TestComposeOpenAIResponsesSources(t *testing.T) {
+	comp, ok := Compose("openai/responses", []byte(sampleOpenAIResponses), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	want := map[string]bool{
+		"system": true, "tool_schemas": true, "user": true,
+		"reasoning": true, "actions": true, "tool_results": true,
+	}
+	got := map[string]bool{}
+	for _, s := range comp.Sources {
+		got[s.Key] = true
+	}
+	for k := range want {
+		if !got[k] {
+			t.Errorf("missing expected source %q", k)
+		}
+	}
+
+	for _, s := range comp.Sources {
+		switch s.Key {
+		case "tool_schemas":
+			prods := map[string]bool{}
+			for _, p := range s.Children {
+				prods[p.Key] = true
+			}
+			if !prods["builtin"] || !prods["mcp:github"] {
+				t.Errorf("tool_schemas producers = %v, want builtin + mcp:github", prods)
+			}
+		case "tool_results":
+			if len(s.Children) != 1 || s.Children[0].Key != "exec_command" {
+				t.Errorf("tool_results producers = %+v, want exec_command", s.Children)
+			}
 		}
 	}
 }

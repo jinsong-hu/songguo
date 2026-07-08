@@ -102,6 +102,8 @@ func Compose(wireName string, body []byte, cachedTokens int64) (Composition, boo
 	switch {
 	case strings.Contains(wireName, "anthropic"):
 		units = parseAnthropic(body)
+	case strings.Contains(wireName, "responses"):
+		units = parseOpenAIResponses(body)
 	case strings.Contains(wireName, "openai"), strings.Contains(wireName, "chat"):
 		units = parseOpenAI(body)
 	default:
@@ -487,4 +489,162 @@ func parseOpenAI(body []byte) []unit {
 		}
 	}
 	return units
+}
+
+// ---- OpenAI Responses request ----
+
+func parseOpenAIResponses(body []byte) []unit {
+	var req struct {
+		Instructions json.RawMessage   `json:"instructions"`
+		Input        []json.RawMessage `json:"input"`
+		Tools        []json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil
+	}
+
+	var units []unit
+
+	for _, raw := range req.Tools {
+		var t struct {
+			Name string `json:"name"`
+		}
+		_ = json.Unmarshal(raw, &t)
+		units = append(units, unit{src: "tool_schemas", prod: schemaProducer(t.Name), text: compactStr(raw)})
+	}
+
+	if s := systemText(req.Instructions); s != "" {
+		units = append(units, unit{src: "system", text: s})
+	}
+
+	callIDToName := map[string]string{}
+	for _, raw := range req.Input {
+		var item struct {
+			Type   string `json:"type"`
+			Name   string `json:"name"`
+			CallID string `json:"call_id"`
+			ID     string `json:"id"`
+		}
+		_ = json.Unmarshal(raw, &item)
+		if item.Type == "function_call" && item.Name != "" {
+			if item.CallID != "" {
+				callIDToName[item.CallID] = item.Name
+			}
+			if item.ID != "" {
+				callIDToName[item.ID] = item.Name
+			}
+		}
+	}
+
+	for _, raw := range req.Input {
+		var item struct {
+			Type    string          `json:"type"`
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+			CallID  string          `json:"call_id"`
+			ID      string          `json:"id"`
+		}
+		_ = json.Unmarshal(raw, &item)
+
+		switch item.Type {
+		case "message":
+			src := responsesRoleSource(item.Role)
+			if src == "" {
+				continue
+			}
+			for _, text := range responsesContentTexts(item.Content) {
+				if text != "" {
+					units = append(units, unit{src: src, text: text})
+				}
+			}
+		case "reasoning":
+			if s := compactStr(raw); s != "" {
+				units = append(units, unit{src: "reasoning", text: s})
+			}
+		case "function_call", "custom_tool_call", "web_search_call", "computer_call", "local_shell_call":
+			if s := compactStr(raw); s != "" {
+				units = append(units, unit{src: "actions", text: s})
+			}
+		case "function_call_output", "custom_tool_call_output", "computer_call_output", "local_shell_call_output":
+			name := callIDToName[item.CallID]
+			if name == "" {
+				name = callIDToName[item.ID]
+			}
+			prod := "unknown"
+			if name != "" {
+				prod = toolProducer(name)
+			}
+			if s := responsesOutputText(raw); s != "" {
+				units = append(units, unit{src: "tool_results", prod: prod, text: s})
+			}
+		default:
+			if s := compactStr(raw); s != "" {
+				units = append(units, unit{src: "actions", text: s})
+			}
+		}
+	}
+	return units
+}
+
+func responsesRoleSource(role string) string {
+	switch role {
+	case "system", "developer":
+		return "system"
+	case "user":
+		return "user"
+	case "assistant":
+		return "actions"
+	default:
+		return ""
+	}
+}
+
+func responsesContentTexts(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if s == "" {
+			return nil
+		}
+		return []string{s}
+	}
+	var blocks []json.RawMessage
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return []string{compactStr(raw)}
+	}
+	out := make([]string, 0, len(blocks))
+	for _, rawBlock := range blocks {
+		var b struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		_ = json.Unmarshal(rawBlock, &b)
+		switch b.Type {
+		case "input_text", "output_text", "refusal":
+			if b.Text != "" {
+				out = append(out, b.Text)
+			}
+		default:
+			if s := compactStr(rawBlock); s != "" {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+func responsesOutputText(raw json.RawMessage) string {
+	var item struct {
+		Output json.RawMessage `json:"output"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil || len(item.Output) == 0 {
+		return compactStr(raw)
+	}
+	var s string
+	if err := json.Unmarshal(item.Output, &s); err == nil {
+		return s
+	}
+	return compactStr(item.Output)
 }
