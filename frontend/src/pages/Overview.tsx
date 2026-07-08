@@ -153,7 +153,6 @@ export function OverviewPage() {
     ];
   }, [errs.data]);
   const errorsEmpty = errorClasses.every((c) => c.value === 0);
-
   const rangeSwitch = (
     <div className={styles.seg} role="tablist" aria-label="Time range">
       {RANGES.map((r) => (
@@ -182,10 +181,10 @@ export function OverviewPage() {
       <div className={styles.kpiGrid}>
         <Kpi
           icon={<Activity size={14} />}
-          label={`Requests (${range.label})`}
-          loading={overview.initialLoading}
-          value={ov ? int(ov.requests) : '—'}
-          sub={ov ? `${int(ov.errors)} failed` : undefined}
+          label="Sessions"
+          loading={overview.initialLoading || sessions.initialLoading}
+          value={ss ? int(ss.sessions) : '—'}
+          sub={ov ? `${int(ov.requests)} requests` : undefined}
         />
         <Kpi
           icon={<Coins size={14} />}
@@ -196,17 +195,15 @@ export function OverviewPage() {
         />
         <Kpi
           icon={<DollarSign size={14} />}
-          label={`Spend (${range.label})`}
+          label="Spend"
           loading={overview.initialLoading}
           value={ov ? money(ov.total_spend) : '—'}
-          sub={ov ? `${money(ov.daily_burn)}/day` : undefined}
         />
         <Kpi
           icon={<Users size={14} />}
           label="Active users"
           loading={overview.initialLoading}
           value={ov ? int(ov.active_callers) : '—'}
-          sub={ov ? `${int(ov.users_active)} provisioned` : undefined}
         />
         <Kpi
           icon={<ShieldCheck size={14} />}
@@ -214,7 +211,6 @@ export function OverviewPage() {
           loading={overview.initialLoading}
           value={ov ? percent(1 - ov.error_rate) : '—'}
           danger={ov != null && ov.error_rate > 0.05}
-          sub={ov ? `${percent(ov.error_rate)} errors` : undefined}
         />
       </div>
 

@@ -126,16 +126,15 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 
 	// 2. Narrow to the vendor(s) whose enabled wire matches this path (the
 	// endpoint), keeping the wire map so the chosen target rewrites to its
-	// vendor's configured endpoint. A pin is an explicit operator choice, so if it
-	// matches no wire we still trust it and keep all of its vendors (a vendor that
-	// serves the realtime path without declaring a wire). Without a pin there is
-	// nothing to trust: an unmatched path must 404 rather than pipe raw bytes to
-	// an arbitrary vendor origin — mirroring the HTTP path's denyUnmatched.
+	// vendor's configured endpoint. A provider pin only narrows the candidate
+	// set; it does not bypass wire resolution. Unmatched paths 404 rather than
+	// pipe raw bytes to an arbitrary vendor origin — mirroring the HTTP path's
+	// denyUnmatched. The explicit AllowUnmatched escape hatch is still honored
+	// by resolveWires.
 	matchedTargets, wireMap, denied := resolveWires(targets, r.Method, r.URL.Path)
-	switch {
-	case len(matchedTargets) > 0:
+	if len(matchedTargets) > 0 {
 		targets = matchedTargets
-	case pin == "":
+	} else {
 		// Mirror the HTTP wire_unmatched 404, recording a ledger row so the missing
 		// wire mapping surfaces. A WS upgrade carries no buffered body, so there is
 		// no payload to capture (unlike the HTTP denyCapture path).
@@ -218,7 +217,7 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 	// 4a. No 101: relay the upstream response verbatim over the normal
 	// ResponseWriter and record it.
 	if upConn == nil {
-		h.relayFailedHandshake(w, upResp, user.ID, billingModel, t.Vendor.Name, t, handshake)
+		h.relayFailedHandshake(w, upResp, user.ID, billingModel, t.Vendor.Name, wireMap[t.Vendor.Name], t, handshake)
 		return
 	}
 
@@ -314,7 +313,7 @@ func buildWSHandshake(host, requestTarget string, r *http.Request, adapter, apiK
 // client verbatim (status + headers + body) and records a realtime call row
 // with the upstream status and zero bytes.
 func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Response,
-	userID, model, vendorName string, t router.Target, handshake time.Duration) {
+	userID, model, vendorName string, rw resolvedWire, t router.Target, handshake time.Duration) {
 	status := http.StatusBadGateway
 	if resp != nil {
 		defer resp.Body.Close()
@@ -343,6 +342,7 @@ func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Respons
 		Modality:     calls.ModalityRealtime,
 		Vendor:       vendorName,
 		CredentialID: t.Credential.ID,
+		Wire:         wireNameOf(rw),
 		Status:       status,
 		Usage:        map[string]any{"bytes_up": int64(0), "bytes_down": int64(0), "duration_ms": int64(0)},
 		Cost:         0,
@@ -492,6 +492,7 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 		Modality:     calls.ModalityRealtime,
 		Vendor:       vendorName,
 		CredentialID: t.Credential.ID,
+		Wire:         wireNameOf(rw),
 		Confidence:   confidence,
 		Status:       http.StatusSwitchingProtocols,
 		Usage:        usage,
@@ -499,6 +500,13 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 		LatencyMS:    handshake.Milliseconds(),
 		Stream:       true,
 	})
+}
+
+func wireNameOf(rw resolvedWire) string {
+	if rw.matched {
+		return rw.wire.Name
+	}
+	return ""
 }
 
 // writeWSResponse writes a 101 (or other) handshake response — status line plus

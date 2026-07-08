@@ -128,8 +128,9 @@ func wsMockServer(t *testing.T, m *wsMockUpstream) *httptest.Server {
 }
 
 // wsVendorYAML builds a one-vendor config whose origin points at the mock host
-// (http scheme, so the proxy dials plain ws). The rest path is forwarded to the
-// host origin, so any /realtime path lands on the mock.
+// (http scheme, so the proxy dials plain ws). It uses an OpenAI-compatible wire
+// so the WebSocket relay still exercises the same credential swap and byte pipe
+// while preserving the invariant that every proxied endpoint resolves to a wire.
 func wsVendorYAML(baseURL, vendor, credID, apiKey string) string {
 	return fmt.Sprintf(`
 vendors:
@@ -137,10 +138,13 @@ vendors:
     origin: %s
     served_models: [realtime-model]
     priority: 1
+    wires: [openai/images]
+    endpoints:
+      openai/images: %s/v1/images/generations
     credential: {id: %s, api_key: %s}
     prices:
-      realtime-model: { input: 1.0, output: 1.0, unit: per_1m_tokens }
-`, vendor, baseURL, credID, apiKey)
+      realtime-model: { input: 1.0, unit: per_call }
+`, vendor, baseURL, baseURL, credID, apiKey)
 }
 
 // dialProxyWS opens a raw TCP connection to the proxy and writes a WebSocket
@@ -245,7 +249,7 @@ func TestWebSocketHappyPath(t *testing.T) {
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
 
-	conn, br := dialProxyWS(t, env.server.URL, "/v1/realtime?model=realtime-model", key, "credR")
+	conn, br := dialProxyWS(t, env.server.URL, "/v1/images/generations?model=realtime-model", key, "credR")
 	defer conn.Close()
 
 	if code := readStatusLine(t, br); code != http.StatusSwitchingProtocols {
@@ -264,9 +268,9 @@ func TestWebSocketHappyPath(t *testing.T) {
 	if accept := headers.Get("Sec-WebSocket-Accept"); accept != wsAccept("dGhlIHNhbXBsZSBub25jZQ==") {
 		t.Errorf("Sec-WebSocket-Accept = %q, want correct accept", accept)
 	}
-	// The upstream must have seen the native inbound path forwarded verbatim.
-	if up.lastPath != "/v1/realtime?model=realtime-model" {
-		t.Errorf("upstream request-target = %q, want /v1/realtime?model=realtime-model", up.lastPath)
+	// The upstream must have seen the matched wire endpoint plus inbound query.
+	if up.lastPath != "/v1/images/generations?model=realtime-model" {
+		t.Errorf("upstream request-target = %q, want /v1/images/generations?model=realtime-model", up.lastPath)
 	}
 
 	// Now send raw bytes and expect them echoed back unchanged both directions.
@@ -292,6 +296,9 @@ func TestWebSocketHappyPath(t *testing.T) {
 	r := rows[0]
 	if r.Vendor != "rt" || r.Status != http.StatusSwitchingProtocols {
 		t.Errorf("row = %+v, want vendor=rt status=101", r)
+	}
+	if r.Wire != "openai/images" {
+		t.Errorf("row wire = %q, want openai/images", r.Wire)
 	}
 	if r.Usage == nil {
 		t.Fatalf("usage is nil, want bytes_up/bytes_down/duration_ms")
@@ -329,9 +336,9 @@ func TestWebSocketUpstreamRefuses(t *testing.T) {
 
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
-	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
+	env := newEnv(t, snapshotFunc(t, volcSpeechVendorYAML(mock.URL)), st)
 
-	conn, br := dialProxyWS(t, env.server.URL, "/v1/realtime", key, "credR")
+	conn, br := dialProxyWS(t, env.server.URL, "/api/v3/sauc/bigmodel_async?model=seed-asr", key, "credV")
 	defer conn.Close()
 
 	if code := readStatusLine(t, br); code != http.StatusUnauthorized {
@@ -344,6 +351,9 @@ func TestWebSocketUpstreamRefuses(t *testing.T) {
 	}
 	if rows[0].Status != http.StatusUnauthorized {
 		t.Errorf("row status = %d, want 401", rows[0].Status)
+	}
+	if rows[0].Wire != "volc/asr-stream-async" {
+		t.Errorf("row wire = %q, want volc/asr-stream-async", rows[0].Wire)
 	}
 	entries, _ := st.QueryCalls(storeFilterAll())
 	if entries[0].Modality != "realtime" {
@@ -361,7 +371,7 @@ func TestWebSocketUnknownProvider(t *testing.T) {
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
 
-	conn, br := dialProxyWS(t, env.server.URL, "/v1/realtime", key, "nope")
+	conn, br := dialProxyWS(t, env.server.URL, "/v1/images/generations", key, "nope")
 	defer conn.Close()
 
 	if code := readStatusLine(t, br); code != http.StatusBadGateway {
@@ -395,6 +405,12 @@ func TestWebSocketNoProviderRoutesByEndpoint(t *testing.T) {
 	// The upstream was dialed purely off the endpoint — no pin, no model routing.
 	if !strings.Contains(up.lastPath, "/sauc/bigmodel_async") {
 		t.Errorf("upstream path = %q, want the dialed endpoint (upstream not reached?)", up.lastPath)
+	}
+
+	conn.Close()
+	rows := waitForRows(t, env, 1)
+	if rows[0].Wire != "volc/asr-stream-async" {
+		t.Errorf("row wire = %q, want volc/asr-stream-async", rows[0].Wire)
 	}
 }
 
@@ -431,14 +447,14 @@ func TestWebSocketAuthRequired(t *testing.T) {
 	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
 
 	// Invalid token.
-	conn, br := dialProxyWS(t, env.server.URL, "/v1/realtime", "sg-bogus", "credR")
+	conn, br := dialProxyWS(t, env.server.URL, "/v1/images/generations", "sg-bogus", "credR")
 	if code := readStatusLine(t, br); code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 for invalid token", code)
 	}
 	conn.Close()
 
 	// Missing token.
-	conn2, br2 := dialProxyWS(t, env.server.URL, "/v1/realtime", "", "credR")
+	conn2, br2 := dialProxyWS(t, env.server.URL, "/v1/images/generations", "", "credR")
 	if code := readStatusLine(t, br2); code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 for missing token", code)
 	}
@@ -462,7 +478,7 @@ func TestWebSocketScopeRejected(t *testing.T) {
 	_, key := mustUser(t, st, store.NewUser{Name: "t", Scope: []string{"othervendor"}})
 	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
 
-	conn, br := dialProxyWS(t, env.server.URL, "/v1/realtime", key, "credR")
+	conn, br := dialProxyWS(t, env.server.URL, "/v1/images/generations", key, "credR")
 	defer conn.Close()
 
 	if code := readStatusLine(t, br); code != http.StatusForbidden {

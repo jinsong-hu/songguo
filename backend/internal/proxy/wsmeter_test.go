@@ -82,9 +82,9 @@ func TestWSReassembler(t *testing.T) {
 
 	jf := volcJSONFrame([]byte(`{"a":1}`))
 
-	re.write(wsFrame(wsOpBinary, true, jf))            // 1: single JSON message
-	re.write(wsFrame(wsOpPing, true, []byte("hi")))    // control frame ignored
-	half := len(jf) / 2                                // 2: fragmented JSON message
+	re.write(wsFrame(wsOpBinary, true, jf))         // 1: single JSON message
+	re.write(wsFrame(wsOpPing, true, []byte("hi"))) // control frame ignored
+	half := len(jf) / 2                             // 2: fragmented JSON message
 	re.write(wsFrame(wsOpBinary, false, jf[:half]))
 	re.write(wsFrame(wsOpContinuation, true, jf[half:]))
 	re.write(wsFrame(wsOpBinary, true, volcAudioFrame(bytes.Repeat([]byte{0}, 300)))) // audio skipped
@@ -217,6 +217,9 @@ func TestWebSocketVolcSpeechBilling(t *testing.T) {
 	if r.Vendor != "volc" || r.Model != "seed-asr" {
 		t.Fatalf("row = %+v, want vendor=volc model=seed-asr", r)
 	}
+	if r.Wire != "volc/asr-stream-async" {
+		t.Errorf("wire = %q, want volc/asr-stream-async", r.Wire)
+	}
 	if !approxEqual(r.Cost, 0.002) {
 		t.Errorf("cost = %v, want 0.002", r.Cost)
 	}
@@ -237,7 +240,7 @@ func TestWebSocketNonVolcStaysZeroCost(t *testing.T) {
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
 	env := newEnv(t, snapshotFunc(t, wsVendorYAML(mock.URL, "rt", "credR", "vendor-rt-secret")), st)
 
-	conn, br := dialProxyWS(t, env.server.URL, "/v1/realtime?model=realtime-model", key, "credR")
+	conn, br := dialProxyWS(t, env.server.URL, "/v1/images/generations?model=realtime-model", key, "credR")
 	defer conn.Close()
 	if code := readStatusLine(t, br); code != http.StatusSwitchingProtocols {
 		t.Fatalf("handshake status = %d, want 101", code)
@@ -246,6 +249,9 @@ func TestWebSocketNonVolcStaysZeroCost(t *testing.T) {
 	conn.Close()
 
 	rows := waitForRows(t, env, 1)
+	if rows[0].Wire != "openai/images" {
+		t.Errorf("wire = %q, want openai/images", rows[0].Wire)
+	}
 	if rows[0].Cost != 0 {
 		t.Errorf("cost = %v, want 0 for ineligible WS session", rows[0].Cost)
 	}
