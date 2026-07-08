@@ -5,7 +5,7 @@ import { Area, AreaChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from 'rec
 import { svg as claudeCodeSvg } from 'thesvg/claude-code';
 import { svg as codexOpenAISvg } from 'thesvg/codex-openai';
 import { api } from '../api/client';
-import type { AgentNode, CallEntry } from '../api/types';
+import type { AgentNode, CallEntry, CallTrace } from '../api/types';
 import { ContextSunburst, srcColor, srcLabel } from '../components/ContextSunburst';
 import { InfoHint } from '../components/InfoHint';
 import { CopyButton } from '../components/CopyButton';
@@ -78,6 +78,7 @@ export function SessionDetailPage() {
 
   const spanMs = data ? new Date(data.last_ts).getTime() - new Date(data.first_ts).getTime() : 0;
   const sessionClient = useMemo(() => dominantClient(data?.entries ?? []), [data]);
+  const mainPromptEntry = useMemo(() => data?.entries.find(isMainPromptEntry) ?? null, [data]);
 
   return (
     <Page
@@ -123,6 +124,8 @@ export function SessionDetailPage() {
               footValue={int(turns.length)}
             />
           </div>
+
+          {mainPromptEntry ? <InitialPromptCard entry={mainPromptEntry} /> : null}
 
           {turns.length > 0 && (
             <div className="card" style={{ padding: 16 }}>
@@ -330,6 +333,154 @@ function clientIconSvg(name: string): string {
   if (name === 'claude-code') return claudeCodeSvg;
   if (name === 'codex-openai') return codexOpenAISvg;
   return '';
+}
+
+function InitialPromptCard({ entry }: { entry: CallEntry }) {
+  const trace = useFetch<CallTrace>(() => api.trace(entry.id), [entry.id], {
+    enabled: entry.has_trace,
+  });
+  const prompt = useMemo(() => (trace.data ? parseInitialPrompt(trace.data) : null), [trace.data]);
+
+  if (trace.error) return <ErrorBanner message={trace.error} onRetry={trace.refetch} />;
+
+  if (trace.initialLoading || !prompt) {
+    return (
+      <div className={styles.promptGrid}>
+        <Skeleton height={180} />
+        <Skeleton height={180} />
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.promptGrid}>
+      <section className={styles.promptPanel}>
+        <div className={styles.promptPanelHead}>
+          <span>System Prompt</span>
+          <span className="chip chip-mono">{prompt.system.length} {prompt.system.length === 1 ? 'block' : 'blocks'}</span>
+        </div>
+        <div className={styles.promptScroll}>
+          {prompt.system.length > 0 ? (
+            prompt.system.map((block, i) => (
+              <pre key={i} className={styles.promptTextBlock}>{block}</pre>
+            ))
+          ) : (
+            <div className={styles.promptEmpty}>No system content in this request.</div>
+          )}
+        </div>
+      </section>
+
+      <section className={styles.promptPanel}>
+        <div className={styles.promptPanelHead}>
+          <span>Tools</span>
+          <span className="chip chip-mono">{prompt.tools.length}</span>
+        </div>
+        <div className={styles.toolList}>
+          {prompt.tools.length > 0 ? (
+            prompt.tools.map((tool, i) => (
+              <details key={`${tool.name}-${i}`} className={styles.toolItem}>
+                <summary className={styles.toolSummary}>
+                  <span className={styles.toolName}>{tool.name || '(unnamed tool)'}</span>
+                  <span className={styles.toolMeta}>{tool.propertyCount} inputs</span>
+                </summary>
+                {tool.description ? <p className={styles.toolDesc}>{tool.description}</p> : null}
+                <pre className={styles.schemaCode}>{tool.schema}</pre>
+              </details>
+            ))
+          ) : (
+            <div className={styles.promptEmpty}>No tools in this request.</div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+interface InitialPrompt {
+  system: string[];
+  tools: ToolInfo[];
+}
+
+interface ToolInfo {
+  name: string;
+  description: string;
+  propertyCount: number;
+  schema: string;
+}
+
+function isMainPromptEntry(entry: CallEntry): boolean {
+  return entry.has_trace && entry.wire !== 'anthropic/count_tokens' && !isHaikuAuxiliary(entry);
+}
+
+function isHaikuAuxiliary(entry: CallEntry): boolean {
+  return entry.wire === 'anthropic/messages' && entry.model.toLowerCase().includes('haiku');
+}
+
+function parseInitialPrompt(trace: CallTrace): InitialPrompt {
+  const body = parseJsonObject(trace.request.body);
+  if (!body) return { system: [], tools: [] };
+  return {
+    system: systemBlocks(body.system ?? body.instructions),
+    tools: toolInfos(body.tools),
+  };
+}
+
+function systemBlocks(system: unknown): string[] {
+  if (typeof system === 'string') return [system];
+  if (Array.isArray(system)) {
+    return system.map((block) => {
+      if (isRecord(block) && typeof block.text === 'string') return block.text;
+      return prettyJson(stripCacheControl(block));
+    });
+  }
+  if (system == null) return [];
+  return [prettyJson(stripCacheControl(system))];
+}
+
+function toolInfos(tools: unknown): ToolInfo[] {
+  if (!Array.isArray(tools)) return [];
+  return tools.map((tool) => {
+    const record = isRecord(tool) ? tool : {};
+    const schema = record.input_schema;
+    return {
+      name: typeof record.name === 'string' ? record.name : '',
+      description: typeof record.description === 'string' ? record.description : '',
+      propertyCount: schemaPropertyCount(schema),
+      schema: prettyJson(stripCacheControl(schema ?? {})),
+    };
+  });
+}
+
+function schemaPropertyCount(schema: unknown): number {
+  if (!isRecord(schema) || !isRecord(schema.properties)) return 0;
+  return Object.keys(schema.properties).length;
+}
+
+function parseJsonObject(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function prettyJson(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}
+
+function stripCacheControl(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripCacheControl);
+  if (!isRecord(value)) return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (key !== 'cache_control') out[key] = stripCacheControl(child);
+  }
+  return out;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function AgentTreeNode({ node }: { node: AgentNode }) {

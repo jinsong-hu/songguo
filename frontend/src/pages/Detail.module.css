@@ -170,6 +170,120 @@
   margin-top: auto;
 }
 
+.promptGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.promptPanel {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.promptPanelHead {
+  min-height: 38px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.promptScroll {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.promptTextBlock {
+  margin: 0;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.promptTextBlock:last-child {
+  border-bottom: none;
+}
+
+.promptEmpty {
+  padding: 14px 12px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.toolList {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.toolItem {
+  border-bottom: 1px solid var(--border);
+}
+
+.toolItem:last-child {
+  border-bottom: none;
+}
+
+.toolSummary {
+  min-width: 0;
+  cursor: pointer;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.toolName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.toolMeta {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.toolDesc {
+  margin: 0;
+  padding: 0 12px 10px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.schemaCode {
+  margin: 0;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  white-space: pre;
+  overflow: auto;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
 .treeNode {
   border-left: 2px solid var(--border, #e5e7eb);
   padding-left: 12px;
@@ -259,4 +373,5 @@
   .sessionTitleId {
     max-width: 28vw;
   }
+
 }
