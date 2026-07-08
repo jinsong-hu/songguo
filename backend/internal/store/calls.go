@@ -39,12 +39,12 @@ func (s *Store) AppendCall(e calls.Entry) (int64, error) {
 
 	res, err := s.db.Exec(
 		`INSERT INTO calls
-		 (ts, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens, session_id, agent_id, parent_agent_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (ts, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens, session_id, agent_id, parent_agent_id, client_name, client_version)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ts.UnixMilli(), e.UserID, e.Model, string(modality), e.Vendor, e.CredentialID,
 		e.Status, e.Err, usageJSON, e.Cost, e.LatencyMS, boolToInt(e.Stream), tagsJSON,
 		e.Wire, string(e.Confidence), e.InputTokens, e.OutputTokens, e.CachedTokens,
-		e.SessionID, e.AgentID, e.ParentAgentID,
+		e.SessionID, e.AgentID, e.ParentAgentID, e.ClientName, e.ClientVersion,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("store: append call: %w", err)
@@ -109,7 +109,7 @@ func (f CallFilter) where() (string, []any) {
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
-const callsSelect = `SELECT id, ts, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens, session_id, agent_id, parent_agent_id FROM calls`
+const callsSelect = `SELECT id, ts, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens, session_id, agent_id, parent_agent_id, client_name, client_version FROM calls`
 
 // QueryCalls returns matching entries ordered by ts DESC. Limit defaults to
 // 100 and is capped at 1000.
@@ -282,7 +282,7 @@ func scanEntry(rows *sql.Rows) (calls.Entry, error) {
 		&e.ID, &tsMillis, &e.UserID, &e.Model, &modality, &e.Vendor, &e.CredentialID,
 		&e.Status, &e.Err, &usageJSON, &e.Cost, &e.LatencyMS, &stream, &tagsJSON,
 		&e.Wire, &confidence, &e.InputTokens, &e.OutputTokens, &e.CachedTokens,
-		&e.SessionID, &e.AgentID, &e.ParentAgentID,
+		&e.SessionID, &e.AgentID, &e.ParentAgentID, &e.ClientName, &e.ClientVersion,
 	); err != nil {
 		return calls.Entry{}, err
 	}

@@ -5,7 +5,10 @@
 // dashboard views are queries over the resulting call log.
 package calls
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Modality is the kind of AI call an Entry records.
 type Modality string
@@ -55,13 +58,15 @@ type Entry struct {
 	// Normalized cross-vendor token counts (persisted as typed columns so usage
 	// is queryable without parsing the per-vendor `Usage` JSON). CachedTokens is
 	// a subset of InputTokens billed at the cached rate.
-	InputTokens  float64
-	OutputTokens float64
-	CachedTokens float64
-	Cost         float64 // computed cost in USD (0 if unknown/free)
-	LatencyMS    int64
-	Stream       bool
-	Tags         map[string]string // optional business attribution (may be nil)
+	InputTokens   float64
+	OutputTokens  float64
+	CachedTokens  float64
+	Cost          float64 // computed cost in USD (0 if unknown/free)
+	LatencyMS     int64
+	Stream        bool
+	Tags          map[string]string // optional business attribution (may be nil)
+	ClientName    string            // normalized caller client (e.g. claude-code, codex)
+	ClientVersion string            // caller client version parsed from User-Agent
 	// Coding-agent attribution, captured verbatim from known request headers
 	// (read-only; no bytes are mutated). Empty for ordinary API traffic. SessionID
 	// groups a run's calls; AgentID + ParentAgentID reconstruct the
@@ -69,4 +74,31 @@ type Entry struct {
 	SessionID     string
 	AgentID       string
 	ParentAgentID string
+}
+
+// ClientInfo is a normalized caller client parsed from User-Agent. Names match
+// thesvg slugs used by the dashboard icons.
+type ClientInfo struct {
+	Name    string
+	Version string
+}
+
+// ParseClientInfo recognizes the coding-agent clients we render specially.
+// User-Agent product tokens are intentionally parsed read-only; the original
+// header is still forwarded verbatim.
+func ParseClientInfo(ua string) ClientInfo {
+	for _, raw := range strings.Fields(ua) {
+		token := strings.Trim(raw, "(),;")
+		product, version, ok := strings.Cut(token, "/")
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(product) {
+		case "claude-cli", "claude-code":
+			return ClientInfo{Name: "claude-code", Version: version}
+		case "codex", "codex-cli", "codex-tui":
+			return ClientInfo{Name: "codex-openai", Version: version}
+		}
+	}
+	return ClientInfo{}
 }

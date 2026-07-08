@@ -598,6 +598,7 @@ func (a *api) callData(id int64) (entryView, error) {
 		return entryView{}, err
 	}
 	v.HasTrace = hasTrace[id]
+	a.enrichClientFromTrace(&v)
 	return v, nil
 }
 
@@ -669,6 +670,7 @@ func (a *api) sessionData(id string) (sessionView, error) {
 	for _, e := range entries {
 		v := newEntryView(e)
 		v.HasTrace = hasTrace[e.ID]
+		a.enrichClientFromTrace(&v)
 		entViews = append(entViews, v)
 	}
 
@@ -686,6 +688,28 @@ func (a *api) sessionData(id string) (sessionView, error) {
 		Agents:       buildAgentTree(entries),
 		Entries:      entViews,
 	}, nil
+}
+
+func (a *api) enrichClientFromTrace(v *entryView) {
+	if v.ClientName != "" || !v.HasTrace {
+		return
+	}
+	p, err := a.store.GetPayload(v.ID)
+	if err != nil {
+		return
+	}
+	ci := calls.ParseClientInfo(headerValue(p.ReqHeaders, "User-Agent"))
+	v.ClientName = ci.Name
+	v.ClientVersion = ci.Version
+}
+
+func headerValue(headers map[string]string, key string) string {
+	for k, v := range headers {
+		if strings.EqualFold(k, key) {
+			return v
+		}
+	}
+	return ""
 }
 
 // handleContextComposition returns the aggregated context-window decomposition

@@ -141,6 +141,9 @@ export interface CallEntry {
   latency_ms: number;
   stream: boolean;
   tags: Record<string, string>;
+  /** Normalized caller client parsed from User-Agent, e.g. claude-code. */
+  client_name: string;
+  client_version: string;
   /** Coding-agent attribution (empty for ordinary API traffic). */
   session_id: string;
   agent_id: string;

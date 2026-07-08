@@ -98,6 +98,7 @@ func wsCompressionNegotiated(h http.Header) bool {
 // vendors; we forward the handshake to the top candidate whose wire matches —
 // a single attempt, no failover (like the HTTP path).
 func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user store.User) {
+	client := calls.ParseClientInfo(r.UserAgent())
 	// Billing model: ByteDance openspeech names the billed class in the
 	// X-Api-Resource-Id header (mirroring the HTTP path, proxy.go); fall back to
 	// the query model. This is what we meter/price as, never used for routing.
@@ -146,6 +147,7 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 			Status:     http.StatusNotFound,
 			Err:        "unmatched: " + r.Method + " " + r.URL.Path,
 			Confidence: calls.ConfidenceUnknown,
+			ClientName: client.Name, ClientVersion: client.Version,
 		})
 		writeError(w, http.StatusNotFound, "wire_unmatched",
 			fmt.Sprintf("no enabled wire matches %s %s on service %s; add a wire mapping or enable allow_unmatched",
@@ -217,12 +219,12 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 	// 4a. No 101: relay the upstream response verbatim over the normal
 	// ResponseWriter and record it.
 	if upConn == nil {
-		h.relayFailedHandshake(w, upResp, user.ID, billingModel, t.Vendor.Name, wireMap[t.Vendor.Name], t, handshake)
+		h.relayFailedHandshake(w, upResp, user.ID, billingModel, t.Vendor.Name, wireMap[t.Vendor.Name], t, handshake, client)
 		return
 	}
 
 	// 4b. Got 101: hijack the client conn and pipe raw bytes both directions.
-	h.pipeWebSocket(w, r, upConn, upReader, upResp, user.ID, billingModel, t.Vendor.Name, wireMap[t.Vendor.Name], t, handshake)
+	h.pipeWebSocket(w, r, upConn, upReader, upResp, user.ID, billingModel, t.Vendor.Name, wireMap[t.Vendor.Name], t, handshake, client)
 }
 
 // dialWSUpstream dials the upstream (TLS for wss), writes the replayed
@@ -313,7 +315,7 @@ func buildWSHandshake(host, requestTarget string, r *http.Request, adapter, apiK
 // client verbatim (status + headers + body) and records a realtime call row
 // with the upstream status and zero bytes.
 func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Response,
-	userID, model, vendorName string, rw resolvedWire, t router.Target, handshake time.Duration) {
+	userID, model, vendorName string, rw resolvedWire, t router.Target, handshake time.Duration, client calls.ClientInfo) {
 	status := http.StatusBadGateway
 	if resp != nil {
 		defer resp.Body.Close()
@@ -336,18 +338,20 @@ func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Respons
 	}
 
 	h.append(calls.Entry{
-		TS:           h.now(),
-		UserID:       userID,
-		Model:        model,
-		Modality:     calls.ModalityRealtime,
-		Vendor:       vendorName,
-		CredentialID: t.Credential.ID,
-		Wire:         wireNameOf(rw),
-		Status:       status,
-		Usage:        map[string]any{"bytes_up": int64(0), "bytes_down": int64(0), "duration_ms": int64(0)},
-		Cost:         0,
-		LatencyMS:    handshake.Milliseconds(),
-		Stream:       true,
+		TS:            h.now(),
+		UserID:        userID,
+		Model:         model,
+		Modality:      calls.ModalityRealtime,
+		Vendor:        vendorName,
+		CredentialID:  t.Credential.ID,
+		Wire:          wireNameOf(rw),
+		Status:        status,
+		Usage:         map[string]any{"bytes_up": int64(0), "bytes_down": int64(0), "duration_ms": int64(0)},
+		Cost:          0,
+		LatencyMS:     handshake.Milliseconds(),
+		Stream:        true,
+		ClientName:    client.Name,
+		ClientVersion: client.Version,
 	})
 }
 
@@ -359,7 +363,7 @@ func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Respons
 // usage and price the session; the relay itself is never blocked by metering.
 func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 	upConn net.Conn, upReader *bufio.Reader, upResp *http.Response,
-	userID, billingModel, vendorName string, rw resolvedWire, t router.Target, handshake time.Duration) {
+	userID, billingModel, vendorName string, rw resolvedWire, t router.Target, handshake time.Duration, client calls.ClientInfo) {
 	defer upConn.Close()
 	defer upResp.Body.Close()
 
@@ -486,19 +490,21 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 	}
 
 	h.append(calls.Entry{
-		TS:           h.now(),
-		UserID:       userID,
-		Model:        billingModel,
-		Modality:     calls.ModalityRealtime,
-		Vendor:       vendorName,
-		CredentialID: t.Credential.ID,
-		Wire:         wireNameOf(rw),
-		Confidence:   confidence,
-		Status:       http.StatusSwitchingProtocols,
-		Usage:        usage,
-		Cost:         cost,
-		LatencyMS:    handshake.Milliseconds(),
-		Stream:       true,
+		TS:            h.now(),
+		UserID:        userID,
+		Model:         billingModel,
+		Modality:      calls.ModalityRealtime,
+		Vendor:        vendorName,
+		CredentialID:  t.Credential.ID,
+		Wire:          wireNameOf(rw),
+		Confidence:    confidence,
+		Status:        http.StatusSwitchingProtocols,
+		Usage:         usage,
+		Cost:          cost,
+		LatencyMS:     handshake.Milliseconds(),
+		Stream:        true,
+		ClientName:    client.Name,
+		ClientVersion: client.Version,
 	})
 }
 

@@ -1828,6 +1828,42 @@ func TestExtractAttributionCodexFallbacksAndGuards(t *testing.T) {
 	}
 }
 
+func TestExtractClientInfo(t *testing.T) {
+	tests := []struct {
+		name        string
+		ua          string
+		wantName    string
+		wantVersion string
+	}{
+		{
+			name:        "claude cli",
+			ua:          "claude-cli/2.1.201 (external, sdk-ts, agent-sdk/0.3.198)",
+			wantName:    "claude-code",
+			wantVersion: "2.1.201",
+		},
+		{
+			name:        "codex tui",
+			ua:          "codex-tui/0.142.5",
+			wantName:    "codex-openai",
+			wantVersion: "0.142.5",
+		},
+		{
+			name: "unknown",
+			ua:   "openai-node/4.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := calls.ParseClientInfo(tt.ua)
+			if got.Name != tt.wantName || got.Version != tt.wantVersion {
+				t.Fatalf("calls.ParseClientInfo(%q) = %q/%q, want %q/%q",
+					tt.ua, got.Name, got.Version, tt.wantName, tt.wantVersion)
+			}
+		})
+	}
+}
+
 // --- count_tokens routes like Messages and is billed zero-cost ---
 
 // The Anthropic token-counting endpoint shares the /messages stem but is its own

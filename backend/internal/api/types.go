@@ -63,25 +63,27 @@ func newUserView(u store.User, spent float64) userView {
 
 // entryView is the JSON representation of a call entry.
 type entryView struct {
-	ID           int64             `json:"id"`
-	TS           string            `json:"ts"`
-	UserID       string            `json:"user_id"`
-	Model        string            `json:"model"`
-	Modality     string            `json:"modality"`
-	Vendor       string            `json:"vendor"`
-	CredentialID string            `json:"credential_id"`
-	Wire         string            `json:"wire"`
-	Confidence   string            `json:"confidence"`
-	Status       int               `json:"status"`
-	Err          string            `json:"err"`
-	Usage        map[string]any    `json:"usage"`
-	Cost         float64           `json:"cost"`
-	InputTokens  float64           `json:"input_tokens"`
-	OutputTokens float64           `json:"output_tokens"`
-	CachedTokens float64           `json:"cached_tokens"`
-	LatencyMS    int64             `json:"latency_ms"`
-	Stream       bool              `json:"stream"`
-	Tags         map[string]string `json:"tags"`
+	ID            int64             `json:"id"`
+	TS            string            `json:"ts"`
+	UserID        string            `json:"user_id"`
+	Model         string            `json:"model"`
+	Modality      string            `json:"modality"`
+	Vendor        string            `json:"vendor"`
+	CredentialID  string            `json:"credential_id"`
+	Wire          string            `json:"wire"`
+	Confidence    string            `json:"confidence"`
+	Status        int               `json:"status"`
+	Err           string            `json:"err"`
+	Usage         map[string]any    `json:"usage"`
+	Cost          float64           `json:"cost"`
+	InputTokens   float64           `json:"input_tokens"`
+	OutputTokens  float64           `json:"output_tokens"`
+	CachedTokens  float64           `json:"cached_tokens"`
+	LatencyMS     int64             `json:"latency_ms"`
+	Stream        bool              `json:"stream"`
+	Tags          map[string]string `json:"tags"`
+	ClientName    string            `json:"client_name"`
+	ClientVersion string            `json:"client_version"`
 	// Coding-agent attribution (empty for ordinary API traffic).
 	SessionID     string `json:"session_id"`
 	AgentID       string `json:"agent_id"`
@@ -119,6 +121,8 @@ func newEntryView(e calls.Entry) entryView {
 		LatencyMS:     e.LatencyMS,
 		Stream:        e.Stream,
 		Tags:          tags,
+		ClientName:    e.ClientName,
+		ClientVersion: e.ClientVersion,
 		SessionID:     e.SessionID,
 		AgentID:       e.AgentID,
 		ParentAgentID: e.ParentAgentID,

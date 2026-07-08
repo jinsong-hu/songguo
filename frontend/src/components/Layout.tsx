@@ -116,7 +116,7 @@ export function Layout() {
 }
 
 interface PageProps {
-  title: string;
+  title: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
 }

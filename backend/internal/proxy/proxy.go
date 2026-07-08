@@ -205,6 +205,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// forwarded one would.
 	tags := rt.tags
 	attr := rt.attr
+	client := rt.client
 	t := rt.targets[0]
 	modality := rt.modalityFor(t.Vendor.Name)
 
@@ -219,6 +220,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				UserID: user.ID, Model: rt.model, Modality: modality,
 				Vendor: t.Vendor.Name, CredentialID: t.Credential.ID,
 				Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
+				ClientName: client.Name, ClientVersion: client.Version,
 			}, http.StatusPaymentRequired, "budget_exceeded", "budget exceeded")
 			return
 		}
@@ -230,6 +232,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			UserID: user.ID, Model: rt.model, Modality: modality,
 			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID,
 			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
+			ClientName: client.Name, ClientVersion: client.Version,
 		}, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded")
 		return
 	}
@@ -257,6 +260,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			UserID: user.ID, Model: rt.model, Modality: modality,
 			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID,
 			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
+			ClientName: client.Name, ClientVersion: client.Version,
 		}, http.StatusBadGateway, "upstream_error", "failed to build upstream request")
 		return
 	}
@@ -275,13 +279,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			UserID: user.ID, Model: rt.model, Modality: modality,
 			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID, LatencyMS: latency,
 			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
+			ClientName: client.Name, ClientVersion: client.Version,
 		}, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
 
 	// Forward the vendor's response verbatim — including a 429/5xx. The client
 	// sees the real outcome and decides whether to retry.
-	h.forward(w, r, resp, user.ID, rt.model, modality, rw, t, latency, tags, attr, capture, body)
+	h.forward(w, r, resp, user.ID, rt.model, modality, rw, t, latency, tags, attr, client, capture, body)
 }
 
 // route is the resolved plan for a request: the candidate targets in selection
@@ -297,6 +302,7 @@ type route struct {
 	wires       map[string]resolvedWire // keyed by vendor name
 	tags        map[string]string       // call tags (header + body metadata)
 	attr        attribution             // agent-session attribution ids
+	client      calls.ClientInfo        // normalized caller client from User-Agent
 }
 
 // resolvedWire is the metering plan for one candidate vendor: the matched wire
@@ -355,6 +361,11 @@ func (h *handler) denyCapture(w http.ResponseWriter, r *http.Request, body []byt
 	e calls.Entry, status int, reason, message string) {
 	e.TS = h.now()
 	e.Status = status
+	if e.ClientName == "" {
+		client := calls.ParseClientInfo(r.UserAgent())
+		e.ClientName = client.Name
+		e.ClientVersion = client.Version
+	}
 	if e.Err == "" {
 		e.Err = reason
 	}
@@ -400,6 +411,7 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 	res := meter.Classify(r.Method, r.URL.Path, body)
 	tags := extractTags(r.Header.Get("X-Songguo-Tags"), body)
 	attr := extractAttribution(r.Header)
+	client := calls.ParseClientInfo(r.UserAgent())
 
 	// Two distinct identities, deliberately kept apart:
 	//   routingModel — the body's model, the ONLY thing we route on. Empty for
@@ -421,6 +433,7 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 		return calls.Entry{
 			UserID: user.ID, Model: billingModel, Modality: res.Modality, Vendor: vendor,
 			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
+			ClientName: client.Name, ClientVersion: client.Version,
 		}
 	}
 
@@ -487,6 +500,7 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 		wires:    wires,
 		tags:     tags,
 		attr:     attr,
+		client:   client,
 		upstreamURL: func(t router.Target) string {
 			if rw, ok := wires[t.Vendor.Name]; ok && rw.matched {
 				// A path-bearing endpoint is the fixed upstream URL — a rewrite
@@ -685,7 +699,7 @@ func (h *handler) captureOn() bool {
 // call row is written.
 func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Response,
 	userID, model string, modality calls.Modality, rw resolvedWire, t router.Target,
-	latency int64, tags map[string]string, attr attribution, capture bool, reqBody []byte) {
+	latency int64, tags map[string]string, attr attribution, client calls.ClientInfo, capture bool, reqBody []byte) {
 	defer resp.Body.Close()
 
 	stream := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
@@ -766,6 +780,8 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		SessionID:     attr.session,
 		AgentID:       attr.agent,
 		ParentAgentID: attr.parentAgent,
+		ClientName:    client.Name,
+		ClientVersion: client.Version,
 	})
 	if err != nil {
 		h.logger.Error("call append failed", "err", err, "vendor", t.Vendor.Name, "model", model)

@@ -2,8 +2,10 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, GitBranch } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from 'recharts';
+import { svg as claudeCodeSvg } from 'thesvg/claude-code';
+import { svg as codexOpenAISvg } from 'thesvg/codex-openai';
 import { api } from '../api/client';
-import type { AgentNode } from '../api/types';
+import type { AgentNode, CallEntry } from '../api/types';
 import { ContextSunburst, srcColor, srcLabel } from '../components/ContextSunburst';
 import { InfoHint } from '../components/InfoHint';
 import { CopyButton } from '../components/CopyButton';
@@ -75,10 +77,21 @@ export function SessionDetailPage() {
   }, [axis, sourceKeys]);
 
   const spanMs = data ? new Date(data.last_ts).getTime() - new Date(data.first_ts).getTime() : 0;
+  const sessionClient = useMemo(() => dominantClient(data?.entries ?? []), [data]);
 
   return (
     <Page
-      title="Session"
+      title={
+        data ? (
+          <span className={styles.sessionTitle}>
+            <span>Session</span>
+            <code className={`mono ${styles.sessionTitleId}`}>{data.session_id}</code>
+            <CopyButton value={data.session_id} ariaLabel="Copy session id" />
+          </span>
+        ) : (
+          'Session'
+        )
+      }
       actions={
         <Link to="/" className="btn">
           <ArrowLeft size={15} /> Back to overview
@@ -95,14 +108,8 @@ export function SessionDetailPage() {
         </div>
       ) : (
         <div className={styles.stack}>
-          <div className={styles.traceHead}>
-            <code className="mono" style={{ fontSize: 13 }}>
-              {data.session_id}
-            </code>
-            <CopyButton value={data.session_id} label="Copy session id" />
-          </div>
-
           <div className={styles.kpiRow}>
+            {sessionClient ? <ClientTile client={sessionClient} /> : null}
             <Kpi label="Calls" value={int(data.calls)} />
             <Kpi label="Cost" value={money(data.cost)} />
             <Kpi label="Input tokens" value={int(data.input_tokens)} />
@@ -253,6 +260,54 @@ function Kpi({ label, value }: { label: string; value: string }) {
       <div className={styles.kpiValue}>{value}</div>
     </div>
   );
+}
+
+interface ClientBadgeData {
+  name: string;
+  version: string;
+}
+
+function dominantClient(entries: CallEntry[]): ClientBadgeData | null {
+  const counts = new Map<string, { client: ClientBadgeData; count: number }>();
+  for (const e of entries) {
+    if (!e.client_name) continue;
+    const key = `${e.client_name}\x00${e.client_version}`;
+    const current = counts.get(key);
+    if (current) {
+      current.count += 1;
+    } else {
+      counts.set(key, { client: { name: e.client_name, version: e.client_version }, count: 1 });
+    }
+  }
+  let best: { client: ClientBadgeData; count: number } | null = null;
+  for (const item of counts.values()) {
+    if (!best || item.count > best.count) best = item;
+  }
+  return best?.client ?? null;
+}
+
+function ClientTile({ client }: { client: ClientBadgeData }) {
+  const label = client.name === 'claude-code' ? 'Claude Code' : client.name === 'codex-openai' ? 'Codex' : client.name;
+  const icon = clientIconSvg(client.name);
+
+  return (
+    <div className={`card ${styles.clientTile}`}>
+      <div className={styles.fieldLabel}>Client</div>
+      <div className={styles.clientIconStage}>
+        {icon ? <span className={styles.clientIcon} aria-hidden="true" dangerouslySetInnerHTML={{ __html: icon }} /> : null}
+      </div>
+      <div className={styles.clientFoot} title={client.version ? `${label} ${client.version}` : label}>
+        <span className={styles.clientName}>{label}</span>
+        {client.version ? <span className={styles.clientVersion}>{client.version}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function clientIconSvg(name: string): string {
+  if (name === 'claude-code') return claudeCodeSvg;
+  if (name === 'codex-openai') return codexOpenAISvg;
+  return '';
 }
 
 function AgentTreeNode({ node }: { node: AgentNode }) {

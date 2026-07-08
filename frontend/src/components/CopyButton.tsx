@@ -5,11 +5,13 @@ interface CopyButtonProps {
   value: string;
   /** Optional label rendered next to the icon. */
   label?: string;
+  /** Accessible label for icon-only usage. */
+  ariaLabel?: string;
   className?: string;
 }
 
 /** A small button that copies a value to the clipboard and confirms briefly. */
-export function CopyButton({ value, label, className }: CopyButtonProps) {
+export function CopyButton({ value, label, ariaLabel, className }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
@@ -35,7 +37,7 @@ export function CopyButton({ value, label, className }: CopyButtonProps) {
       type="button"
       className={`btn btn-sm ${className ?? ''}`}
       onClick={copy}
-      aria-label={`Copy ${label ?? 'value'}`}
+      aria-label={ariaLabel ?? `Copy ${label ?? 'value'}`}
     >
       {copied ? <Check size={13} /> : <Copy size={13} />}
       {label ? <span>{copied ? 'Copied' : label}</span> : null}

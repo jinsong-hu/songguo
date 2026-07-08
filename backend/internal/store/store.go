@@ -240,6 +240,10 @@ func (s *Store) migrate() error {
 		{"calls", "session_id", "TEXT NOT NULL DEFAULT ''"},
 		{"calls", "agent_id", "TEXT NOT NULL DEFAULT ''"},
 		{"calls", "parent_agent_id", "TEXT NOT NULL DEFAULT ''"},
+		// Normalized client identity parsed from User-Agent. Empty for rows
+		// written before this column existed or for unrecognized clients.
+		{"calls", "client_name", "TEXT NOT NULL DEFAULT ''"},
+		{"calls", "client_version", "TEXT NOT NULL DEFAULT ''"},
 		{"providers", "allow_unmatched", "INTEGER NOT NULL DEFAULT 0"},
 		{"providers", "quirks", "TEXT NOT NULL DEFAULT '{}'"},
 		{"providers", "api_key", "TEXT NOT NULL DEFAULT ''"},
