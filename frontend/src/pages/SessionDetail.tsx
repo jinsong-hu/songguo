@@ -23,7 +23,7 @@ import {
   type ChartConfig,
 } from '../components/ui/chart';
 import { useFetch } from '../lib/useFetch';
-import { dateTime, int, money, ms } from '../lib/format';
+import { dateTime, duration, int, money } from '../lib/format';
 import styles from './Detail.module.css';
 
 const SRC_ORDER = ['tool_results', 'tool_schemas', 'system', 'reasoning', 'actions', 'user', 'attachments', 'unattributed'];
@@ -110,12 +110,18 @@ export function SessionDetailPage() {
         <div className={styles.stack}>
           <div className={styles.kpiRow}>
             {sessionClient ? <ClientTile client={sessionClient} /> : null}
-            <Kpi label="Calls" value={int(data.calls)} />
-            <Kpi label="Cost" value={money(data.cost)} />
-            <Kpi label="Input tokens" value={int(data.input_tokens)} />
-            <Kpi label="Output tokens" value={int(data.output_tokens)} />
-            <Kpi label="Errors" value={int(data.error_count)} />
-            <Kpi label="Span" value={ms(spanMs)} />
+            <Kpi
+              label="Tokens"
+              value={int(data.input_tokens + data.output_tokens)}
+              footLabel="Cost"
+              footValue={money(data.cost)}
+            />
+            <Kpi
+              label="Duration"
+              value={duration(spanMs / 1000)}
+              footLabel="Turns"
+              footValue={int(turns.length)}
+            />
           </div>
 
           {turns.length > 0 && (
@@ -253,11 +259,27 @@ export function SessionDetailPage() {
   );
 }
 
-function Kpi({ label, value }: { label: string; value: string }) {
+function Kpi({
+  label,
+  value,
+  footLabel,
+  footValue,
+}: {
+  label: string;
+  value: string;
+  footLabel?: string;
+  footValue?: string;
+}) {
   return (
     <div className={`card ${styles.kpi}`}>
       <div className={styles.fieldLabel}>{label}</div>
       <div className={styles.kpiValue}>{value}</div>
+      {footLabel || footValue ? (
+        <div className={styles.tileFoot}>
+          <span className={styles.tileFootLabel}>{footLabel}</span>
+          <span className={styles.tileFootValue}>{footValue}</span>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -296,9 +318,9 @@ function ClientTile({ client }: { client: ClientBadgeData }) {
       <div className={styles.clientIconStage}>
         {icon ? <span className={styles.clientIcon} aria-hidden="true" dangerouslySetInnerHTML={{ __html: icon }} /> : null}
       </div>
-      <div className={styles.clientFoot} title={client.version ? `${label} ${client.version}` : label}>
-        <span className={styles.clientName}>{label}</span>
-        {client.version ? <span className={styles.clientVersion}>{client.version}</span> : null}
+      <div className={styles.tileFoot} title={client.version ? `${label} ${client.version}` : label}>
+        <span className={styles.tileFootLabel}>{label}</span>
+        {client.version ? <span className={styles.tileFootValue}>{client.version}</span> : null}
       </div>
     </div>
   );
