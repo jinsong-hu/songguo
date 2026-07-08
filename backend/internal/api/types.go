@@ -272,6 +272,7 @@ type feedRowView struct {
 	FirstTS      string   `json:"first_ts"`
 	LastTS       string   `json:"last_ts"`
 	ErrorCount   int      `json:"error_count"`
+	MajorModel   string   `json:"major_model,omitempty"`
 	Models       []string `json:"models"`
 	Vendors      []string `json:"vendors"`
 	// Single-call fields, populated only for request rows.
@@ -306,6 +307,7 @@ func newFeedRowView(r store.FeedRow) feedRowView {
 		FirstTS:      r.FirstTS.UTC().Format(time.RFC3339),
 		LastTS:       r.LastTS.UTC().Format(time.RFC3339),
 		ErrorCount:   r.ErrorCount,
+		MajorModel:   r.MajorModel,
 		Models:       models,
 		Vendors:      vendors,
 		Model:        r.Model,

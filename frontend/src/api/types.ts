@@ -190,6 +190,8 @@ export interface FeedRow {
   first_ts: string;
   last_ts: string;
   error_count: number;
+  /** Model with the most calls in this feed row; useful for aggregated sessions. */
+  major_model?: string;
   models: string[];
   vendors: string[];
   // Single-call fields, present only on request rows.

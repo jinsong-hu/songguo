@@ -43,11 +43,12 @@ func TestFeedGroupsSessions(t *testing.T) {
 	s := openTestStore(t)
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
-	// Two calls in session "sess" (oldest two), then one standalone request.
+	// Three calls in session "sess" (oldest three), then one standalone request.
 	appends := []calls.Entry{
 		{TS: base.Add(0 * time.Minute), Model: "m1", Vendor: "v", Status: 200, Cost: 1, InputTokens: 10, OutputTokens: 5, SessionID: "sess"},
 		{TS: base.Add(1 * time.Minute), Model: "m2", Vendor: "v", Status: 500, Cost: 2, InputTokens: 20, OutputTokens: 7, SessionID: "sess"},
-		{TS: base.Add(2 * time.Minute), Model: "m3", Vendor: "w", Status: 200, Cost: 4, InputTokens: 30, OutputTokens: 9},
+		{TS: base.Add(2 * time.Minute), Model: "m1", Vendor: "v", Status: 200, Cost: 1, InputTokens: 5, OutputTokens: 3, SessionID: "sess"},
+		{TS: base.Add(3 * time.Minute), Model: "m3", Vendor: "w", Status: 200, Cost: 4, InputTokens: 30, OutputTokens: 9},
 	}
 	for i, e := range appends {
 		if _, err := s.AppendCall(e); err != nil {
@@ -67,7 +68,7 @@ func TestFeedGroupsSessions(t *testing.T) {
 	}
 
 	// Newest activity first: the standalone request (t+2m) leads the session
-	// (last activity t+1m).
+	// (last activity t+2m).
 	req := rows[0]
 	if req.Kind != "request" {
 		t.Errorf("rows[0].Kind = %q, want request", req.Kind)
@@ -80,16 +81,19 @@ func TestFeedGroupsSessions(t *testing.T) {
 	if sess.Kind != "session" || sess.SessionID != "sess" {
 		t.Fatalf("rows[1] = %+v, want session sess", sess)
 	}
-	if sess.Calls != 2 {
-		t.Errorf("session calls = %d, want 2", sess.Calls)
+	if sess.Calls != 3 {
+		t.Errorf("session calls = %d, want 3", sess.Calls)
 	}
-	if sess.Cost != 3 || sess.InputTokens != 30 || sess.OutputTokens != 12 {
-		t.Errorf("session rollup cost/in/out = %v/%v/%v, want 3/30/12", sess.Cost, sess.InputTokens, sess.OutputTokens)
+	if sess.Cost != 4 || sess.InputTokens != 35 || sess.OutputTokens != 15 {
+		t.Errorf("session rollup cost/in/out = %v/%v/%v, want 4/35/15", sess.Cost, sess.InputTokens, sess.OutputTokens)
 	}
 	if sess.ErrorCount != 1 {
 		t.Errorf("session error_count = %d, want 1 (the 500)", sess.ErrorCount)
 	}
 	if len(sess.Models) != 2 {
 		t.Errorf("session models = %v, want 2 distinct", sess.Models)
+	}
+	if sess.MajorModel != "m1" {
+		t.Errorf("session major model = %q, want m1", sess.MajorModel)
 	}
 }

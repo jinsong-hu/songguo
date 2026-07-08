@@ -770,6 +770,7 @@ components:
         first_ts: { type: string, format: date-time }
         last_ts: { type: string, format: date-time }
         error_count: { type: integer }
+        major_model: { type: string, description: "Model with the most calls in this feed row; useful for aggregated session rows." }
         models: { type: array, items: { type: string } }
         vendors: { type: array, items: { type: string } }
         model: { type: string }

@@ -24,6 +24,7 @@ type FeedRow struct {
 	FirstTS      time.Time
 	LastTS       time.Time // ordering key + "last activity" display
 	ErrorCount   int       // calls with status 0 or >= 400
+	MajorModel   string    // model with the most calls in the group
 	Models       []string  // distinct models touched (session rows)
 	Vendors      []string  // distinct vendors touched (session rows)
 
@@ -84,6 +85,7 @@ func (s *Store) Feed(f CallFilter) ([]FeedRow, int, error) {
 		MIN(ts) AS first_ts,
 		MAX(ts) AS last_ts,
 		` + feedErrorExpr + ` AS error_count,
+		group_concat(model) AS model_samples,
 		group_concat(DISTINCT model) AS models,
 		group_concat(DISTINCT vendor) AS vendors,
 		MAX(model) AS model,
@@ -127,6 +129,7 @@ func scanFeedRow(rows *sql.Rows) (FeedRow, error) {
 		isSession  int
 		firstMs    int64
 		lastMs     int64
+		modelsAll  sql.NullString
 		models     sql.NullString
 		vendors    sql.NullString
 		confidence string
@@ -136,7 +139,7 @@ func scanFeedRow(rows *sql.Rows) (FeedRow, error) {
 	if err := rows.Scan(
 		&gkey, &isSession, &r.SessionID, &r.RequestID, &r.Calls,
 		&r.Cost, &r.InputTokens, &r.OutputTokens, &firstMs, &lastMs, &r.ErrorCount,
-		&models, &vendors,
+		&modelsAll, &models, &vendors,
 		&r.Model, &r.Vendor, &r.Wire, &confidence, &modality, &r.Status, &r.LatencyMS, &stream,
 	); err != nil {
 		return FeedRow{}, err
@@ -147,6 +150,7 @@ func scanFeedRow(rows *sql.Rows) (FeedRow, error) {
 	r.Confidence = calls.Confidence(confidence)
 	r.Modality = calls.Modality(modality)
 	r.Stream = stream != 0
+	r.MajorModel = majorModel(modelsAll.String)
 	r.Models = splitDistinct(models.String)
 	r.Vendors = splitDistinct(vendors.String)
 
@@ -158,6 +162,26 @@ func scanFeedRow(rows *sql.Rows) (FeedRow, error) {
 		r.SessionID = ""
 	}
 	return r, nil
+}
+
+func majorModel(s string) string {
+	if s == "" {
+		return ""
+	}
+	counts := map[string]int{}
+	best := ""
+	bestCount := 0
+	for _, p := range strings.Split(s, ",") {
+		if p == "" {
+			continue
+		}
+		counts[p]++
+		if counts[p] > bestCount || (counts[p] == bestCount && (best == "" || p < best)) {
+			best = p
+			bestCount = counts[p]
+		}
+	}
+	return best
 }
 
 // splitDistinct turns a group_concat result into a trimmed, empties-dropped
