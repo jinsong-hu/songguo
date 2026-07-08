@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, GitBranch } from 'lucide-react';
+import { ArrowLeft, ChevronRight, GitBranch } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from 'recharts';
 import { svg as claudeCodeSvg } from 'thesvg/claude-code';
 import { svg as codexOpenAISvg } from 'thesvg/codex-openai';
@@ -185,19 +185,6 @@ export function SessionDetailPage() {
             </div>
           )}
 
-          <div className="card" style={{ padding: 16 }}>
-            <div className={styles.fieldLabel}>Models</div>
-            <div className={styles.tags}>
-              {data.models.length > 0
-                ? data.models.map((m) => (
-                    <span key={m} className="chip chip-mono">
-                      {m}
-                    </span>
-                  ))
-                : '—'}
-            </div>
-          </div>
-
           {data.agents.length > 0 && (
             <div className="card" style={{ padding: 16 }}>
               <div className={styles.fieldLabel} style={{ marginBottom: 12 }}>
@@ -354,11 +341,14 @@ function InitialPromptCard({ entry }: { entry: CallEntry }) {
 
   return (
     <div className={styles.promptGrid}>
-      <section className={styles.promptPanel}>
-        <div className={styles.promptPanelHead}>
-          <span>System Prompt</span>
-          <span className="chip chip-mono">{prompt.system.length} {prompt.system.length === 1 ? 'block' : 'blocks'}</span>
-        </div>
+      <details className={styles.promptPanel}>
+        <summary className={styles.promptPanelHead}>
+          <span className={styles.promptPanelTitle}>
+            <ChevronRight size={15} className={styles.promptChevron} />
+            System Prompt
+          </span>
+          <span className="chip chip-mono">{prompt.system.length}</span>
+        </summary>
         <div className={styles.promptScroll}>
           {prompt.system.length > 0 ? (
             prompt.system.map((block, i) => (
@@ -368,31 +358,57 @@ function InitialPromptCard({ entry }: { entry: CallEntry }) {
             <div className={styles.promptEmpty}>No system content in this request.</div>
           )}
         </div>
-      </section>
+      </details>
 
-      <section className={styles.promptPanel}>
-        <div className={styles.promptPanelHead}>
-          <span>Tools</span>
+      <details className={styles.promptPanel}>
+        <summary className={styles.promptPanelHead}>
+          <span className={styles.promptPanelTitle}>
+            <ChevronRight size={15} className={styles.promptChevron} />
+            Tools
+          </span>
           <span className="chip chip-mono">{prompt.tools.length}</span>
-        </div>
+        </summary>
         <div className={styles.toolList}>
           {prompt.tools.length > 0 ? (
             prompt.tools.map((tool, i) => (
-              <details key={`${tool.name}-${i}`} className={styles.toolItem}>
-                <summary className={styles.toolSummary}>
-                  <span className={styles.toolName}>{tool.name || '(unnamed tool)'}</span>
-                  <span className={styles.toolMeta}>{tool.propertyCount} inputs</span>
-                </summary>
-                {tool.description ? <p className={styles.toolDesc}>{tool.description}</p> : null}
-                <pre className={styles.schemaCode}>{tool.schema}</pre>
-              </details>
+              <ToolCard key={`${tool.name}-${i}`} tool={tool} />
             ))
           ) : (
             <div className={styles.promptEmpty}>No tools in this request.</div>
           )}
         </div>
-      </section>
+      </details>
     </div>
+  );
+}
+
+function ToolCard({ tool }: { tool: ToolInfo }) {
+  const ref = useRef<HTMLDetailsElement | null>(null);
+  const [align, setAlign] = useState<'left' | 'right'>('left');
+
+  function handleToggle() {
+    const el = ref.current;
+    if (!el?.open) return;
+    const rect = el.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const panelWidth = Math.min(760, viewportWidth - 80);
+    const margin = 24;
+    const overflowsRight = rect.left + panelWidth > viewportWidth - margin;
+    const fitsLeft = rect.right - panelWidth >= margin;
+    setAlign(overflowsRight && fitsLeft ? 'right' : 'left');
+  }
+
+  return (
+    <details ref={ref} className={styles.toolCard} onToggle={handleToggle}>
+      <summary className={styles.toolSummary}>
+        <span className={styles.toolName}>{tool.name || '(unnamed tool)'}</span>
+        <span className={styles.toolMeta}>{tool.propertyCount} inputs</span>
+      </summary>
+      <div className={`${styles.toolDetail} ${align === 'right' ? styles.toolDetailRight : styles.toolDetailLeft}`}>
+        {tool.description ? <p className={styles.toolDesc}>{tool.description}</p> : null}
+        <SchemaView schema={tool.schema} />
+      </div>
+    </details>
   );
 }
 
@@ -405,7 +421,7 @@ interface ToolInfo {
   name: string;
   description: string;
   propertyCount: number;
-  schema: string;
+  schema: unknown;
 }
 
 function isMainPromptEntry(entry: CallEntry): boolean {
@@ -441,14 +457,150 @@ function toolInfos(tools: unknown): ToolInfo[] {
   if (!Array.isArray(tools)) return [];
   return tools.map((tool) => {
     const record = isRecord(tool) ? tool : {};
-    const schema = record.input_schema;
+    const fn = isRecord(record.function) ? record.function : {};
+    const schema = record.input_schema ?? record.parameters ?? fn.parameters;
     return {
-      name: typeof record.name === 'string' ? record.name : '',
-      description: typeof record.description === 'string' ? record.description : '',
+      name:
+        typeof record.name === 'string'
+          ? record.name
+          : typeof fn.name === 'string'
+            ? fn.name
+            : typeof record.type === 'string'
+              ? record.type
+              : '',
+      description:
+        typeof record.description === 'string'
+          ? record.description
+          : typeof fn.description === 'string'
+            ? fn.description
+            : '',
       propertyCount: schemaPropertyCount(schema),
-      schema: prettyJson(stripCacheControl(schema ?? {})),
+      schema: stripCacheControl(schema ?? {}),
     };
   });
+}
+
+function SchemaView({ schema }: { schema: unknown }) {
+  const fields = schemaFields(schema);
+  if (fields.length === 0) {
+    return (
+      <div className={styles.schemaEmpty}>
+        <span>No structured inputs.</span>
+        {isRecord(schema) && Object.keys(schema).length > 0 ? (
+          <details className={styles.schemaRaw}>
+            <summary>Raw schema</summary>
+            <pre className={styles.schemaCode}>{prettyJson(schema)}</pre>
+          </details>
+        ) : null}
+      </div>
+    );
+  }
+  return (
+    <div className={styles.schemaFields}>
+      {fields.map((field) => (
+        <SchemaField key={field.path} field={field} />
+      ))}
+    </div>
+  );
+}
+
+interface SchemaFieldInfo {
+  path: string;
+  name: string;
+  type: string;
+  description: string;
+  required: boolean;
+  enumValues: string[];
+  children: SchemaFieldInfo[];
+}
+
+function SchemaField({ field }: { field: SchemaFieldInfo }) {
+  return (
+    <div className={styles.schemaField}>
+      <div className={styles.schemaFieldTop}>
+        <span className={styles.schemaFieldName}>{field.name}</span>
+        <span className={styles.schemaFieldType}>{field.type}</span>
+        <span className={field.required ? styles.schemaRequired : styles.schemaOptional}>
+          {field.required ? 'Required' : 'Optional'}
+        </span>
+      </div>
+      {field.description ? <div className={styles.schemaFieldDesc}>{field.description}</div> : null}
+      {field.enumValues.length > 0 ? (
+        <div className={styles.schemaEnums}>
+          {field.enumValues.map((value) => (
+            <span key={value} className={styles.schemaEnum}>{value}</span>
+          ))}
+        </div>
+      ) : null}
+      {field.children.length > 0 ? (
+        <div className={styles.schemaChildren}>
+          {field.children.map((child) => (
+            <SchemaField key={child.path} field={child} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function schemaFields(schema: unknown): SchemaFieldInfo[] {
+  if (!isRecord(schema) || !isRecord(schema.properties)) return [];
+  const required = stringSet(schema.required);
+  return Object.entries(schema.properties).map(([name, value]) =>
+    schemaFieldInfo(name, value, required.has(name), name),
+  );
+}
+
+function schemaFieldInfo(name: string, schema: unknown, required: boolean, path: string): SchemaFieldInfo {
+  const record = isRecord(schema) ? schema : {};
+  const type = schemaType(record);
+  const childRequired = stringSet(record.required);
+  const childProperties = isRecord(record.properties)
+    ? Object.entries(record.properties).map(([childName, childSchema]) =>
+        schemaFieldInfo(childName, childSchema, childRequired.has(childName), `${path}.${childName}`),
+      )
+    : arrayItemFields(record, path);
+
+  return {
+    path,
+    name,
+    type,
+    description: typeof record.description === 'string' ? record.description : '',
+    required,
+    enumValues: enumValues(record.enum),
+    children: childProperties,
+  };
+}
+
+function arrayItemFields(schema: Record<string, unknown>, path: string): SchemaFieldInfo[] {
+  const items = schema.items;
+  if (!isRecord(items) || !isRecord(items.properties)) return [];
+  const required = stringSet(items.required);
+  return Object.entries(items.properties).map(([name, value]) =>
+    schemaFieldInfo(name, value, required.has(name), `${path}[].${name}`),
+  );
+}
+
+function schemaType(schema: Record<string, unknown>): string {
+  if (typeof schema.type === 'string') {
+    if (schema.type === 'array' && isRecord(schema.items)) return `array<${schemaType(schema.items)}>`;
+    return schema.type;
+  }
+  if (Array.isArray(schema.type)) return schema.type.filter((item) => typeof item === 'string').join(' | ') || 'value';
+  if (Array.isArray(schema.enum)) return 'enum';
+  if (Array.isArray(schema.anyOf)) return 'anyOf';
+  if (Array.isArray(schema.oneOf)) return 'oneOf';
+  return 'value';
+}
+
+function stringSet(value: unknown): Set<string> {
+  if (!Array.isArray(value)) return new Set();
+  return new Set(value.filter((item): item is string => typeof item === 'string'));
+}
+
+function enumValues(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item)).slice(0, 12);
 }
 
 function schemaPropertyCount(schema: unknown): number {

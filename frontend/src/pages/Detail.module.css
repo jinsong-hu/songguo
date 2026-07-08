@@ -181,13 +181,12 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .promptPanelHead {
   min-height: 38px;
   padding: 9px 12px;
-  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -195,6 +194,33 @@
   color: var(--text);
   font-size: 12.5px;
   font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.promptPanelHead::-webkit-details-marker {
+  display: none;
+}
+
+.promptPanel[open] .promptPanelHead {
+  border-bottom: 1px solid var(--border);
+}
+
+.promptPanelTitle {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.promptChevron {
+  flex: none;
+  color: var(--text-muted);
+  transition: transform 140ms ease;
+}
+
+.promptPanel[open] .promptChevron {
+  transform: rotate(90deg);
 }
 
 .promptScroll {
@@ -225,16 +251,33 @@
 }
 
 .toolList {
-  max-height: 360px;
-  overflow: auto;
+  overflow: visible;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: 10px;
+  align-items: start;
 }
 
-.toolItem {
+.toolList:has(.toolCard[open]) {
+  padding-bottom: 380px;
+}
+
+.toolCard {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: visible;
+  position: relative;
+}
+
+.toolCard[open] {
+  z-index: 5;
+}
+
+.toolCard[open] .toolSummary {
   border-bottom: 1px solid var(--border);
-}
-
-.toolItem:last-child {
-  border-bottom: none;
 }
 
 .toolSummary {
@@ -263,12 +306,153 @@
   font-size: 11.5px;
 }
 
+.toolDetail {
+  display: none;
+}
+
+.toolCard[open] .toolDetail {
+  display: block;
+  position: absolute;
+  top: calc(100% + 8px);
+  width: min(760px, calc(100vw - 80px));
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.14);
+}
+
+.toolDetailLeft {
+  left: 0;
+  right: auto;
+}
+
+.toolDetailRight {
+  left: auto;
+  right: 0;
+}
+
 .toolDesc {
   margin: 0;
-  padding: 0 12px 10px;
+  padding: 12px;
   color: var(--text-muted);
   font-size: 12.5px;
   line-height: 1.45;
+}
+
+.schemaFields {
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.schemaField {
+  min-width: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.schemaFields > .schemaField:first-child {
+  border-top: none;
+}
+
+.schemaFieldTop {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.schemaFieldName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.schemaFieldType {
+  flex: none;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.schemaRequired,
+.schemaOptional {
+  flex: none;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.schemaRequired {
+  color: var(--accent);
+  background: var(--accent-weak);
+}
+
+.schemaOptional {
+  color: var(--text-muted);
+  background: var(--surface-2);
+}
+
+.schemaFieldDesc {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.schemaEnums {
+  margin-top: 7px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.schemaEnum {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 6px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10.5px;
+}
+
+.schemaChildren {
+  margin-top: 8px;
+  margin-left: 8px;
+  border-left: 2px solid var(--border);
+}
+
+.schemaChildren .schemaField {
+  padding: 8px 0 8px 10px;
+  border-top: none;
+}
+
+.schemaEmpty {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.schemaRaw {
+  margin-top: 8px;
+}
+
+.schemaRaw summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12px;
 }
 
 .schemaCode {
