@@ -23,6 +23,7 @@ type FeedRow struct {
 	OutputTokens float64
 	FirstTS      time.Time
 	LastTS       time.Time // ordering key + "last activity" display
+	DurationMS   int64     // max(request start + latency) - first request start
 	ErrorCount   int       // calls with status 0 or >= 400
 	MajorModel   string    // model with the most calls in the group
 	Models       []string  // distinct models touched (session rows)
@@ -84,6 +85,7 @@ func (s *Store) Feed(f CallFilter) ([]FeedRow, int, error) {
 		COALESCE(SUM(output_tokens), 0) AS output_tokens,
 		MIN(ts) AS first_ts,
 		MAX(ts) AS last_ts,
+		COALESCE(MAX(ts + latency_ms) - MIN(ts), 0) AS duration_ms,
 		` + feedErrorExpr + ` AS error_count,
 		group_concat(model) AS model_samples,
 		group_concat(DISTINCT model) AS models,
@@ -138,7 +140,7 @@ func scanFeedRow(rows *sql.Rows) (FeedRow, error) {
 	)
 	if err := rows.Scan(
 		&gkey, &isSession, &r.SessionID, &r.RequestID, &r.Calls,
-		&r.Cost, &r.InputTokens, &r.OutputTokens, &firstMs, &lastMs, &r.ErrorCount,
+		&r.Cost, &r.InputTokens, &r.OutputTokens, &firstMs, &lastMs, &r.DurationMS, &r.ErrorCount,
 		&modelsAll, &models, &vendors,
 		&r.Model, &r.Vendor, &r.Wire, &confidence, &modality, &r.Status, &r.LatencyMS, &stream,
 	); err != nil {

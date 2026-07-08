@@ -271,6 +271,7 @@ type feedRowView struct {
 	OutputTokens float64  `json:"output_tokens"`
 	FirstTS      string   `json:"first_ts"`
 	LastTS       string   `json:"last_ts"`
+	DurationMS   int64    `json:"duration_ms"`
 	ErrorCount   int      `json:"error_count"`
 	MajorModel   string   `json:"major_model,omitempty"`
 	Models       []string `json:"models"`
@@ -306,6 +307,7 @@ func newFeedRowView(r store.FeedRow) feedRowView {
 		OutputTokens: r.OutputTokens,
 		FirstTS:      r.FirstTS.UTC().Format(time.RFC3339),
 		LastTS:       r.LastTS.UTC().Format(time.RFC3339),
+		DurationMS:   r.DurationMS,
 		ErrorCount:   r.ErrorCount,
 		MajorModel:   r.MajorModel,
 		Models:       models,

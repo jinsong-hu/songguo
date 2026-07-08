@@ -189,6 +189,8 @@ export interface FeedRow {
   output_tokens: number;
   first_ts: string;
   last_ts: string;
+  /** Duration from first request start to last request end, in milliseconds. */
+  duration_ms: number;
   error_count: number;
   /** Model with the most calls in this feed row; useful for aggregated sessions. */
   major_model?: string;

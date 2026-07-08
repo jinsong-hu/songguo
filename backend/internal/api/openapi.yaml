@@ -769,6 +769,7 @@ components:
         output_tokens: { type: number }
         first_ts: { type: string, format: date-time }
         last_ts: { type: string, format: date-time }
+        duration_ms: { type: integer, format: int64, description: "Duration from first request start to last request end, in milliseconds." }
         error_count: { type: integer }
         major_model: { type: string, description: "Model with the most calls in this feed row; useful for aggregated session rows." }
         models: { type: array, items: { type: string } }

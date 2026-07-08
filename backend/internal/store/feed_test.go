@@ -45,10 +45,10 @@ func TestFeedGroupsSessions(t *testing.T) {
 
 	// Three calls in session "sess" (oldest three), then one standalone request.
 	appends := []calls.Entry{
-		{TS: base.Add(0 * time.Minute), Model: "m1", Vendor: "v", Status: 200, Cost: 1, InputTokens: 10, OutputTokens: 5, SessionID: "sess"},
-		{TS: base.Add(1 * time.Minute), Model: "m2", Vendor: "v", Status: 500, Cost: 2, InputTokens: 20, OutputTokens: 7, SessionID: "sess"},
-		{TS: base.Add(2 * time.Minute), Model: "m1", Vendor: "v", Status: 200, Cost: 1, InputTokens: 5, OutputTokens: 3, SessionID: "sess"},
-		{TS: base.Add(3 * time.Minute), Model: "m3", Vendor: "w", Status: 200, Cost: 4, InputTokens: 30, OutputTokens: 9},
+		{TS: base.Add(0 * time.Minute), Model: "m1", Vendor: "v", Status: 200, Cost: 1, InputTokens: 10, OutputTokens: 5, LatencyMS: 1000, SessionID: "sess"},
+		{TS: base.Add(1 * time.Minute), Model: "m2", Vendor: "v", Status: 500, Cost: 2, InputTokens: 20, OutputTokens: 7, LatencyMS: 2000, SessionID: "sess"},
+		{TS: base.Add(2 * time.Minute), Model: "m1", Vendor: "v", Status: 200, Cost: 1, InputTokens: 5, OutputTokens: 3, LatencyMS: 3000, SessionID: "sess"},
+		{TS: base.Add(3 * time.Minute), Model: "m3", Vendor: "w", Status: 200, Cost: 4, InputTokens: 30, OutputTokens: 9, LatencyMS: 4000},
 	}
 	for i, e := range appends {
 		if _, err := s.AppendCall(e); err != nil {
@@ -67,7 +67,7 @@ func TestFeedGroupsSessions(t *testing.T) {
 		t.Fatalf("rows = %d, want 2", len(rows))
 	}
 
-	// Newest activity first: the standalone request (t+2m) leads the session
+	// Newest activity first: the standalone request (t+3m) leads the session
 	// (last activity t+2m).
 	req := rows[0]
 	if req.Kind != "request" {
@@ -75,6 +75,9 @@ func TestFeedGroupsSessions(t *testing.T) {
 	}
 	if req.RequestID == 0 || req.Model != "m3" || req.Calls != 1 {
 		t.Errorf("request row = %+v, want single m3 call with an id", req)
+	}
+	if req.DurationMS != 4000 {
+		t.Errorf("request duration = %d, want 4000", req.DurationMS)
 	}
 
 	sess := rows[1]
@@ -95,5 +98,8 @@ func TestFeedGroupsSessions(t *testing.T) {
 	}
 	if sess.MajorModel != "m1" {
 		t.Errorf("session major model = %q, want m1", sess.MajorModel)
+	}
+	if sess.DurationMS != 123000 {
+		t.Errorf("session duration = %d, want 123000", sess.DurationMS)
 	}
 }

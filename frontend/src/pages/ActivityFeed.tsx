@@ -1,15 +1,13 @@
 import { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Layers } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { api } from '../api/client';
 import type { CallsFilters, FeedRow } from '../api/types';
-import { ConfidenceDot } from '../components/ConfidenceDot';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Skeleton } from '../components/Skeleton';
-import { StatusPill } from '../components/StatusPill';
 import { useFetch, LIVE_REFRESH_MS } from '../lib/useFetch';
-import { dateTime, int, money, ms } from '../lib/format';
+import { dateTime, duration, int, money } from '../lib/format';
 import styles from './Overview.module.css';
 
 const PAGE_SIZE = 25;
@@ -93,7 +91,7 @@ export function ActivityFeed({ since, until }: ActivityFeedProps) {
                   <th className="num">Calls</th>
                   <th className="num">Tokens</th>
                   <th className="num">Cost</th>
-                  <th>Status</th>
+                  <th className="num">Duration</th>
                 </tr>
               </thead>
               <tbody>
@@ -151,14 +149,12 @@ function FeedRowView({ row, onOpen }: { row: FeedRow; onOpen: () => void }) {
       </td>
       <td>
         {isSession ? (
-          <span className={styles.timeCell}>
-            <span className="chip" title="Agent session">
-              <Layers size={11} style={{ marginRight: 4 }} />
-              session
-            </span>
-            <span className="mono" style={{ fontSize: 11.5 }}>
-              {shortId(row.session_id ?? '')}
-            </span>
+          <span className="mono" style={{ fontSize: 11.5 }}>
+            {shortId(row.session_id ?? '')}
+          </span>
+        ) : row.wire ? (
+          <span className="mono" style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+            {row.wire}
           </span>
         ) : (
           <span style={{ color: 'var(--text-muted)' }}>—</span>
@@ -166,15 +162,7 @@ function FeedRowView({ row, onOpen }: { row: FeedRow; onOpen: () => void }) {
       </td>
       <td>
         {model ? (
-          <span className={styles.timeCell}>
-            <span className="mono">{model}</span>
-            {!isSession && row.wire && (
-              <span className="mono" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                {row.wire}
-              </span>
-            )}
-            {!isSession && row.confidence && <ConfidenceDot confidence={row.confidence} />}
-          </span>
+          <span className="mono">{model}</span>
         ) : (
           <span style={{ color: 'var(--text-muted)' }}>—</span>
         )}
@@ -184,25 +172,8 @@ function FeedRowView({ row, onOpen }: { row: FeedRow; onOpen: () => void }) {
         {tokens > 0 ? int(tokens) : '—'}
       </td>
       <td className="num">{money(row.cost)}</td>
-      <td>
-        {isSession ? (
-          row.error_count > 0 ? (
-            <span className="chip" style={{ color: 'var(--danger, #c0392b)' }}>
-              {row.error_count} err
-            </span>
-          ) : (
-            <span style={{ color: 'var(--text-muted)' }}>OK</span>
-          )
-        ) : (
-          <span className={styles.timeCell}>
-            <StatusPill status={row.status ?? 0} />
-            {row.latency_ms != null && (
-              <span style={{ color: 'var(--text-muted)', fontSize: 11.5 }}>
-                {ms(row.latency_ms)}
-              </span>
-            )}
-          </span>
-        )}
+      <td className="num">
+        {row.duration_ms != null ? duration(row.duration_ms / 1000) : '—'}
       </td>
     </tr>
   );
