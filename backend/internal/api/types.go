@@ -62,8 +62,10 @@ func newUserView(u store.User, spent float64) userView {
 
 // entryView is the JSON representation of a call entry.
 type entryView struct {
-	ID            int64             `json:"id"`
+	ID            string            `json:"id"`
 	TS            string            `json:"ts"`
+	TSEnd         string            `json:"ts_end,omitempty"` // empty while the call is in flight (pending)
+	Pending       bool              `json:"pending"`          // true when created but not yet finalized
 	UserID        string            `json:"user_id"`
 	Model         string            `json:"model"`
 	Modality      string            `json:"modality"`
@@ -101,9 +103,15 @@ func newEntryView(e calls.Entry) entryView {
 	if tags == nil {
 		tags = map[string]string{}
 	}
+	tsEnd := ""
+	if !e.TSEnd.IsZero() {
+		tsEnd = e.TSEnd.UTC().Format(time.RFC3339)
+	}
 	return entryView{
 		ID:            e.ID,
 		TS:            e.TS.UTC().Format(time.RFC3339),
+		TSEnd:         tsEnd,
+		Pending:       e.Status == calls.StatusPending,
 		UserID:        e.UserID,
 		Model:         e.Model,
 		Modality:      string(e.Modality),
@@ -268,7 +276,7 @@ type callsView struct {
 type feedRowView struct {
 	Kind         string   `json:"kind"` // "session" | "request"
 	SessionID    string   `json:"session_id,omitempty"`
-	RequestID    int64    `json:"request_id,omitempty"`
+	RequestID    string   `json:"request_id,omitempty"`
 	Calls        int      `json:"calls"`
 	Cost         float64  `json:"cost"`
 	InputTokens  float64  `json:"input_tokens"`
@@ -473,7 +481,7 @@ type traceSideView struct {
 
 // traceView is the GET /api/calls/{id}/trace response.
 type traceView struct {
-	CallID     int64         `json:"call_id"`
+	CallID     string        `json:"call_id"`
 	Request    traceSideView `json:"request"`
 	Response   traceSideView `json:"response"`
 	CapturedAt string        `json:"captured_at"`

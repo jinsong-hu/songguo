@@ -50,6 +50,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/songguo/songguo/internal/bodycodec"
 	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/compose"
@@ -96,6 +98,7 @@ type handler struct {
 	now      func() time.Time
 	limiter  *rateLimiter
 	parse    *parsePipeline
+	insight  *insightsFork
 }
 
 // NewHandler builds the transparent proxy handler.
@@ -121,7 +124,14 @@ func NewHandler(d Deps) http.Handler {
 		now:      now,
 		limiter:  newRateLimiter(now),
 		parse:    newParsePipeline(d.Store, logger, 0, 0),
+		insight:  newInsightsFork(d.Store, logger, 0, 0),
 	}
+}
+
+// insights hands a finalized call to the async insights fork (fire and forget).
+// It never blocks or fails the forward; see docs/arch-insights.md.
+func (h *handler) insights(e calls.Entry) {
+	h.insight.submit(e)
 }
 
 // defaultHTTPClient returns a client tuned for proxying, including long-lived
@@ -190,11 +200,18 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// for this in-flight request.
 	capture := user.Capture
 
+	// Mint the call id (UUID) up front and open the ledger row (phase 1,
+	// create-at-start). Everything downstream — denials during routing, budget/
+	// rate rejections, the forwarded attempt — finalizes THIS row (phase 2) by
+	// id, so an incomplete call stays visible as pending. See docs/arch-gateway.md.
+	callID := uuid.NewString()
+	h.createCall(callID, user.ID, r)
+
 	// 3. Resolve the route: match the wire by path suffix and select the
 	// provider (X-Songguo-Provider header, else body model, else default).
 	// Resolution sets the model/modality, the ordered candidate targets, and the
 	// per-target upstream-URL builder. Forwarding uses only the first target.
-	rt, ok := h.resolve(w, r, user, capture, body)
+	rt, ok := h.resolve(w, r, user, capture, body, callID)
 	if !ok {
 		return
 	}
@@ -216,6 +233,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.logger.Error("budget lookup failed", "err", err)
 		} else if spent >= *user.Budget {
 			h.denyCapture(w, r, body, capture, calls.Entry{
+				ID:     callID,
 				UserID: user.ID, Model: rt.model, Modality: modality,
 				Vendor: t.Vendor.Name, CredentialID: t.Credential.ID,
 				Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
@@ -228,6 +246,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 5. Rate limit.
 	if !h.limiter.allow(user.ID, user.RPM) {
 		h.denyCapture(w, r, body, capture, calls.Entry{
+			ID:     callID,
 			UserID: user.ID, Model: rt.model, Modality: modality,
 			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID,
 			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
@@ -256,6 +275,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// is deliberately not treated as a capture (see denyCapture — that is reserved
 		// for gateway-side denials). Pass capture=false regardless of the flag.
 		h.denyCapture(w, r, body, false, calls.Entry{
+			ID:     callID,
 			UserID: user.ID, Model: rt.model, Modality: modality,
 			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID,
 			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
@@ -275,6 +295,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"vendor", t.Vendor.Name, "model", rt.model, "credential", t.Credential.ID,
 			"url", upReq.URL.String(), "latency_ms", latency, "err", err)
 		h.denyCapture(w, r, body, false, calls.Entry{
+			ID:     callID,
 			UserID: user.ID, Model: rt.model, Modality: modality,
 			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID, LatencyMS: latency,
 			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
@@ -285,7 +306,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Forward the vendor's response verbatim — including a 429/5xx. The client
 	// sees the real outcome and decides whether to retry.
-	h.forward(w, r, resp, user.ID, rt.model, modality, rw, t, latency, tags, attr, client, capture, body)
+	h.forward(w, r, resp, callID, user.ID, rt.model, modality, rw, t, latency, tags, attr, client, capture, body)
 }
 
 // route is the resolved plan for a request: the candidate targets in selection
@@ -348,17 +369,40 @@ func resolveWires(targets []router.Target, method, path string) (kept []router.T
 	return kept, wires, denied
 }
 
-// denyCapture records a gateway-originated rejection as a ledger row and, when
-// capture is passed true, saves the request payload plus the synthesized error
-// body — so a denied call is as inspectable as a forwarded one. Gateway-side
-// denials (unmatched 404, scope 403, budget 402, rate 429) pass the global
-// capture flag; upstream build/transport failures (502) reuse this to record the
-// row but pass capture=false, since there is no served response to pair with. It
-// owns writing the error response; the caller fills the Entry's known identity
-// fields (user, model, vendor, attribution) and status/reason/message.
+// createCall opens the ledger row for a request at its start (phase 1,
+// create-at-start). It records the minted id, start time, and user; the rest of
+// the identity (model/vendor/session) is filled by the finalizing path, which
+// knows the resolved values. A failure here is logged, not surfaced: the forward
+// still proceeds, and the missing row just means this call won't appear in the
+// ledger. See docs/arch-gateway.md.
+func (h *handler) createCall(callID, userID string, r *http.Request) {
+	attr := extractAttribution(r.Header)
+	client := calls.ParseClientInfo(r.UserAgent())
+	if err := h.store.CreateCall(calls.Entry{
+		ID:            callID,
+		TS:            h.now(),
+		UserID:        userID,
+		SessionID:     attr.session,
+		AgentID:       attr.agent,
+		ParentAgentID: attr.parentAgent,
+		ClientName:    client.Name,
+		ClientVersion: client.Version,
+	}); err != nil {
+		h.logger.Error("call create failed", "err", err, "call_id", callID)
+	}
+}
+
+// denyCapture finalizes a gateway-originated rejection (phase 2) on the row
+// opened by createCall and, when capture is passed true, saves the request
+// payload plus the synthesized error body — so a denied call is as inspectable
+// as a forwarded one. Gateway-side denials (unmatched 404, scope 403, budget
+// 402, rate 429) pass the global capture flag; upstream build/transport failures
+// (502) reuse this to record the outcome but pass capture=false, since there is
+// no served response to pair with. It owns writing the error response; the caller
+// fills the Entry's id and known identity fields and status/reason/message.
 func (h *handler) denyCapture(w http.ResponseWriter, r *http.Request, body []byte, capture bool,
 	e calls.Entry, status int, reason, message string) {
-	e.TS = h.now()
+	e.TSEnd = h.now()
 	e.Status = status
 	if e.ClientName == "" {
 		client := calls.ParseClientInfo(r.UserAgent())
@@ -371,9 +415,9 @@ func (h *handler) denyCapture(w http.ResponseWriter, r *http.Request, body []byt
 	if e.Confidence == "" {
 		e.Confidence = calls.ConfidenceUnknown
 	}
-	id, err := h.store.AppendCall(e)
+	err := h.store.FinalizeCall(e)
 	if err != nil {
-		h.logger.Error("call append failed", "err", err, "vendor", e.Vendor, "model", e.Model)
+		h.logger.Error("call finalize failed", "err", err, "vendor", e.Vendor, "model", e.Model)
 	}
 
 	// Build the exact bytes the client will receive, so the captured response is
@@ -385,7 +429,7 @@ func (h *handler) denyCapture(w http.ResponseWriter, r *http.Request, body []byt
 
 	if capture && err == nil {
 		if perr := h.store.SavePayload(store.Payload{
-			CallID:          id,
+			CallID:          e.ID,
 			ReqHeaders:      redactHeaders(r.Header),
 			ReqBody:         body,
 			ReqContentType:  r.Header.Get("Content-Type"),
@@ -394,9 +438,12 @@ func (h *handler) denyCapture(w http.ResponseWriter, r *http.Request, body []byt
 			RespContentType: "application/json",
 			CreatedAt:       h.now(),
 		}); perr != nil {
-			h.logger.Error("save payload failed", "err", perr, "call_id", id)
+			h.logger.Error("save payload failed", "err", perr, "call_id", e.ID)
 		}
 	}
+
+	// Hand the finalized denial to insights (async fork — fire and forget).
+	h.insights(e)
 }
 
 // resolve builds the route with a single rule: match the wire by path suffix,
@@ -407,7 +454,7 @@ func (h *handler) denyCapture(w http.ResponseWriter, r *http.Request, body []byt
 // returning ok=false when it has already responded. Denials are recorded and
 // captured via denyCapture, so they conform to the authenticated user's capture
 // setting.
-func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.User, capture bool, body []byte) (route, bool) {
+func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.User, capture bool, body []byte, callID string) (route, bool) {
 	res := meter.Classify(r.Method, r.URL.Path, body)
 	tags := extractTags(r.Header.Get("X-Songguo-Tags"), body)
 	attr := extractAttribution(r.Header)
@@ -431,6 +478,7 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 
 	denyEntry := func(vendor string) calls.Entry {
 		return calls.Entry{
+			ID:     callID,
 			UserID: user.ID, Model: billingModel, Modality: res.Modality, Vendor: vendor,
 			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
 			ClientName: client.Name, ClientVersion: client.Version,
@@ -688,7 +736,7 @@ func mergeQuery(u, inboundQuery string) string {
 // response body and persists the redacted request/response payload after the
 // call row is written.
 func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Response,
-	userID, model string, modality calls.Modality, rw resolvedWire, t router.Target,
+	callID, userID, model string, modality calls.Modality, rw resolvedWire, t router.Target,
 	latency int64, tags map[string]string, attr attribution, client calls.ClientInfo, capture bool, reqBody []byte) {
 	defer resp.Body.Close()
 
@@ -749,8 +797,9 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 			"latency_ms", latency, "stream", stream, "body", errorSnippet(parseRespBody))
 	}
 
-	id, err := h.store.AppendCall(calls.Entry{
-		TS:            h.now(),
+	entry := calls.Entry{
+		ID:            callID,
+		TSEnd:         h.now(),
 		UserID:        userID,
 		Model:         model,
 		Modality:      modality,
@@ -770,13 +819,20 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		SessionID:     attr.session,
 		AgentID:       attr.agent,
 		ParentAgentID: attr.parentAgent,
+		// Client identity is authoritatively persisted at createCall (phase 1);
+		// carried here too so the insights fork sees a complete entry.
 		ClientName:    client.Name,
 		ClientVersion: client.Version,
-	})
-	if err != nil {
-		h.logger.Error("call append failed", "err", err, "vendor", t.Vendor.Name, "model", model)
+	}
+	// Phase 2, update-at-end: finalize the row opened at request-start.
+	if err := h.store.FinalizeCall(entry); err != nil {
+		h.logger.Error("call finalize failed", "err", err, "vendor", t.Vendor.Name, "model", model)
 		return
 	}
+	id := callID
+	// Hand the finalized call to insights (async fork — fire and forget; never
+	// blocks or fails the forward). See docs/arch-insights.md.
+	h.insights(entry)
 
 	// Context-window composition: read-only sniff of the already-buffered request
 	// body to decompose the input context across sources (system, tool schemas,
@@ -820,7 +876,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 
 // savePayload builds and persists the redacted request/response payload for the
 // served attempt. Any failure is logged only — never surfaced to the client.
-func (h *handler) savePayload(callID int64, r *http.Request, reqBody []byte,
+func (h *handler) savePayload(callID string, r *http.Request, reqBody []byte,
 	resp *http.Response, respBody []byte) {
 	p := store.Payload{
 		CallID:          callID,
@@ -963,11 +1019,30 @@ func (h *handler) copyBody(w http.ResponseWriter, src io.Reader) []byte {
 	return body
 }
 
-// append writes a call entry, logging (never surfacing) any failure.
+// append writes a single-shot finalized call entry, for paths that have no
+// two-phase lifecycle to split — the WebSocket relay, whose raw byte pipe has no
+// clean create-at-start/update-at-end boundary, meters once at the end. It mints
+// the id if the caller left it empty, opens and immediately finalizes the row,
+// hands the result to insights, and logs (never surfaces) any failure.
 func (h *handler) append(e calls.Entry) {
-	if _, err := h.store.AppendCall(e); err != nil {
-		h.logger.Error("call append failed", "err", err, "vendor", e.Vendor, "model", e.Model)
+	if e.ID == "" {
+		e.ID = uuid.NewString()
 	}
+	if e.TS.IsZero() {
+		e.TS = h.now()
+	}
+	if e.TSEnd.IsZero() {
+		e.TSEnd = h.now()
+	}
+	if err := h.store.CreateCall(e); err != nil {
+		h.logger.Error("call create failed", "err", err, "vendor", e.Vendor, "model", e.Model)
+		return
+	}
+	if err := h.store.FinalizeCall(e); err != nil {
+		h.logger.Error("call finalize failed", "err", err, "vendor", e.Vendor, "model", e.Model)
+		return
+	}
+	h.insights(e)
 }
 
 // --- helpers ---

@@ -207,7 +207,7 @@ func (a *api) mcpListCalls(_ context.Context, _ *mcp.CallToolRequest, args listC
 }
 
 type getCallTraceArgs struct {
-	ID int64 `json:"id" jsonschema:"the call id (from list_calls)"`
+	ID string `json:"id" jsonschema:"the call id (from list_calls)"`
 }
 
 func (a *api) mcpGetCallTrace(_ context.Context, _ *mcp.CallToolRequest, args getCallTraceArgs) (*mcp.CallToolResult, traceView, error) {

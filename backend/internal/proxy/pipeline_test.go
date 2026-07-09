@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"testing"
@@ -65,6 +66,6 @@ func TestParsePipelineSubmitNeverBlocks(t *testing.T) {
 	// must be dropped, not block.
 	p := &parsePipeline{jobs: make(chan parseJob, 2), store: st, logger: slog.Default()}
 	for i := 0; i < 50; i++ {
-		p.submit(parseJob{callID: int64(i)})
+		p.submit(parseJob{callID: fmt.Sprintf("call-%d", i)})
 	}
 }

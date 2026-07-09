@@ -241,7 +241,7 @@ func TestCaptureOffDeniedNoPayload(t *testing.T) {
 }
 
 // callIDForVendor returns the id of the single call row for a vendor.
-func callIDForVendor(t *testing.T, st *store.Store, vendor string) int64 {
+func callIDForVendor(t *testing.T, st *store.Store, vendor string) string {
 	t.Helper()
 	entries, err := st.QueryCalls(storeFilterAll())
 	if err != nil {
@@ -253,5 +253,5 @@ func callIDForVendor(t *testing.T, st *store.Store, vendor string) int64 {
 		}
 	}
 	t.Fatalf("no call row for vendor %q", vendor)
-	return 0
+	return ""
 }

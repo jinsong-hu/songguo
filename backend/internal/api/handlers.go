@@ -480,7 +480,7 @@ func (a *api) callsData(f store.CallFilter) (callsView, error) {
 		return callsView{}, err
 	}
 
-	ids := make([]int64, 0, len(entries))
+	ids := make([]string, 0, len(entries))
 	for _, e := range entries {
 		ids = append(ids, e.ID)
 	}
@@ -507,8 +507,8 @@ func (a *api) callsData(f store.CallFilter) (callsView, error) {
 // 404 when no payload was stored for it. Bodies are returned as UTF-8 text when
 // valid, else base64 (flagged per side).
 func (a *api) handleCallTrace(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
+	id := r.PathValue("id")
+	if id == "" {
 		writeError(w, http.StatusNotFound, "not_found", "trace not found")
 		return
 	}
@@ -522,7 +522,7 @@ func (a *api) handleCallTrace(w http.ResponseWriter, r *http.Request) {
 
 // callTraceData returns the captured request/response payload for a call, or a
 // *apiError (404) when no payload was stored for it.
-func (a *api) callTraceData(id int64) (traceView, error) {
+func (a *api) callTraceData(id string) (traceView, error) {
 	p, err := a.store.GetPayload(id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -571,8 +571,8 @@ func (a *api) feedData(f store.CallFilter) (feedView, error) {
 // handleCall returns a single call entry by id (404 when absent). The request
 // detail page pairs this with GET /api/calls/{id}/trace.
 func (a *api) handleCall(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
+	id := r.PathValue("id")
+	if id == "" {
 		writeError(w, http.StatusNotFound, "not_found", "call not found")
 		return
 	}
@@ -585,7 +585,7 @@ func (a *api) handleCall(w http.ResponseWriter, r *http.Request) {
 }
 
 // callData returns a single call entry, or a *apiError (404) when absent.
-func (a *api) callData(id int64) (entryView, error) {
+func (a *api) callData(id string) (entryView, error) {
 	e, err := a.store.GetCall(id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -594,7 +594,7 @@ func (a *api) callData(id int64) (entryView, error) {
 		return entryView{}, err
 	}
 	v := newEntryView(e)
-	hasTrace, err := a.store.HasPayloads([]int64{id})
+	hasTrace, err := a.store.HasPayloads([]string{id})
 	if err != nil {
 		return entryView{}, err
 	}
@@ -645,7 +645,7 @@ func (a *api) sessionData(id string) (sessionView, error) {
 		vendorsSet    = map[string]struct{}{}
 		first         = entries[0].TS
 		last          = entries[0].TS
-		ids           = make([]int64, 0, len(entries))
+		ids           = make([]string, 0, len(entries))
 	)
 	for _, e := range entries {
 		cost += e.Cost

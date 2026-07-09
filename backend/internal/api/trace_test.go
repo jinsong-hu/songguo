@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"net/http"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +16,7 @@ import (
 
 // seedTracedCall inserts a call plus a captured (redacted) payload and returns
 // the call id.
-func seedTracedCall(t *testing.T, s *store.Store) int64 {
+func seedTracedCall(t *testing.T, s *store.Store) string {
 	t.Helper()
 	id, err := s.AppendCall(calls.Entry{
 		TS: time.Now(), UserID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat,
@@ -49,7 +48,7 @@ func TestCallTraceRoundTrip(t *testing.T) {
 	id := seedTracedCall(t, s)
 	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
 
-	target := "/api/calls/" + strconv.FormatInt(id, 10) + "/trace"
+	target := "/api/calls/" + id + "/trace"
 
 	// 401 without the admin key.
 	rec := do(h, "GET", target, "", nil)
@@ -65,7 +64,7 @@ func TestCallTraceRoundTrip(t *testing.T) {
 	var tv traceView
 	decodeBody(t, rec, &tv)
 	if tv.CallID != id {
-		t.Errorf("call_id = %d, want %d", tv.CallID, id)
+		t.Errorf("call_id = %q, want %q", tv.CallID, id)
 	}
 	if !strings.Contains(tv.Request.Body, `"content":"ping"`) {
 		t.Errorf("request body = %q, want the sent request", tv.Request.Body)
@@ -225,12 +224,12 @@ func TestCallTraceNotFound(t *testing.T) {
 	}
 	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
 
-	rec := do(h, "GET", "/api/calls/"+strconv.FormatInt(id, 10)+"/trace", "secret", nil)
+	rec := do(h, "GET", "/api/calls/"+id+"/trace", "secret", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("uncaptured call trace: code = %d, want 404", rec.Code)
 	}
 
-	// Non-numeric / unknown id -> 404.
+	// Unknown id -> 404.
 	rec = do(h, "GET", "/api/calls/99999/trace", "secret", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("unknown id trace: code = %d, want 404", rec.Code)
@@ -254,15 +253,15 @@ func TestCallsListHasTrace(t *testing.T) {
 	var view callsView
 	decodeBody(t, rec, &view)
 
-	byID := map[int64]entryView{}
+	byID := map[string]entryView{}
 	for _, e := range view.Entries {
 		byID[e.ID] = e
 	}
 	if !byID[traced].HasTrace {
-		t.Errorf("call %d has_trace = false, want true", traced)
+		t.Errorf("call %q has_trace = false, want true", traced)
 	}
 	if byID[untraced].HasTrace {
-		t.Errorf("call %d has_trace = true, want false", untraced)
+		t.Errorf("call %q has_trace = true, want false", untraced)
 	}
 }
 

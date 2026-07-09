@@ -19,7 +19,7 @@ import (
 
 // parseJob is one unit of async post-processing.
 type parseJob struct {
-	callID int64
+	callID string
 	at     time.Time
 	in     parse.Input
 }
