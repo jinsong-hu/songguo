@@ -16,7 +16,6 @@ frontend/node_modules/
 frontend/*.tsbuildinfo
 frontend/dist/
 backend/web/dist/*
-!backend/web/dist/.gitkeep
 
 # Misc
 .DS_Store

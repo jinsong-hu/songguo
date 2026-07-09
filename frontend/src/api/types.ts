@@ -272,6 +272,21 @@ export interface ContextDistribution {
   /** Mean full-window tokens per request in the aggregate. */
   avg_total: number;
   sources: SourceSlice[];
+  blocks?: ContextBlock[];
+}
+
+/** Itemized context block aggregated from the same local counter as sources. */
+export interface ContextBlock {
+  source: string;
+  producer?: string;
+  type: string;
+  hash: string;
+  /** Average tokens per occurrence. */
+  tokens: number;
+  cached: number;
+  occurrences: number;
+  /** Exact summed tokens across occurrences. */
+  total: number;
 }
 
 export interface RequestComposition {

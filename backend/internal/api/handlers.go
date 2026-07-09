@@ -995,10 +995,317 @@ func (a *api) handleSessionContext(w http.ResponseWriter, r *http.Request) {
 			Requests: agg.Requests,
 			AvgTotal: agg.AvgTotal,
 			Sources:  agg.Sources,
+			Blocks:   a.aggregateSessionBlocks(rows),
 		},
 		Snapshot: snapshot,
 		Dwell:    []dwellBlockView{},
 	})
+}
+
+func (a *api) aggregateSessionBlocks(rows []store.SessionCompositionRow) []contextBlockView {
+	type acc struct {
+		source      string
+		producer    string
+		typ         string
+		hash        string
+		total       int64
+		cached      int64
+		occurrences int
+	}
+	byKey := map[string]*acc{}
+	var order []string
+
+	for _, row := range rows {
+		blocks := row.C.Blocks
+		if len(blocks) == 0 {
+			blocks = sourceFallbackBlocks(row.C.Sources)
+		} else {
+			blocks = reconcileBlocksToSources(blocks, row.C.Sources)
+		}
+		if len(blocks) == 0 {
+			continue
+		}
+
+		seen := map[string]compose.Block{}
+		var seenOrder []string
+		for _, block := range blocks {
+			if block.Tokens <= 0 || block.Source == "" {
+				continue
+			}
+			key := contextBlockKey(block)
+			existing, ok := seen[key]
+			if !ok {
+				seen[key] = block
+				seenOrder = append(seenOrder, key)
+				continue
+			}
+			existing.Tokens += block.Tokens
+			existing.Cached += block.Cached
+			seen[key] = existing
+		}
+
+		for _, key := range seenOrder {
+			block := seen[key]
+			a := byKey[key]
+			if a == nil {
+				a = &acc{source: block.Source, producer: block.Producer, typ: block.Type, hash: block.Hash}
+				byKey[key] = a
+				order = append(order, key)
+			}
+			a.total += block.Tokens
+			a.cached += block.Cached
+			a.occurrences++
+		}
+	}
+
+	out := make([]contextBlockView, 0, len(order))
+	for _, key := range order {
+		a := byKey[key]
+		tokens := int64(0)
+		if a.occurrences > 0 {
+			tokens = a.total / int64(a.occurrences)
+		}
+		out = append(out, contextBlockView{
+			Source:      a.source,
+			Producer:    a.producer,
+			Type:        a.typ,
+			Hash:        a.hash,
+			Tokens:      tokens,
+			Cached:      a.cached,
+			Occurrences: a.occurrences,
+			Total:       a.total,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Total != out[j].Total {
+			return out[i].Total > out[j].Total
+		}
+		if out[i].Source != out[j].Source {
+			return out[i].Source < out[j].Source
+		}
+		if out[i].Producer != out[j].Producer {
+			return out[i].Producer < out[j].Producer
+		}
+		if out[i].Type != out[j].Type {
+			return out[i].Type < out[j].Type
+		}
+		return out[i].Hash < out[j].Hash
+	})
+	return out
+}
+
+func sourceFallbackBlocks(sources []compose.Source) []compose.Block {
+	var out []compose.Block
+	seq := 0
+	for _, src := range sources {
+		if src.Tokens <= 0 || src.Key == "" {
+			continue
+		}
+		var childTotal int64
+		for _, child := range src.Children {
+			if child.Tokens <= 0 || child.Key == "" {
+				continue
+			}
+			childTotal += child.Tokens
+			out = append(out, compose.Block{
+				Seq:      seq,
+				Source:   src.Key,
+				Producer: child.Key,
+				Type:     fallbackBlockType(src.Key, child.Key),
+				Hash:     fallbackBlockHash(src.Key, child.Key),
+				Tokens:   child.Tokens,
+			})
+			seq++
+		}
+		if remainder := src.Tokens - childTotal; remainder > 0 {
+			out = append(out, compose.Block{
+				Seq:    seq,
+				Source: src.Key,
+				Type:   fallbackBlockType(src.Key, ""),
+				Hash:   fallbackBlockHash(src.Key, ""),
+				Tokens: remainder,
+				Cached: src.Cached,
+			})
+			seq++
+		}
+	}
+	return out
+}
+
+func reconcileBlocksToSources(blocks []compose.Block, sources []compose.Source) []compose.Block {
+	type target struct {
+		source   string
+		producer string
+		tokens   int64
+		cached   int64
+	}
+	var targets []target
+	targetByKey := map[string]target{}
+	for _, src := range sources {
+		var childTotal int64
+		for _, child := range src.Children {
+			childTotal += child.Tokens
+			t := target{source: src.Key, producer: child.Key, tokens: child.Tokens}
+			targets = append(targets, t)
+			targetByKey[groupKey(src.Key, child.Key)] = t
+		}
+		remainderTarget := src.Tokens - childTotal
+		if remainderTarget < 0 {
+			remainderTarget = 0
+		}
+		if len(src.Children) == 0 {
+			remainderTarget = src.Tokens
+		}
+		t := target{source: src.Key, tokens: remainderTarget, cached: src.Cached}
+		targets = append(targets, t)
+		targetByKey[groupKey(src.Key, "")] = t
+	}
+
+	grouped := map[string][]compose.Block{}
+	for _, block := range blocks {
+		if block.Tokens <= 0 || block.Source == "" {
+			continue
+		}
+		key := groupKey(block.Source, block.Producer)
+		if _, ok := targetByKey[key]; !ok {
+			key = groupKey(block.Source, "")
+		}
+		grouped[key] = append(grouped[key], block)
+	}
+
+	var out []compose.Block
+	nextSeq := 0
+	for _, target := range targets {
+		if target.tokens <= 0 {
+			continue
+		}
+		key := groupKey(target.source, target.producer)
+		scaled, missing := scaleBlocksToTarget(grouped[key], target.tokens)
+		for _, block := range scaled {
+			block.Seq = nextSeq
+			out = append(out, block)
+			nextSeq++
+		}
+		if missing > 0 {
+			out = append(out, compose.Block{
+				Seq:      nextSeq,
+				Source:   target.source,
+				Producer: target.producer,
+				Type:     fallbackBlockType(target.source, target.producer),
+				Hash:     fallbackBlockHash(target.source, target.producer),
+				Tokens:   missing,
+				Cached:   target.cached,
+			})
+			nextSeq++
+		}
+	}
+	return out
+}
+
+func groupKey(source, producer string) string {
+	return source + "\x00" + producer
+}
+
+func scaleBlocksToTarget(blocks []compose.Block, target int64) ([]compose.Block, int64) {
+	var total int64
+	for _, block := range blocks {
+		total += block.Tokens
+	}
+	if total <= 0 {
+		return nil, target
+	}
+	if total <= target {
+		return append([]compose.Block(nil), blocks...), target - total
+	}
+
+	out := make([]compose.Block, 0, len(blocks))
+	var assigned int64
+	type rem struct {
+		i int
+		r int64
+	}
+	var remainders []rem
+	for _, block := range blocks {
+		numer := block.Tokens * target
+		scaled := numer / total
+		if scaled <= 0 {
+			continue
+		}
+		block.Tokens = scaled
+		if block.Cached > block.Tokens {
+			block.Cached = block.Tokens
+		}
+		out = append(out, block)
+		assigned += scaled
+		remainders = append(remainders, rem{i: len(out) - 1, r: numer % total})
+	}
+	sort.SliceStable(remainders, func(i, j int) bool {
+		return remainders[i].r > remainders[j].r
+	})
+	for i := int64(0); i < target-assigned && int(i) < len(remainders); i++ {
+		out[remainders[i].i].Tokens++
+	}
+	return out, 0
+}
+
+func fallbackBlockType(source, producer string) string {
+	base := sourceLabel(source)
+	if producer == "" {
+		return base
+	}
+	return base + " / " + producerLabel(producer)
+}
+
+func fallbackBlockHash(source, producer string) string {
+	return "source-total:" + source + ":" + producer
+}
+
+func sourceLabel(source string) string {
+	switch source {
+	case "tool_results":
+		return "Tool results"
+	case "tool_schemas":
+		return "Tool schemas"
+	case "system":
+		return "System & instructions"
+	case "reasoning":
+		return "Assistant reasoning"
+	case "actions":
+		return "Assistant actions"
+	case "user":
+		return "User turns"
+	case "attachments":
+		return "Attachments"
+	default:
+		return source
+	}
+}
+
+func producerLabel(producer string) string {
+	switch producer {
+	case "read":
+		return "Read"
+	case "bash":
+		return "Bash"
+	case "grep":
+		return "Grep"
+	case "glob":
+		return "Glob"
+	case "task":
+		return "Task"
+	case "web":
+		return "Web"
+	case "builtin":
+		return "built-in"
+	case "unknown":
+		return "unknown"
+	default:
+		return strings.TrimPrefix(producer, "mcp:")
+	}
+}
+
+func contextBlockKey(block compose.Block) string {
+	return strings.Join([]string{block.Source, block.Producer, block.Type, block.Hash}, "\x00")
 }
 
 // buildAgentTree folds a session's calls by agent id into a forest, nesting each

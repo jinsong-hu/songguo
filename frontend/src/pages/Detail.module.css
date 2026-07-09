@@ -205,14 +205,6 @@
   font-weight: 600;
 }
 
-.ctxBlockHeadMeta {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
 .ctxBlockTableScroll {
   max-height: 320px;
   overflow: auto;
@@ -241,9 +233,41 @@
 .ctxBlockTable .ctxBlockSnippetCell {
   min-width: 260px;
   max-width: 420px;
+  padding: 0;
+}
+
+.ctxBlockPreviewButton {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
   color: var(--text-muted);
   font-family: var(--mono, ui-monospace, monospace);
   font-size: 11.5px;
+  line-height: 1.35;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.ctxBlockPreviewButton:hover,
+.ctxBlockPreviewButton:focus-visible {
+  color: var(--text);
+}
+
+.ctxBlockPreviewText {
+  display: block;
+  padding: 8px 10px;
+  color: var(--text-muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ctxBlockEmpty {

@@ -142,14 +142,16 @@ function breakoutColumns(
  */
 export function ContextSunburst({
   data,
+  centerValue,
   centerLabel = 'avg window',
   active,
   onSelect,
 }: {
   data: SunburstData;
+  centerValue?: number;
   centerLabel?: string;
   active?: ContextSelection | null;
-  onSelect?: (selection: ContextSelection) => void;
+  onSelect?: (selection: ContextSelection | null) => void;
 }) {
   const sources = data.sources;
   const total = sources.reduce((a, s) => a + s.tokens, 0) || 1;
@@ -178,8 +180,8 @@ export function ContextSunburst({
   const pct = (n: number) => `${Math.round((n / total) * 100)}%`;
   const isActive = (source: string, producer?: string) =>
     active?.source === source && (active.producer ?? '') === (producer ?? '');
-  const selectSource = (source: string) => onSelect?.({ source });
-  const selectProducer = (source: string, producer: string) => onSelect?.({ source, producer });
+  const selectSource = (source: string) => onSelect?.(isActive(source) ? null : { source });
+  const selectProducer = (source: string, producer: string) => onSelect?.(isActive(source, producer) ? null : { source, producer });
 
   const breakoutCard = (s: SourceSlice, side: 'left' | 'right') => {
     const children = s.children ?? [];
@@ -282,7 +284,7 @@ export function ContextSunburst({
             </PieChart>
           </ChartContainer>
           <div className={styles.sunCenter}>
-            <div className={styles.sunCenterVal}>{compact(data.avg_total)}</div>
+            <div className={styles.sunCenterVal}>{compact(centerValue ?? data.avg_total)}</div>
             <div className={styles.sunCenterLbl}>{centerLabel}</div>
           </div>
         </div>

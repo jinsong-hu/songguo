@@ -19,10 +19,14 @@ func (s *Store) SaveComposition(callID int64, c compose.Composition) error {
 	if err != nil {
 		return fmt.Errorf("store: marshal composition: %w", err)
 	}
+	blocks, err := json.Marshal(c.Blocks)
+	if err != nil {
+		return fmt.Errorf("store: marshal composition blocks: %w", err)
+	}
 	if _, err := s.db.Exec(
-		`INSERT OR REPLACE INTO context_composition (call_id, total, cached, sources, created_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		callID, float64(c.Total), float64(c.Cached), string(sources), time.Now().UnixMilli(),
+		`INSERT OR REPLACE INTO context_composition (call_id, total, cached, sources, blocks, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		callID, float64(c.Total), float64(c.Cached), string(sources), string(blocks), time.Now().UnixMilli(),
 	); err != nil {
 		return fmt.Errorf("store: save composition: %w", err)
 	}
@@ -35,24 +39,29 @@ func (s *Store) GetComposition(callID int64) (compose.Composition, error) {
 	var (
 		total  float64
 		cached float64
-		raw    string
+		rawSrc string
+		rawBlk string
 	)
 	if err := s.db.QueryRow(
-		`SELECT total, cached, sources
+		`SELECT total, cached, sources, blocks
 		   FROM context_composition
 		  WHERE call_id = ?
 		  LIMIT 1`, callID,
-	).Scan(&total, &cached, &raw); err != nil {
+	).Scan(&total, &cached, &rawSrc, &rawBlk); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return compose.Composition{}, ErrNotFound
 		}
 		return compose.Composition{}, fmt.Errorf("store: get composition: %w", err)
 	}
 	var sources []compose.Source
-	if err := json.Unmarshal([]byte(raw), &sources); err != nil {
+	if err := json.Unmarshal([]byte(rawSrc), &sources); err != nil {
 		return compose.Composition{}, fmt.Errorf("store: unmarshal composition: %w", err)
 	}
-	return compose.Composition{Total: int64(total), Cached: int64(cached), Sources: sources}, nil
+	var blocks []compose.Block
+	if err := json.Unmarshal([]byte(rawBlk), &blocks); err != nil {
+		return compose.Composition{}, fmt.Errorf("store: unmarshal composition blocks: %w", err)
+	}
+	return compose.Composition{Total: int64(total), Cached: int64(cached), Sources: sources, Blocks: blocks}, nil
 }
 
 // AggComposition is the aggregated context decomposition over a window. Tokens
@@ -162,6 +171,7 @@ type SessionCompositionRow struct {
 	CallID  int64
 	TS      time.Time
 	AgentID string
+	Wire    string
 	C       compose.Composition
 }
 
@@ -169,7 +179,7 @@ type SessionCompositionRow struct {
 // ordered by call timestamp ascending (oldest turn first).
 func (s *Store) SessionComposition(sessionID string) ([]SessionCompositionRow, error) {
 	rows, err := s.db.Query(
-		`SELECT cc.call_id, c.ts, c.agent_id, cc.total, cc.cached, cc.sources
+		`SELECT cc.call_id, c.ts, c.agent_id, c.wire, cc.total, cc.cached, cc.sources, cc.blocks
 		   FROM context_composition cc
 		   JOIN calls c ON c.id = cc.call_id
 		  WHERE c.session_id = ?
@@ -187,15 +197,19 @@ func (s *Store) SessionComposition(sessionID string) ([]SessionCompositionRow, e
 			tsMillis int64
 			total    float64
 			cached   float64
-			raw      string
+			rawSrc   string
+			rawBlk   string
 		)
-		if err := rows.Scan(&r.CallID, &tsMillis, &r.AgentID, &total, &cached, &raw); err != nil {
+		if err := rows.Scan(&r.CallID, &tsMillis, &r.AgentID, &r.Wire, &total, &cached, &rawSrc, &rawBlk); err != nil {
 			return nil, fmt.Errorf("store: scan session composition: %w", err)
 		}
 		r.TS = time.UnixMilli(tsMillis)
 		r.C.Total = int64(total)
 		r.C.Cached = int64(cached)
-		if err := json.Unmarshal([]byte(raw), &r.C.Sources); err != nil {
+		if err := json.Unmarshal([]byte(rawSrc), &r.C.Sources); err != nil {
+			continue
+		}
+		if err := json.Unmarshal([]byte(rawBlk), &r.C.Blocks); err != nil {
 			continue
 		}
 		out = append(out, r)

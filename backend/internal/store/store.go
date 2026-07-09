@@ -144,14 +144,15 @@ func (s *Store) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_calls_ts ON calls(ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_user_id ON calls(user_id)`,
 		// context_composition holds the estimated context-window decomposition for
-		// a chat call, 1:1 with calls.id. `total`/`cached` mirror the vendor's
-		// official input/cache-read token counts; `sources` is the JSON-encoded
-		// []compose.Source partition. Written read-only, off the hot path.
+		// a chat call, 1:1 with calls.id. `sources` is the JSON-encoded
+		// []compose.Source partition; `blocks` is the itemized local counter
+		// output without raw prompt text. Written read-only, off the hot path.
 		`CREATE TABLE IF NOT EXISTS context_composition (
 			call_id    INTEGER PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE,
 			total      REAL NOT NULL,
 			cached     REAL NOT NULL,
 			sources    TEXT NOT NULL,
+			blocks     TEXT NOT NULL DEFAULT '[]',
 			created_at INTEGER NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_model ON calls(model)`,
@@ -249,6 +250,9 @@ func (s *Store) migrate() error {
 		if err := s.addColumn(a.table, a.col, a.decl); err != nil {
 			return err
 		}
+	}
+	if err := s.addColumn("context_composition", "blocks", `TEXT NOT NULL DEFAULT '[]'`); err != nil {
+		return err
 	}
 	if _, err := s.db.Exec(`UPDATE users SET capture = 0 WHERE capture IS NULL`); err != nil {
 		return fmt.Errorf("store: backfill users.capture: %w", err)

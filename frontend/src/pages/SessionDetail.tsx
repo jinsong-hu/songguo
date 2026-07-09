@@ -5,9 +5,9 @@ import { Area, AreaChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from 'rec
 import { svg as claudeCodeSvg } from 'thesvg/claude-code';
 import { svg as codexOpenAISvg } from 'thesvg/codex-openai';
 import { api } from '../api/client';
-import type { AgentNode, CallEntry, CallTrace } from '../api/types';
-import { ContextSunburst, prodLabel, srcColor, srcLabel, type ContextSelection } from '../components/ContextSunburst';
-import { ESTIMATE_HINT, InfoHint } from '../components/InfoHint';
+import type { AgentNode, CallEntry, CallTrace, ContextBlock, SourceSlice } from '../api/types';
+import { ContextSunburst, srcColor, srcLabel, type ContextSelection } from '../components/ContextSunburst';
+import { InfoHint } from '../components/InfoHint';
 import { CopyButton } from '../components/CopyButton';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -42,6 +42,7 @@ export function SessionDetailPage() {
 
   const turns = useMemo(() => ctx.data?.turns ?? [], [ctx.data]);
   const distribution = ctx.data?.distribution;
+  const distributionTotal = useMemo(() => distribution?.sources.reduce((sum, source) => sum + source.tokens, 0) ?? 0, [distribution]);
   const latestCompositionCallId = turns.length ? turns[turns.length - 1].call_id : null;
 
   const sourceKeys = useMemo(() => {
@@ -203,24 +204,22 @@ export function SessionDetailPage() {
               <div className={styles.fieldLabel} style={{ marginBottom: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 Context distribution
                 <InfoHint
-                  text={`${ESTIMATE_HINT} This session chart sums every decomposed request window; repeated context is counted once per request.`}
+                  text="Total tokens across request windows, including repeated context."
                   content={
                     <>
-                      <span>
-                        This session chart sums every decomposed request window, so repeated context is counted once per request.
-                      </span>
-                      <span style={{ display: 'block', marginTop: 8 }}>{ESTIMATE_HINT}</span>
+                      <span>Total tokens across request windows, including repeated context.</span>
                       {latestCompositionCallId ? (
                         <span style={{ display: 'block', marginTop: 8 }}>
-                          <Link to={`/calls/${latestCompositionCallId}`}>Open latest request</Link> for the single-request window.
+                          For one request window, open the{' '}
+                          <Link to={`/calls/${latestCompositionCallId}`}>latest request</Link>.
                         </span>
                       ) : null}
                     </>
                   }
                 />
               </div>
-              <ContextSunburst data={distribution} active={ctxSelection} onSelect={setCtxSelection} />
-              <ContextBlockDrilldown selection={ctxSelection} blocks={prompt?.blocks ?? []} />
+              <ContextSunburst data={distribution} centerValue={distributionTotal} centerLabel="total windows" active={ctxSelection} onSelect={setCtxSelection} />
+              <ContextBlockDrilldown selection={ctxSelection} blocks={distribution.blocks ?? []} promptBlocks={prompt?.blocks ?? []} sources={distribution.sources} />
             </div>
           )}
 
@@ -444,82 +443,93 @@ function PromptReconstructionCard({
   );
 }
 
-function ContextBlockDrilldown({ selection, blocks }: { selection: ContextSelection | null; blocks: PromptBlock[] }) {
+function ContextBlockDrilldown({
+  selection,
+  blocks,
+  promptBlocks,
+  sources,
+}: {
+  selection: ContextSelection | null;
+  blocks: ContextBlock[];
+  promptBlocks: PromptBlock[];
+  sources: SourceSlice[];
+}) {
   if (!selection) {
-    return (
-      <div className={styles.ctxBlockPanel}>
-        <div className={styles.ctxBlockEmpty}>Select a context slice to inspect its prompt blocks.</div>
-      </div>
-    );
+    return null;
   }
 
   const matches = blocks
     .filter((block) => block.source === selection.source && (!selection.producer || block.producer === selection.producer))
-    .sort((a, b) => b.tokens - a.tokens);
-  const sliceTotal = matches.reduce((sum, block) => sum + block.tokens, 0);
-  const windowTotal = blocks.reduce((sum, block) => sum + block.tokens, 0);
-  const title = selection.producer
-    ? `${srcLabel(selection.source)} / ${prodLabel(selection.producer)}`
-    : srcLabel(selection.source);
+    .sort((a, b) => b.total - a.total);
+  const aggregateTokens = sources.reduce((sum, source) => sum + source.tokens, 0);
+  const promptByHash = new Map(promptBlocks.map((block) => [block.hash, block]));
   const blockPct = (tokens: number, total: number) => (total > 0 ? `${((tokens / total) * 100).toFixed(1)}%` : '—');
 
   return (
     <div className={styles.ctxBlockPanel}>
-      <div className={styles.ctxBlockHead}>
-        <span>{title}</span>
-        <span className={styles.ctxBlockHeadMeta}>
-          <span className="chip chip-mono">{matches.length}</span>
-          {sliceTotal > 0 ? <span className="chip chip-mono">{int(sliceTotal)} tokens</span> : null}
-        </span>
-      </div>
       {matches.length > 0 ? (
         <div className={styles.ctxBlockTableScroll}>
           <table className={`table ${styles.ctxBlockTable}`}>
             <thead>
               <tr>
-                <th>Block</th>
-                <th>Kind</th>
-                <th>Producer</th>
+                <th>Type</th>
                 <th className="num">Tokens</th>
-                <th className="num">Slice %</th>
-                <th className="num">Window %</th>
-                <th>Snippet</th>
+                <th className="num">Occurrences</th>
+                <th className="num">Total</th>
+                <th className="num">Total %</th>
+                <th>Preview</th>
               </tr>
             </thead>
             <tbody>
-              {matches.map((block) => (
-                <tr
-                  key={block.id}
-                  className={styles.clickRow}
-                  onClick={() => jumpToPromptBlock(block.id)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      jumpToPromptBlock(block.id);
-                    }
-                  }}
-                  role="button"
-                  tabIndex={0}
-                >
-                  <td className={styles.ctxBlockTitleCell} title={block.title}>{block.title}</td>
-                  <td>{block.detail}</td>
-                  <td>{block.producer ? prodLabel(block.producer) : '—'}</td>
-                  <td className="num">{int(block.tokens)}</td>
-                  <td className="num">{blockPct(block.tokens, sliceTotal)}</td>
-                  <td className="num">{blockPct(block.tokens, windowTotal)}</td>
-                  <td className={styles.ctxBlockSnippetCell} title={block.snippet}>{block.snippet ? snippet(block.snippet) : '—'}</td>
-                </tr>
-              ))}
+              {matches.map((block) => {
+                const promptBlock = promptByHash.get(block.hash);
+                const preview = promptBlock?.snippet ?? '';
+                const previewFallback = block.hash.startsWith('source-total:')
+                  ? 'Source-level total from the local counter'
+                  : 'No captured preview for this counted block';
+                const blockType = contextBlockType(block, promptBlock);
+                return (
+                  <tr key={`${block.source}:${block.producer ?? ''}:${block.hash}`}>
+                    <td className={styles.ctxBlockTitleCell} title={blockType}>{blockType}</td>
+                    <td className="num">{int(block.tokens)}</td>
+                    <td className="num">{int(block.occurrences)}x</td>
+                    <td className="num">{int(block.total)}</td>
+                    <td className="num">{blockPct(block.total, aggregateTokens)}</td>
+                    <td className={styles.ctxBlockSnippetCell} title={preview}>
+                      {promptBlock ? (
+                        <button
+                          type="button"
+                          className={styles.ctxBlockPreviewButton}
+                          onClick={() => jumpToPromptBlock(promptBlock.id)}
+                        >
+                          {preview ? snippet(preview) : '—'}
+                        </button>
+                      ) : (
+                        <span className={styles.ctxBlockPreviewText}>{previewFallback}</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       ) : (
         <div className={styles.ctxBlockEmpty}>
-          No reconstructed prompt blocks for this slice. The distribution can include repeated request windows or captured bodies that are not visible in the merged message list.
+          No itemized blocks for this slice yet.
         </div>
       )}
     </div>
   );
+}
+
+function contextBlockType(block: ContextBlock, promptBlock?: PromptBlock): string {
+  if (block.type === 'Text block') {
+    if (block.source === 'system') return 'System text';
+    if (block.source === 'user') return 'User text';
+    if (block.source === 'actions') return 'Assistant text';
+  }
+  return promptBlock?.title ?? block.type;
 }
 
 function MessageCard({ message, index }: { message: PromptMessage; index: number }) {
@@ -751,6 +761,7 @@ interface ToolInfo {
   propertyCount: number;
   schema: unknown;
   tools: ToolInfo[];
+  hashText: string;
 }
 
 interface PromptBlock {
@@ -758,6 +769,7 @@ interface PromptBlock {
   source: string;
   producer?: string;
   tokens: number;
+  hash: string;
   title: string;
   detail: string;
   snippet: string;
@@ -770,35 +782,39 @@ interface PromptMessage {
 
 type MessagePart =
   | { kind: 'text'; text: string }
-  | { kind: 'tool_use'; id: string; name: string; input: unknown }
+  | { kind: 'tool_use'; id: string; name: string; input: unknown; hashLabel?: string; hashText?: string }
   | { kind: 'tool_result'; toolUseId: string; parts: MessagePart[] }
-  | { kind: 'image'; src: string; label: string; detail?: string; width?: number; height?: number; visualTokens?: number }
-  | { kind: 'image_url'; url: string; label: string; detail?: string; width?: number; height?: number; visualTokens?: number }
+  | { kind: 'image'; src: string; label: string; detail?: string; width?: number; height?: number; visualTokens?: number; hashLabel?: string; hashText?: string }
+  | { kind: 'image_url'; url: string; label: string; detail?: string; width?: number; height?: number; visualTokens?: number; hashLabel?: string; hashText?: string }
   | { kind: 'empty'; label: string }
   | { kind: 'raw'; label: string; raw: unknown };
 
 function isMainPromptEntry(entry: CallEntry): boolean {
-  return entry.has_trace && entry.wire !== 'anthropic/count_tokens' && !isHaikuAuxiliary(entry);
-}
-
-function isHaikuAuxiliary(entry: CallEntry): boolean {
-  return entry.wire === 'anthropic/messages' && entry.model.toLowerCase().includes('haiku');
+  return entry.has_trace && entry.wire !== 'anthropic/count_tokens';
 }
 
 function parsePromptReconstruction(traces: CallTrace[]): PromptReconstruction {
   const firstBody = parseJsonObject(traces[0]?.request.body ?? '');
+  let system: string[] = [];
+  let tools: ToolInfo[] = [];
   let messages: PromptMessage[] = [];
 
   for (let i = 0; i < traces.length; i += 1) {
     const body = parseJsonObject(traces[i].request.body);
     if (!body) continue;
+    system = mergeUnique(system, systemBlocks(body.system ?? body.instructions), (block) =>
+      compositionBlockHash('system', '', 'System prompt', block),
+    );
+    tools = mergeUnique(tools, toolInfos(body.tools), (tool) =>
+      compositionBlockHash('tool_schemas', schemaProducer(tool.name), tool.name || 'Tool schema', tool.hashText),
+    );
     messages = mergePromptMessages(messages, promptMessages(body));
   }
 
   const prompt = {
     model: typeof firstBody?.model === 'string' ? firstBody.model : '',
-    system: systemBlocks(firstBody?.system ?? firstBody?.instructions),
-    tools: toolInfos(firstBody?.tools),
+    system,
+    tools,
     messages,
   };
   return {
@@ -807,29 +823,49 @@ function parsePromptReconstruction(traces: CallTrace[]): PromptReconstruction {
   };
 }
 
+function mergeUnique<T>(existing: T[], next: T[], keyOf: (item: T) => string): T[] {
+  if (next.length === 0) return existing;
+  const seen = new Set(existing.map(keyOf));
+  const merged = existing.slice();
+  for (const item of next) {
+    const key = keyOf(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged;
+}
+
 function promptBlocks(prompt: Omit<PromptReconstruction, 'blocks'>): PromptBlock[] {
   const out: PromptBlock[] = [];
 
   prompt.system.forEach((block, i) => {
+    const title = `System block ${i + 1}`;
+    const detail = 'System prompt';
     out.push({
       id: systemBlockDomId(i),
       source: 'system',
       tokens: estimateTokens(block),
-      title: `System block ${i + 1}`,
-      detail: 'System prompt',
+      hash: compositionBlockHash('system', '', 'System prompt', block),
+      title,
+      detail,
       snippet: snippet(block),
     });
   });
 
   prompt.tools.forEach((tool, i) => {
     const text = toolBlockText(tool);
+    const producer = schemaProducer(tool.name);
+    const title = tool.name || `Tool schema ${i + 1}`;
+    const detail = 'Tool schema';
     out.push({
       id: toolBlockDomId(i),
       source: 'tool_schemas',
-      producer: schemaProducer(tool.name),
+      producer,
       tokens: estimateTokens(text),
-      title: tool.name || `Tool schema ${i + 1}`,
-      detail: 'Tool schema',
+      hash: compositionBlockHash('tool_schemas', producer, title, tool.hashText),
+      title,
+      detail,
       snippet: tool.description || toolMeta(tool),
     });
   });
@@ -858,12 +894,14 @@ function collectPartBlocks(
   if (part.kind === 'tool_result') {
     const producer = toolProducer(toolNames.get(part.toolUseId) ?? '');
     const text = part.parts.map(messagePartSnippetText).join('\n');
+    const title = part.toolUseId ? `Tool result ${part.toolUseId}` : 'Tool result';
     out.push({
       id: part.toolUseId ? toolPartDomId('result', part.toolUseId) : baseId,
       source: 'tool_results',
       producer,
       tokens: part.parts.reduce((sum, child) => sum + estimateMessagePartTokens(child, model), 0),
-      title: part.toolUseId ? `Tool result ${part.toolUseId}` : 'Tool result',
+      hash: compositionBlockHash('tool_results', producer, title, text),
+      title,
       detail: baseDetail,
       snippet: text,
     });
@@ -871,11 +909,14 @@ function collectPartBlocks(
   }
   if (part.kind === 'tool_use') {
     const text = messagePartCopyText(part);
+    const hashLabel = part.hashLabel || part.name || 'Tool use';
+    const title = part.name || hashLabel;
     out.push({
       id: part.id ? toolPartDomId('use', part.id) : baseId,
       source: 'actions',
       tokens: estimateTokens(text),
-      title: part.name || 'Tool use',
+      hash: compositionBlockHash('actions', '', hashLabel, part.hashText || text),
+      title,
       detail: baseDetail,
       snippet: text,
     });
@@ -883,11 +924,14 @@ function collectPartBlocks(
   }
   if (part.kind === 'image' || part.kind === 'image_url') {
     const text = messagePartSnippetText(part);
+    const title = part.label;
+    const hashLabel = part.hashLabel || (part.kind === 'image' ? 'Attachment' : 'Image');
     out.push({
       id: baseId,
       source: 'attachments',
       tokens: estimateMessagePartTokens(part, model),
-      title: part.label,
+      hash: compositionBlockHash('attachments', '', hashLabel, part.hashText || ''),
+      title,
       detail: baseDetail,
       snippet: text,
     });
@@ -896,11 +940,13 @@ function collectPartBlocks(
   if (part.kind === 'raw' && (part.label.includes('thinking') || part.label === 'reasoning')) {
     const text = reasoningPartText(part);
     if (!text) return;
+    const title = part.label;
     out.push({
       id: baseId,
       source: 'reasoning',
       tokens: estimateTokens(text),
-      title: part.label,
+      hash: compositionBlockHash('reasoning', '', 'Reasoning', text),
+      title,
       detail: baseDetail,
       snippet: text,
     });
@@ -909,11 +955,13 @@ function collectPartBlocks(
 
   const source = role === 'assistant' ? 'actions' : role === 'system' || role === 'developer' ? 'system' : 'user';
   const text = messagePartCopyText(part);
+  const title = partTitle(part);
   out.push({
     id: baseId,
     source,
     tokens: estimateTokens(text),
-    title: partTitle(part),
+    hash: compositionBlockHash(source, '', title, text),
+    title,
     detail: baseDetail,
     snippet: text,
   });
@@ -927,6 +975,27 @@ function toolUseNames(messages: PromptMessage[]): Map<string, string> {
   };
   messages.forEach((message) => message.parts.forEach(visit));
   return out;
+}
+
+function compositionBlockHash(source: string, producer: string, label: string, text: string): string {
+  const encoder = new TextEncoder();
+  let hash = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+  const mask = 0xffffffffffffffffn;
+  const bytes = [
+    ...encoder.encode(source),
+    0,
+    ...encoder.encode(producer),
+    0,
+    ...encoder.encode(label),
+    0,
+    ...encoder.encode(text),
+  ];
+  for (const byte of bytes) {
+    hash ^= BigInt(byte);
+    hash = (hash * prime) & mask;
+  }
+  return hash.toString(16);
 }
 
 function partTitle(part: MessagePart): string {
@@ -1271,6 +1340,8 @@ function messagePart(raw: unknown): MessagePart | MessagePart[] {
       id: typeof raw.id === 'string' ? raw.id : '',
       name: typeof raw.name === 'string' ? raw.name : '',
       input: stripCacheControl(raw.input ?? {}),
+      hashLabel: 'Tool use',
+      hashText: compactJson(raw),
     };
   }
   if (type === 'tool_result') {
@@ -1321,6 +1392,8 @@ function functionCallPart(raw: unknown): MessagePart {
     id,
     name,
     input: parseJsonMaybe(input),
+    hashLabel: stringField(record.type) === 'function_call' ? 'Function call' : name || 'Tool use',
+    hashText: compactJson(record),
   };
 }
 
@@ -1342,7 +1415,7 @@ function imagePart(record: Record<string, unknown>): MessagePart | null {
   if (source.type === 'base64' && typeof source.data === 'string') {
     const mediaType = typeof source.media_type === 'string' ? source.media_type : 'image/jpeg';
     const src = `data:${mediaType};base64,${source.data}`;
-    return { kind: 'image', src, label: mediaType, ...imageMeta(src) };
+    return { kind: 'image', src, label: mediaType, hashLabel: 'Attachment', hashText: '', ...imageMeta(src) };
   }
   return null;
 }
@@ -1505,14 +1578,8 @@ function isSingleLineText(text: string): boolean {
 
 function systemBlocks(system: unknown): string[] {
   if (typeof system === 'string') return [system];
-  if (Array.isArray(system)) {
-    return system.map((block) => {
-      if (isRecord(block) && typeof block.text === 'string') return block.text;
-      return prettyJson(stripCacheControl(block));
-    });
-  }
   if (system == null) return [];
-  return [prettyJson(stripCacheControl(system))];
+  return [compactJson(system)];
 }
 
 function toolInfos(tools: unknown): ToolInfo[] {
@@ -1543,6 +1610,7 @@ function toolInfo(tool: unknown): ToolInfo {
     propertyCount: schemaPropertyCount(schema),
     schema: stripCacheControl(schema ?? {}),
     tools: nestedTools,
+    hashText: compactJson(tool),
   };
 }
 
@@ -1719,6 +1787,10 @@ function parseJsonObject(raw: string): Record<string, unknown> | null {
 
 function prettyJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
+}
+
+function compactJson(value: unknown): string {
+  return JSON.stringify(value);
 }
 
 function stripCacheControl(value: unknown): unknown {

@@ -108,9 +108,20 @@ func TestComposeInvariants(t *testing.T) {
 			}
 
 			gotTokens, gotCached := sum(comp.Sources)
+			var blockTokens, blockCached int64
+			for _, b := range comp.Blocks {
+				blockTokens += b.Tokens
+				blockCached += b.Cached
+				if b.Hash == "" || b.Source == "" || b.Type == "" {
+					t.Errorf("block missing metadata: %+v", b)
+				}
+			}
 			// INVARIANT 1: per-source tokens partition Total exactly.
 			if gotTokens != comp.Total {
 				t.Errorf("sum(sources.tokens) = %d, want Total %d", gotTokens, comp.Total)
+			}
+			if blockTokens != comp.Total {
+				t.Errorf("sum(blocks.tokens) = %d, want Total %d", blockTokens, comp.Total)
 			}
 			// INVARIANT 2: cached is the official cache-read total front-filled and
 			// clamped to Total; per-source cached sums back to it.
@@ -120,6 +131,9 @@ func TestComposeInvariants(t *testing.T) {
 			}
 			if gotCached != comp.Cached {
 				t.Errorf("sum(sources.cached) = %d, want Cached %d", gotCached, comp.Cached)
+			}
+			if blockCached != comp.Cached {
+				t.Errorf("sum(blocks.cached) = %d, want Cached %d", blockCached, comp.Cached)
 			}
 
 			// Producer tokens never exceed their source's tokens; cached ≤ tokens.

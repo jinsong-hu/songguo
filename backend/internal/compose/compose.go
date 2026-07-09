@@ -26,12 +26,14 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"hash/fnv"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -81,6 +83,19 @@ type Source struct {
 	Children []Producer `json:"children,omitempty"`
 }
 
+// Block is one locally counted, itemized context block. It intentionally stores
+// metadata and a content hash, not raw text: context composition is collected
+// even when payload capture is off.
+type Block struct {
+	Seq      int    `json:"seq"`
+	Source   string `json:"source"`
+	Producer string `json:"producer,omitempty"`
+	Type     string `json:"type"`
+	Hash     string `json:"hash"`
+	Tokens   int64  `json:"tokens"`
+	Cached   int64  `json:"cached"`
+}
+
 // Composition is the full decomposition for one request. Total is the sum of
 // the locally counted per-block tokens (NOT the vendor's official input); Cached
 // is the official cache-read total, front-filled and clamped to Total. Sources
@@ -89,6 +104,7 @@ type Composition struct {
 	Total   int64    `json:"total"`
 	Cached  int64    `json:"cached"`
 	Sources []Source `json:"sources"`
+	Blocks  []Block  `json:"blocks,omitempty"`
 }
 
 // unit is one indivisible decomposable block in render order (tools → system →
@@ -99,6 +115,7 @@ type Composition struct {
 type unit struct {
 	src    string
 	prod   string
+	label  string
 	text   string
 	tokens int64
 }
@@ -149,6 +166,7 @@ func Compose(wireName string, body []byte, cachedTokens int64) (Composition, boo
 		Total:   total,
 		Cached:  cachedSum,
 		Sources: aggregate(units, tokens, cached),
+		Blocks:  blocks(units, tokens, cached),
 	}, true
 }
 
@@ -222,6 +240,62 @@ func aggregate(units []unit, tokens, cached []int64) []Source {
 		return sources[i].Key < sources[j].Key
 	})
 	return sources
+}
+
+func blocks(units []unit, tokens, cached []int64) []Block {
+	out := make([]Block, 0, len(units))
+	for i, u := range units {
+		if tokens[i] <= 0 {
+			continue
+		}
+		label := u.label
+		if label == "" {
+			label = defaultBlockLabel(u.src)
+		}
+		out = append(out, Block{
+			Seq:      i,
+			Source:   u.src,
+			Producer: u.prod,
+			Type:     label,
+			Hash:     blockHash(u.src, u.prod, label, u.text),
+			Tokens:   tokens[i],
+			Cached:   cached[i],
+		})
+	}
+	return out
+}
+
+func defaultBlockLabel(src string) string {
+	switch src {
+	case "system":
+		return "System prompt"
+	case "tool_schemas":
+		return "Tool schema"
+	case "tool_results":
+		return "Tool result"
+	case "reasoning":
+		return "Reasoning"
+	case "actions":
+		return "Assistant action"
+	case "attachments":
+		return "Attachment"
+	case "user":
+		return "User text"
+	default:
+		return "Context block"
+	}
+}
+
+func blockHash(source, producer, label, text string) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(source))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(producer))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(label))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(text))
+	return strconv.FormatUint(h.Sum64(), 16)
 }
 
 // compactStr returns raw re-encoded as compact JSON, falling back to the raw
@@ -321,11 +395,15 @@ func parseAnthropic(body []byte) []unit {
 			Name string `json:"name"`
 		}
 		_ = json.Unmarshal(raw, &t)
-		units = append(units, unit{src: "tool_schemas", prod: schemaProducer(t.Name), text: compactStr(raw)})
+		label := t.Name
+		if label == "" {
+			label = "Tool schema"
+		}
+		units = append(units, unit{src: "tool_schemas", prod: schemaProducer(t.Name), label: label, text: compactStr(raw)})
 	}
 
 	if s := systemText(req.System); s != "" {
-		units = append(units, unit{src: "system", text: s})
+		units = append(units, unit{src: "system", label: "System prompt", text: s})
 	}
 
 	// First pass: map tool_use id → tool name from assistant blocks.
@@ -351,12 +429,9 @@ func parseAnthropic(body []byte) []unit {
 		// String content is plain text: user → user, assistant → actions.
 		var str string
 		if err := json.Unmarshal(m.Content, &str); err == nil {
-			src := "user"
-			if m.Role == "assistant" {
-				src = "actions"
-			}
+			src := anthRoleTextSource(m.Role)
 			if str != "" {
-				units = append(units, unit{src: src, text: str})
+				units = append(units, unit{src: src, label: "Text block", text: str})
 			}
 			continue
 		}
@@ -372,11 +447,34 @@ func parseAnthropic(body []byte) []unit {
 			}
 			text, tokens := anthBlockWeight(raw, b.Type, req.Model)
 			if text != "" || tokens > 0 {
-				units = append(units, unit{src: src, prod: prod, text: text, tokens: tokens})
+				units = append(units, unit{src: src, prod: prod, label: anthBlockLabel(b.Type, b.ToolUseID), text: text, tokens: tokens})
 			}
 		}
 	}
 	return units
+}
+
+func anthBlockLabel(typ, toolUseID string) string {
+	switch typ {
+	case "tool_result":
+		if toolUseID != "" {
+			return "Tool result " + toolUseID
+		}
+		return "Tool result"
+	case "tool_use", "server_tool_use":
+		return "Tool use"
+	case "thinking", "redacted_thinking":
+		return "Reasoning"
+	case "image", "document":
+		return "Attachment"
+	case "text":
+		return "Text block"
+	default:
+		if typ != "" {
+			return typ
+		}
+		return "Context block"
+	}
 }
 
 func anthBlockWeight(raw json.RawMessage, typ, model string) (string, int64) {
@@ -573,6 +671,12 @@ func anthClassify(role, typ, toolUseID string, idToName map[string]string) (src,
 		}
 		return "user", ""
 	}
+	if role == "system" || role == "developer" {
+		if typ == "text" {
+			return "system", ""
+		}
+		return "system", ""
+	}
 	// assistant
 	switch typ {
 	case "text", "tool_use", "server_tool_use":
@@ -581,6 +685,17 @@ func anthClassify(role, typ, toolUseID string, idToName map[string]string) (src,
 		return "reasoning", ""
 	}
 	return "actions", ""
+}
+
+func anthRoleTextSource(role string) string {
+	switch role {
+	case "assistant":
+		return "actions"
+	case "system", "developer":
+		return "system"
+	default:
+		return "user"
+	}
 }
 
 // systemText returns the text weight for the system field: the string itself
@@ -640,7 +755,11 @@ func parseOpenAI(body []byte) []unit {
 		if strings.HasPrefix(t.Function.Name, "mcp") {
 			prod = "mcp"
 		}
-		units = append(units, unit{src: "tool_schemas", prod: prod, text: compactStr(raw)})
+		label := t.Function.Name
+		if label == "" {
+			label = "Tool schema"
+		}
+		units = append(units, unit{src: "tool_schemas", prod: prod, label: label, text: compactStr(raw)})
 	}
 
 	// Map tool_call id → function name across all assistant messages.
@@ -663,7 +782,11 @@ func parseOpenAI(body []byte) []unit {
 			units = append(units, openAIContentUnits(m.Content, req.Model, "actions")...)
 			for _, tc := range m.ToolCalls {
 				raw, _ := json.Marshal(tc)
-				units = append(units, unit{src: "actions", text: compactStr(raw)})
+				label := tc.Function.Name
+				if label == "" {
+					label = "Tool use"
+				}
+				units = append(units, unit{src: "actions", label: label, text: compactStr(raw)})
 			}
 		case "tool":
 			name, ok := idToName[m.ToolCallID]
@@ -672,7 +795,11 @@ func parseOpenAI(body []byte) []unit {
 				prod = toolProducer(name)
 			}
 			if s := rawContentStr(m.Content); s != "" {
-				units = append(units, unit{src: "tool_results", prod: prod, text: s})
+				label := "Tool result"
+				if m.ToolCallID != "" {
+					label += " " + m.ToolCallID
+				}
+				units = append(units, unit{src: "tool_results", prod: prod, label: label, text: s})
 			}
 		}
 	}
@@ -688,23 +815,23 @@ func openAIContentUnits(raw json.RawMessage, model, textSrc string) []unit {
 		if s == "" {
 			return nil
 		}
-		return []unit{{src: textSrc, text: s}}
+		return []unit{{src: textSrc, label: "Text block", text: s}}
 	}
 	var blocks []json.RawMessage
 	if err := json.Unmarshal(raw, &blocks); err != nil {
-		return []unit{{src: textSrc, text: compactStr(raw)}}
+		return []unit{{src: textSrc, label: defaultBlockLabel(textSrc), text: compactStr(raw)}}
 	}
 	units := make([]unit, 0, len(blocks))
 	for _, block := range blocks {
-		src, text, tokens := openAIContentBlockWeight(block, model, textSrc)
+		src, label, text, tokens := openAIContentBlockWeight(block, model, textSrc)
 		if src != "" && (text != "" || tokens > 0) {
-			units = append(units, unit{src: src, text: text, tokens: tokens})
+			units = append(units, unit{src: src, label: label, text: text, tokens: tokens})
 		}
 	}
 	return units
 }
 
-func openAIContentBlockWeight(raw json.RawMessage, model, textSrc string) (src, text string, tokens int64) {
+func openAIContentBlockWeight(raw json.RawMessage, model, textSrc string) (src, label, text string, tokens int64) {
 	var b struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
@@ -712,23 +839,27 @@ func openAIContentBlockWeight(raw json.RawMessage, model, textSrc string) (src, 
 	_ = json.Unmarshal(raw, &b)
 	switch b.Type {
 	case "text", "input_text", "output_text":
-		return textSrc, b.Text, 0
+		return textSrc, "Text block", b.Text, 0
 	case "image_url", "input_image":
 		tokens = openAIImageTokens(raw, model)
 		if tokens > 0 {
-			return "attachments", "", tokens
+			return "attachments", "Image", "", tokens
 		}
 		if detail := openAIImageDetail(raw); detail == "low" {
 			if spec, ok := openAITileSpec(model); ok {
-				return "attachments", "", spec.base
+				return "attachments", "Image", "", spec.base
 			}
 		}
-		return "", "", 0
+		return "", "", "", 0
 	default:
 		if s := compactStr(raw); s != "" {
-			return textSrc, s, 0
+			label := b.Type
+			if label == "" {
+				label = defaultBlockLabel(textSrc)
+			}
+			return textSrc, label, s, 0
 		}
-		return "", "", 0
+		return "", "", "", 0
 	}
 }
 
@@ -907,11 +1038,15 @@ func parseOpenAIResponses(body []byte) []unit {
 			Name string `json:"name"`
 		}
 		_ = json.Unmarshal(raw, &t)
-		units = append(units, unit{src: "tool_schemas", prod: schemaProducer(t.Name), text: compactStr(raw)})
+		label := t.Name
+		if label == "" {
+			label = "Tool schema"
+		}
+		units = append(units, unit{src: "tool_schemas", prod: schemaProducer(t.Name), label: label, text: compactStr(raw)})
 	}
 
 	if s := systemText(req.Instructions); s != "" {
-		units = append(units, unit{src: "system", text: s})
+		units = append(units, unit{src: "system", label: "System prompt", text: s})
 	}
 
 	callIDToName := map[string]string{}
@@ -952,11 +1087,11 @@ func parseOpenAIResponses(body []byte) []unit {
 			units = append(units, openAIContentUnits(item.Content, req.Model, src)...)
 		case "reasoning":
 			if s := responsesReasoningText(raw); s != "" {
-				units = append(units, unit{src: "reasoning", text: s})
+				units = append(units, unit{src: "reasoning", label: "Reasoning", text: s})
 			}
 		case "function_call", "custom_tool_call", "web_search_call", "computer_call", "local_shell_call":
 			if s := compactStr(raw); s != "" {
-				units = append(units, unit{src: "actions", text: s})
+				units = append(units, unit{src: "actions", label: responsesActionLabel(item.Type), text: s})
 			}
 		case "function_call_output", "custom_tool_call_output", "computer_call_output", "local_shell_call_output":
 			name := callIDToName[item.CallID]
@@ -968,15 +1103,28 @@ func parseOpenAIResponses(body []byte) []unit {
 				prod = toolProducer(name)
 			}
 			if s := responsesOutputText(raw); s != "" {
-				units = append(units, unit{src: "tool_results", prod: prod, text: s})
+				label := "Tool result"
+				if item.CallID != "" {
+					label += " " + item.CallID
+				} else if item.ID != "" {
+					label += " " + item.ID
+				}
+				units = append(units, unit{src: "tool_results", prod: prod, label: label, text: s})
 			}
 		default:
 			if s := compactStr(raw); s != "" {
-				units = append(units, unit{src: "actions", text: s})
+				units = append(units, unit{src: "actions", label: responsesActionLabel(item.Type), text: s})
 			}
 		}
 	}
 	return units
+}
+
+func responsesActionLabel(typ string) string {
+	if typ == "" {
+		return "Assistant action"
+	}
+	return typ
 }
 
 func responsesRoleSource(role string) string {

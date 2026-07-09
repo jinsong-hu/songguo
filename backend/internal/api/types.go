@@ -556,9 +556,24 @@ type contextCompositionView struct {
 // contextDistributionView is the same source tree without a global time range,
 // used for session/request-local context distribution cards.
 type contextDistributionView struct {
-	Requests int              `json:"requests"`
-	AvgTotal float64          `json:"avg_total"`
-	Sources  []compose.Source `json:"sources"`
+	Requests int                `json:"requests"`
+	AvgTotal float64            `json:"avg_total"`
+	Sources  []compose.Source   `json:"sources"`
+	Blocks   []contextBlockView `json:"blocks,omitempty"`
+}
+
+// contextBlockView is an aggregate of itemized locally counted composition
+// blocks across request windows. Tokens is the average per occurrence; Total is
+// the exact sum and is what percentage calculations should use.
+type contextBlockView struct {
+	Source      string `json:"source"`
+	Producer    string `json:"producer,omitempty"`
+	Type        string `json:"type"`
+	Hash        string `json:"hash"`
+	Tokens      int64  `json:"tokens"`
+	Cached      int64  `json:"cached"`
+	Occurrences int    `json:"occurrences"`
+	Total       int64  `json:"total"`
 }
 
 // sessionContextView is the GET /api/sessions/{id}/context response: per-turn

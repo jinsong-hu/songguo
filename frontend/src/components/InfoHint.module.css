@@ -4,6 +4,7 @@
   align-items: center;
   cursor: help;
   outline: none;
+  text-transform: none;
 }
 
 .badge {
