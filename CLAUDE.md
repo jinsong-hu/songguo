@@ -148,3 +148,54 @@ blind-pipes to an arbitrary origin.
 ## Build / test
 
 No Go on the local box — build and test on the Mac mini (`ssh macmini`).
+
+## Git workflow
+
+- Work in a fresh git worktree for each task; do not edit the primary checkout directly.
+- Before creating any worktree, update the primary checkout first: switch to `main`, pull `origin/main` with `--ff-only`, then create the worktree branch from the updated base.
+- Commit and push only after the user explicitly says to proceed.
+- Before pushing, fetch and rebase on `origin/main`; do not merge.
+- Push the task branch directly to `main` as `<branch>:main`.
+- After pushing from a worktree, update the primary checkout again: switch to `main`, pull `origin/main` with `--ff-only`, then prune stale refs.
+- After the push lands and the primary checkout is synced, remove the worktree and delete the local branch.
+
+```sh
+# --- before creating a worktree ---
+cd <primary-checkout>
+git switch main
+git pull --ff-only origin main
+git worktree add ../<worktree-name> -b <branch> main
+
+# --- work in the worktree ---
+cd ../<worktree-name>
+
+# --- before pushing, after the user's "go" ---
+git fetch origin
+git rebase origin/main
+git push origin <branch>:main
+
+# --- after pushing from the worktree ---
+cd <primary-checkout>
+git switch main
+git pull --ff-only origin main
+git fetch --prune origin
+
+# --- after the push lands ---
+git worktree remove ../<worktree-name>
+git branch -d <branch>
+```
+
+## On the MacBook (the dev machine) — no worktree
+
+The MacBook is the dev machine. Work **directly in the primary checkout** — do **not** create a worktree there. Multiple sessions may be editing the same checkout at the same time, so treat other sessions' edits as coexisting WIP, not as something to clean up.
+
+- Do not reset, stash, checkout-over, or clean files you didn't change — another session may be mid-edit.
+- When committing, **selectively stage your own changes** (`git add <file>` / `git add -p`); never `git add -A`.
+- **Superset rule for shared files:** if a file you changed was *also* changed by another session, include it in your commit anyway — stage the file as it stands on disk (its current contents are the superset of both sessions' edits). Don't try to split out only your hunks from a shared file; commit the whole file.
+- Everything else in the git workflow above still applies (rebase not merge, push only on "go", `--ff-only` pulls).
+
+## Local changes
+
+- The primary checkout may contain user WIP. Do not overwrite, reset, or clean it unless the user explicitly asks.
+- Stage only files or hunks owned by the current task; never use `git add -A` when unrelated changes exist.
+- Prefer `git pull --ff-only` so Git never creates accidental merge commits.
