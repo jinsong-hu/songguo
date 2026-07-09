@@ -845,13 +845,15 @@ function collectPartBlocks(
     });
     return;
   }
-  if (part.kind === 'raw' && part.label.includes('thinking')) {
+  if (part.kind === 'raw' && (part.label.includes('thinking') || part.label === 'reasoning')) {
+    const text = reasoningPartText(part);
+    if (!text) return;
     out.push({
       id: baseId,
       source: 'reasoning',
       title: part.label,
       detail: baseDetail,
-      snippet: messagePartCopyText(part),
+      snippet: text,
     });
     return;
   }
@@ -881,6 +883,18 @@ function partTitle(part: MessagePart): string {
   if (part.kind === 'empty') return part.label;
   if (part.kind === 'raw') return part.label;
   return messagePartCopyText(part).split('\n')[0] || 'Message block';
+}
+
+function reasoningPartText(part: Extract<MessagePart, { kind: 'raw' }>): string {
+  if (!isRecord(part.raw)) return '';
+  if (typeof part.raw.thinking === 'string') return part.raw.thinking;
+  if (Array.isArray(part.raw.summary)) {
+    return part.raw.summary
+      .map((item) => (isRecord(item) && typeof item.text === 'string' ? item.text : ''))
+      .filter(Boolean)
+      .join('\n');
+  }
+  return '';
 }
 
 function snippet(text: string): string {

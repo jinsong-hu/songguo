@@ -83,8 +83,10 @@ type Composition struct {
 	Sources []Source `json:"sources"`
 }
 
-// unit is one indivisible block in render order (tools → system → messages).
-// text is the exact string tokenized to weigh the block.
+// unit is one indivisible decomposable block in render order (tools → system →
+// messages). text is the semantic content tokenized to weigh the block. Opaque
+// continuity state such as reasoning signatures is deliberately excluded: it is
+// request metadata, not inspectable context content.
 type unit struct {
 	src  string
 	prod string
@@ -357,10 +359,26 @@ func parseAnthropic(body []byte) []unit {
 			if src == "" {
 				continue
 			}
-			units = append(units, unit{src: src, prod: prod, text: compactStr(raw)})
+			if text := anthBlockText(raw, b.Type); text != "" {
+				units = append(units, unit{src: src, prod: prod, text: text})
+			}
 		}
 	}
 	return units
+}
+
+func anthBlockText(raw json.RawMessage, typ string) string {
+	if typ == "thinking" {
+		var b struct {
+			Thinking string `json:"thinking"`
+		}
+		_ = json.Unmarshal(raw, &b)
+		return b.Thinking
+	}
+	if typ == "redacted_thinking" {
+		return ""
+	}
+	return compactStr(raw)
 }
 
 // anthClassify maps a (role, block type) to a source key and optional producer.
@@ -558,7 +576,7 @@ func parseOpenAIResponses(body []byte) []unit {
 				}
 			}
 		case "reasoning":
-			if s := compactStr(raw); s != "" {
+			if s := responsesReasoningText(raw); s != "" {
 				units = append(units, unit{src: "reasoning", text: s})
 			}
 		case "function_call", "custom_tool_call", "web_search_call", "computer_call", "local_shell_call":
@@ -633,6 +651,24 @@ func responsesContentTexts(raw json.RawMessage) []string {
 		}
 	}
 	return out
+}
+
+func responsesReasoningText(raw json.RawMessage) string {
+	var item struct {
+		Summary []struct {
+			Text string `json:"text"`
+		} `json:"summary"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return ""
+	}
+	var parts []string
+	for _, s := range item.Summary {
+		if s.Text != "" {
+			parts = append(parts, s.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func responsesOutputText(raw json.RawMessage) string {

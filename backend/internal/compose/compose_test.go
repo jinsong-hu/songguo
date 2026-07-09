@@ -52,7 +52,7 @@ const sampleOpenAIResponses = `{
   "input": [
     {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Follow sandbox rules."}]},
     {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Inspect this repo."}]},
-    {"type": "reasoning", "summary": [], "encrypted_content": "gAAAA-test"},
+    {"type": "reasoning", "summary": [{"text": "Need inspect the repo first."}], "encrypted_content": "gAAAA-test"},
     {"type": "function_call", "name": "exec_command", "arguments": "{\"cmd\":\"pwd\"}", "call_id": "call_1"},
     {"type": "function_call_output", "call_id": "call_1", "output": "Output:\n/Users/example/project\n"},
     {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "I found the project root."}]}
@@ -186,6 +186,50 @@ func TestComposeAnthropicSources(t *testing.T) {
 	}
 }
 
+func TestComposeAnthropicThinkingSignatureIgnored(t *testing.T) {
+	withSignatureOnly := `{
+	  "model": "claude-x",
+	  "messages": [
+	    {"role": "assistant", "content": [
+	      {"type": "thinking", "thinking": "", "signature": "EuUGCmTIDxgCKKa5uioxLargeOpaqueSignature"},
+	      {"type": "text", "text": "Done."}
+	    ]}
+	  ]
+	}`
+	comp, ok := Compose("anthropic-messages", []byte(withSignatureOnly), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	for _, s := range comp.Sources {
+		if s.Key == "reasoning" {
+			t.Fatalf("signature-only thinking produced reasoning tokens: %+v", s)
+		}
+	}
+
+	withThinking := `{
+	  "model": "claude-x",
+	  "messages": [
+	    {"role": "assistant", "content": [
+	      {"type": "thinking", "thinking": "Need answer directly.", "signature": "EuUGCmTIDxgCKKa5uioxLargeOpaqueSignature"},
+	      {"type": "text", "text": "Done."}
+	    ]}
+	  ]
+	}`
+	comp, ok = Compose("anthropic-messages", []byte(withThinking), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	var reasoning int64
+	for _, s := range comp.Sources {
+		if s.Key == "reasoning" {
+			reasoning = s.Tokens
+		}
+	}
+	if reasoning <= 0 {
+		t.Fatal("thinking text did not produce reasoning tokens")
+	}
+}
+
 func TestComposeOpenAIResponsesSources(t *testing.T) {
 	comp, ok := Compose("openai/responses", []byte(sampleOpenAIResponses), 0)
 	if !ok {
@@ -219,6 +263,25 @@ func TestComposeOpenAIResponsesSources(t *testing.T) {
 			if len(s.Children) != 1 || s.Children[0].Key != "exec_command" {
 				t.Errorf("tool_results producers = %+v, want exec_command", s.Children)
 			}
+		}
+	}
+}
+
+func TestComposeOpenAIResponsesEncryptedReasoningIgnored(t *testing.T) {
+	body := `{
+	  "model": "gpt-x",
+	  "input": [
+	    {"type": "reasoning", "summary": [], "encrypted_content": "gAAAA-test"},
+	    {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Done."}]}
+	  ]
+	}`
+	comp, ok := Compose("openai/responses", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	for _, s := range comp.Sources {
+		if s.Key == "reasoning" {
+			t.Fatalf("encrypted-only reasoning produced reasoning tokens: %+v", s)
 		}
 	}
 }
