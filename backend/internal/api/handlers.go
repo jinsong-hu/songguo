@@ -599,6 +599,11 @@ func (a *api) callData(id int64) (entryView, error) {
 		return entryView{}, err
 	}
 	v.HasTrace = hasTrace[id]
+	if comp, err := a.store.GetComposition(id); err == nil {
+		v.Composition = &comp
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return entryView{}, err
+	}
 	a.enrichClientFromTrace(&v)
 	return v, nil
 }
@@ -939,14 +944,23 @@ func (a *api) handleContextComposition(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleSessionContext returns one session's per-turn context composition, the
-// latest turn's full snapshot, and a (currently empty) dwell list.
+// handleSessionContext returns one session's per-turn context composition, its
+// request-weighted distribution, the latest turn's full snapshot, and a
+// (currently empty) dwell list.
 func (a *api) handleSessionContext(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	rows, err := a.store.SessionComposition(id)
 	if err != nil {
 		a.writeDataErr(w, "session context", err)
 		return
+	}
+	agg, err := a.store.AggregateSessionComposition(id)
+	if err != nil {
+		a.writeDataErr(w, "session context", err)
+		return
+	}
+	if agg.Sources == nil {
+		agg.Sources = []compose.Source{}
 	}
 
 	turns := make([]contextTurnView, 0, len(rows))
@@ -957,6 +971,7 @@ func (a *api) handleSessionContext(w http.ResponseWriter, r *http.Request) {
 			srcMap[s.Key] = s.Tokens
 		}
 		turns = append(turns, contextTurnView{
+			CallID:  row.CallID,
 			Seq:     i,
 			TS:      row.TS.UTC().Format(time.RFC3339),
 			AgentID: row.AgentID,
@@ -976,8 +991,13 @@ func (a *api) handleSessionContext(w http.ResponseWriter, r *http.Request) {
 		SessionID: id,
 		Title:     a.sessionTitle(id),
 		Turns:     turns,
-		Snapshot:  snapshot,
-		Dwell:     []dwellBlockView{},
+		Distribution: contextDistributionView{
+			Requests: agg.Requests,
+			AvgTotal: agg.AvgTotal,
+			Sources:  agg.Sources,
+		},
+		Snapshot: snapshot,
+		Dwell:    []dwellBlockView{},
 	})
 }
 

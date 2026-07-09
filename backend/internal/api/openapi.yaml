@@ -99,7 +99,7 @@ paths:
           description: Context composition
           content:
             application/json:
-              schema: { type: object }
+              schema: { $ref: "#/components/schemas/ContextComposition" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /api/usage/breakdown:
     get:
@@ -276,7 +276,7 @@ paths:
           description: Session context composition
           content:
             application/json:
-              schema: { type: object }
+              schema: { $ref: "#/components/schemas/SessionContext" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /api/users:
     get:
@@ -697,6 +697,63 @@ components:
         bucket: { type: string }
         models: { type: array, items: { type: string } }
         points: { type: array, items: { $ref: "#/components/schemas/TokensByModelPoint" } }
+    ProducerSlice:
+      type: object
+      properties:
+        key: { type: string }
+        tokens: { type: integer, format: int64 }
+    SourceSlice:
+      type: object
+      properties:
+        key: { type: string }
+        tokens: { type: integer, format: int64 }
+        cached: { type: integer, format: int64 }
+        children: { type: array, items: { $ref: "#/components/schemas/ProducerSlice" } }
+    RequestComposition:
+      type: object
+      properties:
+        total: { type: integer, format: int64 }
+        cached: { type: integer, format: int64 }
+        sources: { type: array, items: { $ref: "#/components/schemas/SourceSlice" } }
+    ContextDistribution:
+      type: object
+      properties:
+        requests: { type: integer }
+        avg_total: { type: number }
+        sources: { type: array, items: { $ref: "#/components/schemas/SourceSlice" } }
+    ContextComposition:
+      allOf:
+        - type: object
+          properties:
+            range: { $ref: "#/components/schemas/Range" }
+        - $ref: "#/components/schemas/ContextDistribution"
+    ContextTurn:
+      type: object
+      properties:
+        call_id: { type: integer, format: int64 }
+        seq: { type: integer }
+        ts: { type: string, format: date-time }
+        agent_id: { type: string }
+        total: { type: integer, format: int64 }
+        cached: { type: integer, format: int64 }
+        sources: { type: object, additionalProperties: { type: integer, format: int64 } }
+    DwellBlock:
+      type: object
+      properties:
+        label: { type: string }
+        producer: { type: string }
+        tokens: { type: integer, format: int64 }
+        turns: { type: integer }
+        dwell: { type: integer, format: int64 }
+    SessionContext:
+      type: object
+      properties:
+        session_id: { type: string }
+        title: { type: string }
+        turns: { type: array, items: { $ref: "#/components/schemas/ContextTurn" } }
+        distribution: { $ref: "#/components/schemas/ContextDistribution" }
+        snapshot: { type: array, items: { $ref: "#/components/schemas/SourceSlice" } }
+        dwell: { type: array, items: { $ref: "#/components/schemas/DwellBlock" } }
     BreakdownRow:
       type: object
       properties:
@@ -749,6 +806,7 @@ components:
         agent_id: { type: string, description: "Captured coding-agent id when available, e.g. X-Claude-Code-Agent-Id" }
         parent_agent_id: { type: string, description: "Captured parent agent id when available, e.g. X-Claude-Code-Parent-Agent-Id" }
         has_trace: { type: boolean }
+        composition: { $ref: "#/components/schemas/RequestComposition" }
     CallsPage:
       type: object
       properties:

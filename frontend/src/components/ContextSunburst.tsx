@@ -22,8 +22,8 @@ export const SRC_META: Record<string, { label: string; color: string }> = {
 };
 
 const PROD_PALETTE = [
-  'var(--chart-1)', 'var(--chart-2)', 'var(--chart-6)', 'var(--chart-4)',
-  'var(--chart-3)', 'var(--chart-7)', 'var(--chart-5)',
+  'var(--producer-1)', 'var(--producer-2)', 'var(--producer-3)', 'var(--producer-4)',
+  'var(--producer-5)', 'var(--producer-6)', 'var(--producer-7)', 'var(--producer-8)',
 ];
 
 export function srcColor(key: string): string {
@@ -56,10 +56,84 @@ interface SunburstData {
   sources: SourceSlice[];
 }
 
+const MAIN_SIZE = 240;
+const MAIN_CENTER = MAIN_SIZE / 2;
+const MAIN_OUTER_R = 90;
+const CONNECTOR_W = 54;
+const BREAKOUT_LIMIT = 4;
+
+type LayoutMode = 'one' | 'two' | 'four';
+
+function sideRows(n: number): number[] {
+  if (n <= 1) return [MAIN_CENTER];
+  const top = 70;
+  const bottom = MAIN_SIZE - 70;
+  return Array.from({ length: n }, (_, i) => top + ((bottom - top) * i) / (n - 1));
+}
+
+function chooseBreakouts(sources: SourceSlice[], total: number): { mode: LayoutMode; breakouts: SourceSlice[] } {
+  const candidates = sources
+    .filter((s) => (s.children?.length ?? 0) > 0)
+    .sort((a, b) => b.tokens - a.tokens);
+  const share = (i: number) => (candidates[i]?.tokens ?? 0) / total;
+  if (candidates.length <= 1 || share(1) < 0.1) {
+    return { mode: 'one', breakouts: candidates.slice(0, 1) };
+  }
+  if (candidates.length <= 2 || share(2) < 0.1) {
+    return { mode: 'two', breakouts: candidates.slice(0, 2) };
+  }
+  return { mode: 'four', breakouts: candidates.slice(0, BREAKOUT_LIMIT) };
+}
+
+function sectorMidAngles(sources: SourceSlice[], total: number): Map<string, number> {
+  const out = new Map<string, number>();
+  let cursor = 90;
+  for (const s of sources) {
+    const sweep = (s.tokens / total) * 360;
+    out.set(s.key, cursor - sweep / 2);
+    cursor -= sweep;
+  }
+  return out;
+}
+
+function naturalSide(s: SourceSlice, angles: Map<string, number>): 'left' | 'right' {
+  const angle = ((angles.get(s.key) ?? 0) * Math.PI) / 180;
+  return Math.cos(angle) >= 0 ? 'right' : 'left';
+}
+
+function pushBalanced(cols: { left: SourceSlice[]; right: SourceSlice[] }, side: 'left' | 'right', s: SourceSlice) {
+  const preferred = cols[side];
+  const other = side === 'left' ? cols.right : cols.left;
+  if (preferred.length < 2) preferred.push(s);
+  else other.push(s);
+}
+
+function breakoutColumns(
+  mode: LayoutMode,
+  breakouts: SourceSlice[],
+  angles: Map<string, number>,
+): { left: SourceSlice[]; right: SourceSlice[] } {
+  const cols = { left: [] as SourceSlice[], right: [] as SourceSlice[] };
+  if (mode === 'one') {
+    const s = breakouts[0];
+    if (s) cols[naturalSide(s, angles)].push(s);
+    return cols;
+  }
+  if (mode === 'two') {
+    for (const s of breakouts) {
+      const side = naturalSide(s, angles);
+      if (cols[side].length === 0) cols[side].push(s);
+      else cols[side === 'left' ? 'right' : 'left'].push(s);
+    }
+    return cols;
+  }
+  for (const s of breakouts) pushBalanced(cols, naturalSide(s, angles), s);
+  return cols;
+}
+
 /**
- * Two-level composition ring: inner = source buckets, outer = producer
- * drill-down. Childless buckets extend their parent as one faded outer segment
- * so the ring stays whole. Both rings sum to the same total, so they align.
+ * Source-level context donut with producer drill-downs pulled out to small
+ * side donuts for the largest child-bearing source buckets.
  */
 export function ContextSunburst({ data, centerLabel = 'avg window' }: { data: SunburstData; centerLabel?: string }) {
   const sources = data.sources;
@@ -73,43 +147,140 @@ export function ContextSunburst({ data, centerLabel = 'avg window' }: { data: Su
   }
 
   const inner = sources.map((s) => ({ name: srcLabel(s.key), tokens: s.tokens, color: srcColor(s.key) }));
-
-  const outer: { name: string; tokens: number; color: string; faded?: boolean }[] = [];
-  for (const s of sources) {
-    if (s.children?.length) {
-      for (const c of s.children)
-        outer.push({ name: prodLabel(c.key), tokens: c.tokens, color: kidColor.get(`${s.key}/${c.key}`)! });
-    } else {
-      outer.push({ name: srcLabel(s.key), tokens: s.tokens, color: srcColor(s.key), faded: true });
-    }
-  }
+  const { mode, breakouts } = chooseBreakouts(sources, total);
+  const angles = sectorMidAngles(sources, total);
+  const { left, right } = breakoutColumns(mode, breakouts, angles);
+  const leftRows = sideRows(left.length);
+  const rightRows = sideRows(right.length);
+  const modeClass = mode === 'one'
+    ? left.length > 0
+      ? styles.modeOneLeft
+      : styles.modeOneRight
+    : mode === 'two'
+      ? styles.modeTwo
+      : styles.modeFour;
 
   const pct = (n: number) => `${Math.round((n / total) * 100)}%`;
 
-  return (
-    <div className={styles.sunWrap}>
-      <div className={styles.sunChart}>
-        <ChartContainer config={{}} className={CHART_CLS}>
-          <PieChart>
-            <ChartTooltip content={<ChartTooltipContent nameKey="name" />} />
-            <Pie data={inner} dataKey="tokens" nameKey="name" innerRadius="42%" outerRadius="62%" strokeWidth={1.5} stroke="var(--surface)" isAnimationActive={false}>
-              {inner.map((d, i) => (
-                <Cell key={i} fill={d.color} />
-              ))}
-            </Pie>
-            <Pie data={outer} dataKey="tokens" nameKey="name" innerRadius="64%" outerRadius="84%" strokeWidth={1.5} stroke="var(--surface)" isAnimationActive={false}>
-              {outer.map((d, i) => (
-                <Cell key={i} fill={d.color} fillOpacity={d.faded ? 0.28 : 1} />
-              ))}
-            </Pie>
-          </PieChart>
-        </ChartContainer>
-        <div className={styles.sunCenter}>
-          <div className={styles.sunCenterVal}>{compact(data.avg_total)}</div>
-          <div className={styles.sunCenterLbl}>{centerLabel}</div>
+  const breakoutCard = (s: SourceSlice, side: 'left' | 'right') => {
+    const children = s.children ?? [];
+    const childTotal = children.reduce((a, c) => a + c.tokens, 0) || 1;
+    return (
+      <div key={s.key} className={`${styles.breakout} ${side === 'left' ? styles.breakoutLeft : styles.breakoutRight}`}>
+        <div className={styles.miniChart} style={{ borderColor: srcColor(s.key) }}>
+          <ChartContainer config={{}} className={CHART_CLS}>
+            <PieChart>
+              <ChartTooltip content={<ChartTooltipContent nameKey="name" />} />
+              <Pie
+                data={children.map((c) => ({ name: prodLabel(c.key), tokens: c.tokens, color: kidColor.get(`${s.key}/${c.key}`)! }))}
+                dataKey="tokens"
+                nameKey="name"
+                innerRadius="56%"
+                outerRadius="86%"
+                startAngle={90}
+                endAngle={-270}
+                strokeWidth={1}
+                stroke="var(--surface)"
+                isAnimationActive={false}
+              >
+                {children.map((c) => (
+                  <Cell key={c.key} fill={kidColor.get(`${s.key}/${c.key}`)!} />
+                ))}
+              </Pie>
+            </PieChart>
+          </ChartContainer>
+        </div>
+        <div className={styles.breakoutText}>
+          <div className={styles.breakoutTitle}>
+            <span className={styles.nlSw} style={{ background: srcColor(s.key) }} />
+            {srcLabel(s.key)}
+            <b className={styles.nlPct}>{pct(s.tokens)}</b>
+          </div>
+          <div className={styles.breakoutKids}>
+            {children.slice(0, 4).map((c) => (
+              <span key={c.key}>
+                <span className={styles.nlDot} style={{ background: kidColor.get(`${s.key}/${c.key}`) }} />
+                {prodLabel(c.key)} <span className="mono">{Math.round((c.tokens / childTotal) * 100)}%</span>
+              </span>
+            ))}
+          </div>
         </div>
       </div>
-      <div className={styles.nestLegend}>
+    );
+  };
+
+  return (
+    <div className={`${styles.donutWrap} ${modeClass}`}>
+      {left.length > 0 ? (
+        <div className={`${styles.breakoutColumn} ${styles.leftBreakouts}`}>
+          {left.map((s) => breakoutCard(s, 'left'))}
+        </div>
+      ) : null}
+      <div className={styles.chartCluster}>
+        <div className={styles.sunChart}>
+          <ChartContainer config={{}} className={CHART_CLS}>
+            <PieChart>
+              <ChartTooltip content={<ChartTooltipContent nameKey="name" />} />
+              <Pie
+                data={inner}
+                dataKey="tokens"
+                nameKey="name"
+                innerRadius="54%"
+                outerRadius="78%"
+                startAngle={90}
+                endAngle={-270}
+                strokeWidth={1.5}
+                stroke="var(--surface)"
+                isAnimationActive={false}
+              >
+                {inner.map((d, i) => (
+                  <Cell key={i} fill={d.color} />
+                ))}
+              </Pie>
+            </PieChart>
+          </ChartContainer>
+          <div className={styles.sunCenter}>
+            <div className={styles.sunCenterVal}>{compact(data.avg_total)}</div>
+            <div className={styles.sunCenterLbl}>{centerLabel}</div>
+          </div>
+        </div>
+        {breakouts.length > 0 ? (
+          <svg className={styles.connectorLayer} viewBox={`${-CONNECTOR_W} 0 ${MAIN_SIZE + CONNECTOR_W * 2} ${MAIN_SIZE}`} aria-hidden="true">
+            {left.map((s, i) => {
+              const y = leftRows[i];
+              return (
+                <path
+                  key={s.key}
+                  d={`M ${MAIN_CENTER - MAIN_OUTER_R - 4} ${y} C ${MAIN_CENTER - MAIN_OUTER_R - 24} ${y}, ${-CONNECTOR_W + 20} ${y}, ${-CONNECTOR_W} ${y}`}
+                  stroke={srcColor(s.key)}
+                  strokeWidth="1.5"
+                  fill="none"
+                  opacity="0.72"
+                />
+              );
+            })}
+            {right.map((s, i) => {
+              const y = rightRows[i];
+              return (
+                <path
+                  key={s.key}
+                  d={`M ${MAIN_CENTER + MAIN_OUTER_R + 4} ${y} C ${MAIN_CENTER + MAIN_OUTER_R + 24} ${y}, ${MAIN_SIZE + CONNECTOR_W - 20} ${y}, ${MAIN_SIZE + CONNECTOR_W} ${y}`}
+                  stroke={srcColor(s.key)}
+                  strokeWidth="1.5"
+                  fill="none"
+                  opacity="0.72"
+                />
+              );
+            })}
+          </svg>
+        ) : null}
+      </div>
+      {right.length > 0 ? (
+        <div className={`${styles.breakoutColumn} ${styles.rightBreakouts}`}>
+          {right.map((s) => breakoutCard(s, 'right'))}
+        </div>
+      ) : null}
+      <div className={styles.sourceLegend}>
         {sources.map((s) => (
           <div key={s.key}>
             <div className={styles.nlParent}>
@@ -117,16 +288,6 @@ export function ContextSunburst({ data, centerLabel = 'avg window' }: { data: Su
               {srcLabel(s.key)}
               <b className={styles.nlPct}>{pct(s.tokens)}</b>
             </div>
-            {s.children?.length ? (
-              <div className={styles.nlKids}>
-                {s.children.map((c) => (
-                  <span key={c.key}>
-                    <span className={styles.nlDot} style={{ background: kidColor.get(`${s.key}/${c.key}`) }} />
-                    {prodLabel(c.key)} <span className="mono">{pct(c.tokens)}</span>
-                  </span>
-                ))}
-              </div>
-            ) : null}
           </div>
         ))}
       </div>

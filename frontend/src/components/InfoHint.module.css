@@ -21,7 +21,8 @@
 }
 
 .hint:hover .badge,
-.hint:focus-visible .badge {
+.hint:focus-visible .badge,
+.hint:focus-within .badge {
   color: var(--text);
   border-color: var(--text-muted);
 }
@@ -53,8 +54,20 @@
 }
 
 .hint:hover .tip,
-.hint:focus-visible .tip {
+.hint:focus-visible .tip,
+.hint:focus-within .tip {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);
+  pointer-events: auto;
+}
+
+.tip a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.tip a:hover {
+  text-decoration: underline;
 }

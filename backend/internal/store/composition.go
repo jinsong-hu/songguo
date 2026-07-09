@@ -1,7 +1,9 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -25,6 +27,32 @@ func (s *Store) SaveComposition(callID int64, c compose.Composition) error {
 		return fmt.Errorf("store: save composition: %w", err)
 	}
 	return nil
+}
+
+// GetComposition returns a call's context-window decomposition, or ErrNotFound
+// when the call has no decomposed composition row.
+func (s *Store) GetComposition(callID int64) (compose.Composition, error) {
+	var (
+		total  float64
+		cached float64
+		raw    string
+	)
+	if err := s.db.QueryRow(
+		`SELECT total, cached, sources
+		   FROM context_composition
+		  WHERE call_id = ?
+		  LIMIT 1`, callID,
+	).Scan(&total, &cached, &raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return compose.Composition{}, ErrNotFound
+		}
+		return compose.Composition{}, fmt.Errorf("store: get composition: %w", err)
+	}
+	var sources []compose.Source
+	if err := json.Unmarshal([]byte(raw), &sources); err != nil {
+		return compose.Composition{}, fmt.Errorf("store: unmarshal composition: %w", err)
+	}
+	return compose.Composition{Total: int64(total), Cached: int64(cached), Sources: sources}, nil
 }
 
 // AggComposition is the aggregated context decomposition over a window. Tokens
@@ -176,4 +204,70 @@ func (s *Store) SessionComposition(sessionID string) ([]SessionCompositionRow, e
 		return nil, fmt.Errorf("store: session composition rows: %w", err)
 	}
 	return out, nil
+}
+
+// AggregateSessionComposition sums every decomposed request window in one
+// session. Repeated blocks count once per request, matching the Overview
+// context distribution mental model.
+func (s *Store) AggregateSessionComposition(sessionID string) (AggComposition, error) {
+	rows, err := s.SessionComposition(sessionID)
+	if err != nil {
+		return AggComposition{}, err
+	}
+	return aggregateCompositionRows(rows), nil
+}
+
+func aggregateCompositionRows(rows []SessionCompositionRow) AggComposition {
+	type acc struct {
+		tokens int64
+		cached int64
+		prods  map[string]int64
+	}
+	byKey := map[string]*acc{}
+	var order []string
+	var totalTokens int64
+	for _, row := range rows {
+		totalTokens += row.C.Total
+		for _, src := range row.C.Sources {
+			a := byKey[src.Key]
+			if a == nil {
+				a = &acc{prods: map[string]int64{}}
+				byKey[src.Key] = a
+				order = append(order, src.Key)
+			}
+			a.tokens += src.Tokens
+			a.cached += src.Cached
+			for _, p := range src.Children {
+				a.prods[p.Key] += p.Tokens
+			}
+		}
+	}
+
+	out := make([]compose.Source, 0, len(order))
+	for _, key := range order {
+		a := byKey[key]
+		src := compose.Source{Key: key, Tokens: a.tokens, Cached: a.cached}
+		for pk, pt := range a.prods {
+			src.Children = append(src.Children, compose.Producer{Key: pk, Tokens: pt})
+		}
+		sort.SliceStable(src.Children, func(i, j int) bool {
+			if src.Children[i].Tokens != src.Children[j].Tokens {
+				return src.Children[i].Tokens > src.Children[j].Tokens
+			}
+			return src.Children[i].Key < src.Children[j].Key
+		})
+		out = append(out, src)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Tokens != out[j].Tokens {
+			return out[i].Tokens > out[j].Tokens
+		}
+		return out[i].Key < out[j].Key
+	})
+
+	avg := 0.0
+	if len(rows) > 0 {
+		avg = float64(totalTokens) / float64(len(rows))
+	}
+	return AggComposition{Sources: out, Requests: len(rows), AvgTotal: avg}
 }

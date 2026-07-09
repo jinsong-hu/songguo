@@ -85,10 +85,11 @@ type entryView struct {
 	ClientName    string            `json:"client_name"`
 	ClientVersion string            `json:"client_version"`
 	// Coding-agent attribution (empty for ordinary API traffic).
-	SessionID     string `json:"session_id"`
-	AgentID       string `json:"agent_id"`
-	ParentAgentID string `json:"parent_agent_id"`
-	HasTrace      bool   `json:"has_trace"`
+	SessionID     string               `json:"session_id"`
+	AgentID       string               `json:"agent_id"`
+	ParentAgentID string               `json:"parent_agent_id"`
+	HasTrace      bool                 `json:"has_trace"`
+	Composition   *compose.Composition `json:"composition,omitempty"`
 }
 
 // newEntryView converts a calls.Entry into its JSON view.
@@ -571,20 +572,31 @@ type contextCompositionView struct {
 	Sources  []compose.Source `json:"sources"`
 }
 
+// contextDistributionView is the same source tree without a global time range,
+// used for session/request-local context distribution cards.
+type contextDistributionView struct {
+	Requests int              `json:"requests"`
+	AvgTotal float64          `json:"avg_total"`
+	Sources  []compose.Source `json:"sources"`
+}
+
 // sessionContextView is the GET /api/sessions/{id}/context response: per-turn
-// composition, the latest turn's full snapshot (with producers), and a dwell
-// list (empty until lineage tracking lands).
+// composition, the session's request-weighted aggregate distribution, the
+// latest turn's full snapshot (with producers), and a dwell list (empty until
+// lineage tracking lands).
 type sessionContextView struct {
-	SessionID string            `json:"session_id"`
-	Title     string            `json:"title,omitempty"`
-	Turns     []contextTurnView `json:"turns"`
-	Snapshot  []compose.Source  `json:"snapshot"`
-	Dwell     []dwellBlockView  `json:"dwell"`
+	SessionID    string                  `json:"session_id"`
+	Title        string                  `json:"title,omitempty"`
+	Turns        []contextTurnView       `json:"turns"`
+	Distribution contextDistributionView `json:"distribution"`
+	Snapshot     []compose.Source        `json:"snapshot"`
+	Dwell        []dwellBlockView        `json:"dwell"`
 }
 
 // contextTurnView is one turn's composition. Sources maps top-level source key
 // to tokens only (producers and cached are dropped from this map).
 type contextTurnView struct {
+	CallID  int64            `json:"call_id"`
 	Seq     int              `json:"seq"`
 	TS      string           `json:"ts"`
 	AgentID string           `json:"agent_id"`

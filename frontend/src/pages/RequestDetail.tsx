@@ -3,8 +3,10 @@ import { ArrowLeft, FileText, GitBranch } from 'lucide-react';
 import { api } from '../api/client';
 import { CopyButton } from '../components/CopyButton';
 import { ConfidenceDot } from '../components/ConfidenceDot';
+import { ContextSunburst } from '../components/ContextSunburst';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { ESTIMATE_HINT, InfoHint } from '../components/InfoHint';
 import { Page } from '../components/Layout';
 import { Skeleton } from '../components/Skeleton';
 import { StatusPill } from '../components/StatusPill';
@@ -99,6 +101,24 @@ export function RequestDetailPage() {
                   </span>
                 ))}
               </div>
+            </div>
+          )}
+
+          {data.composition && data.composition.sources.length > 0 && (
+            <div className="card" style={{ padding: 16 }}>
+              <div className={styles.fieldLabel} style={{ marginBottom: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                Context distribution
+                <InfoHint
+                  text={`${ESTIMATE_HINT} This request chart shows the single input context window for this request.`}
+                  content={
+                    <>
+                      <span>This request chart shows the single input context window for this request.</span>
+                      <span style={{ display: 'block', marginTop: 8 }}>{ESTIMATE_HINT}</span>
+                    </>
+                  }
+                />
+              </div>
+              <ContextSunburst data={{ avg_total: data.composition.total, sources: data.composition.sources }} centerLabel="window" />
             </div>
           )}
 

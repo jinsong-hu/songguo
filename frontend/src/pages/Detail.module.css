@@ -589,6 +589,50 @@
   line-height: 1.45;
 }
 
+.namespaceToolList {
+  border-top: 1px solid var(--border);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.namespaceNestedCard {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.namespaceNestedCard[open] .namespaceNestedSummary {
+  border-bottom: 1px solid var(--border);
+}
+
+.namespaceNestedSummary {
+  min-width: 0;
+  cursor: pointer;
+  padding: 9px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.namespaceNestedCard .toolDesc {
+  padding: 10px;
+}
+
+.namespaceNestedCard .schemaFields,
+.namespaceNestedCard .schemaEmpty {
+  background: var(--surface);
+}
+
+.namespaceNestedCard .namespaceToolList {
+  border-top: none;
+  padding: 8px;
+}
+
 .schemaFields {
   border-top: 1px solid var(--border);
   display: flex;

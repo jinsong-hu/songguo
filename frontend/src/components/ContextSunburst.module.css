@@ -1,8 +1,41 @@
-.sunWrap {
-  display: flex;
-  gap: 28px;
+.donutWrap {
+  display: grid;
+  gap: 18px 26px;
   align-items: center;
-  flex-wrap: wrap;
+  width: min(100%, 980px);
+}
+
+.modeOneRight {
+  grid-template-columns: 240px minmax(320px, 500px);
+  grid-template-areas:
+    "main right"
+    "legend legend";
+}
+
+.modeOneLeft {
+  grid-template-columns: minmax(320px, 500px) 240px;
+  grid-template-areas:
+    "left main"
+    "legend legend";
+}
+
+.modeTwo,
+.modeFour {
+  grid-template-columns: minmax(260px, 340px) 240px minmax(260px, 340px);
+  grid-template-areas:
+    "left main right"
+    "legend legend legend";
+  column-gap: 42px;
+}
+
+.chartCluster {
+  grid-area: main;
+  position: relative;
+  width: 240px;
+  height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .sunChart {
@@ -10,6 +43,16 @@
   width: 240px;
   height: 240px;
   flex: none;
+}
+
+.connectorLayer {
+  position: absolute;
+  top: 0;
+  left: -54px;
+  width: 348px;
+  height: 240px;
+  pointer-events: none;
+  overflow: visible;
 }
 
 .sunCenter {
@@ -27,7 +70,7 @@
   font-variant-numeric: tabular-nums;
   font-size: 22px;
   font-weight: 600;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   color: var(--text);
 }
 
@@ -37,12 +80,102 @@
   margin-top: 2px;
 }
 
-.nestLegend {
-  flex: 1;
-  min-width: 240px;
+.breakoutColumn {
+  min-height: 240px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  justify-content: space-around;
+  gap: 14px;
+}
+
+.leftBreakouts {
+  grid-area: left;
+}
+
+.rightBreakouts {
+  grid-area: right;
+}
+
+.breakout {
+  min-width: 0;
+  display: grid;
+  align-items: center;
+  gap: 12px;
+}
+
+.breakoutRight {
+  grid-template-columns: 68px minmax(0, 1fr);
+}
+
+.breakoutLeft {
+  grid-template-columns: minmax(0, 1fr) 68px;
+}
+
+.miniChart {
+  width: 68px;
+  height: 68px;
+}
+
+.breakoutRight .miniChart {
+  border-left: 3px solid;
+  padding-left: 4px;
+}
+
+.breakoutLeft .miniChart {
+  grid-column: 2;
+  border-right: 3px solid;
+  padding-right: 4px;
+}
+
+.breakoutText {
+  min-width: 0;
+}
+
+.breakoutLeft .breakoutText {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.breakoutTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.breakoutTitle .nlPct {
+  margin-left: 4px;
+}
+
+.breakoutLeft .breakoutTitle {
+  justify-content: flex-end;
+}
+
+.breakoutLeft .breakoutTitle .nlPct {
+  margin-left: 0;
+}
+
+.breakoutKids {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.breakoutLeft .breakoutKids {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.sourceLegend {
+  grid-area: legend;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px 16px;
 }
 
 .nlParent {
@@ -51,6 +184,7 @@
   gap: 8px;
   font-size: 13px;
   font-weight: 500;
+  min-width: 0;
 }
 
 .nlSw {
@@ -67,19 +201,62 @@
   color: var(--accent);
 }
 
-.nlKids {
-  margin: 3px 0 0 20px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  font-size: 11.5px;
-  color: var(--text-muted);
-}
-
 .nlDot {
   display: inline-block;
   width: 8px;
   height: 8px;
   border-radius: 2px;
   margin-right: 5px;
+}
+
+@media (max-width: 860px) {
+  .modeOneLeft,
+  .modeOneRight,
+  .modeTwo,
+  .modeFour {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "main"
+      "left"
+      "right"
+      "legend";
+  }
+
+  .chartCluster {
+    justify-self: center;
+  }
+
+  .connectorLayer {
+    display: none;
+  }
+
+  .breakoutColumn {
+    min-height: 0;
+  }
+
+  .breakoutLeft {
+    grid-template-columns: 68px minmax(0, 1fr);
+  }
+
+  .breakoutLeft .miniChart {
+    grid-column: 1;
+    border-right: none;
+    border-left: 3px solid;
+    padding-right: 0;
+    padding-left: 4px;
+  }
+
+  .breakoutLeft .breakoutText {
+    grid-column: 2;
+  }
+
+  .breakoutLeft .breakoutTitle,
+  .breakoutLeft .breakoutKids {
+    justify-content: flex-start;
+    text-align: left;
+  }
+
+  .sourceLegend {
+    grid-template-columns: 1fr;
+  }
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/songguo/songguo/internal/calls"
+	"github.com/songguo/songguo/internal/compose"
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/store"
 )
@@ -376,6 +377,65 @@ func TestCallsFiltersAndPagination(t *testing.T) {
 	}
 	if e.Usage == nil || e.Tags == nil {
 		t.Error("usage/tags should serialize as objects, not null")
+	}
+}
+
+func TestCallAndSessionContextIncludeComposition(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Date(2026, 7, 9, 10, 0, 0, 0, time.UTC)
+	id1, err := s.AppendCall(calls.Entry{TS: base, SessionID: "sess", Status: 200})
+	if err != nil {
+		t.Fatalf("AppendCall 1: %v", err)
+	}
+	id2, err := s.AppendCall(calls.Entry{TS: base.Add(time.Minute), SessionID: "sess", Status: 200})
+	if err != nil {
+		t.Fatalf("AppendCall 2: %v", err)
+	}
+	if err := s.SaveComposition(id1, compose.Composition{
+		Total: 100,
+		Sources: []compose.Source{
+			{Key: "system", Tokens: 40},
+			{Key: "tool_results", Tokens: 60, Children: []compose.Producer{{Key: "read", Tokens: 60}}},
+		},
+	}); err != nil {
+		t.Fatalf("SaveComposition 1: %v", err)
+	}
+	if err := s.SaveComposition(id2, compose.Composition{
+		Total: 200,
+		Sources: []compose.Source{
+			{Key: "system", Tokens: 80},
+			{Key: "tool_results", Tokens: 120, Children: []compose.Producer{{Key: "bash", Tokens: 120}}},
+		},
+	}); err != nil {
+		t.Fatalf("SaveComposition 2: %v", err)
+	}
+
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
+
+	rec := do(h, "GET", "/api/calls/"+strconv.FormatInt(id2, 10), "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("call detail: code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var call entryView
+	decodeBody(t, rec, &call)
+	if call.Composition == nil || call.Composition.Total != 200 {
+		t.Fatalf("call composition = %+v, want total 200", call.Composition)
+	}
+
+	rec = do(h, "GET", "/api/sessions/sess/context", "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("session context: code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var ctx sessionContextView
+	decodeBody(t, rec, &ctx)
+	if len(ctx.Turns) != 2 || ctx.Turns[1].CallID != id2 {
+		t.Fatalf("turns = %+v, want latest call id %d", ctx.Turns, id2)
+	}
+	if ctx.Distribution.Requests != 2 || ctx.Distribution.AvgTotal != 150 {
+		t.Fatalf("distribution requests/avg = %d/%v, want 2/150", ctx.Distribution.Requests, ctx.Distribution.AvgTotal)
+	}
+	if len(ctx.Distribution.Sources) == 0 || ctx.Distribution.Sources[0].Key != "tool_results" || ctx.Distribution.Sources[0].Tokens != 180 {
+		t.Fatalf("distribution sources = %+v, want tool_results 180 first", ctx.Distribution.Sources)
 	}
 }
 

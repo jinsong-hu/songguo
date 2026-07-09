@@ -150,6 +150,8 @@ export interface CallEntry {
   parent_agent_id: string;
   /** Whether a captured request/response payload exists for this call. */
   has_trace: boolean;
+  /** Single-request context-window composition, present when the request was decomposable. */
+  composition?: RequestComposition;
 }
 
 /** One side (request or response) of a captured trace. */
@@ -264,6 +266,20 @@ export interface SourceSlice {
   children?: ProducerSlice[];
 }
 
+export interface ContextDistribution {
+  /** Requests contributing to this local aggregate. */
+  requests: number;
+  /** Mean full-window tokens per request in the aggregate. */
+  avg_total: number;
+  sources: SourceSlice[];
+}
+
+export interface RequestComposition {
+  total: number;
+  cached: number;
+  sources: SourceSlice[];
+}
+
 /** GET /api/context/composition: aggregated window composition over a range. */
 export interface ContextComposition {
   range: Range;
@@ -276,6 +292,7 @@ export interface ContextComposition {
 
 /** Per-turn context snapshot for the session growth chart. */
 export interface ContextTurn {
+  call_id: number;
   seq: number;
   ts: string;
   agent_id: string;
@@ -299,6 +316,8 @@ export interface SessionContext {
   session_id: string;
   title?: string;
   turns: ContextTurn[];
+  /** Request-weighted aggregate context distribution for the whole session. */
+  distribution: ContextDistribution;
   /** Latest-window composition tree (snapshot). */
   snapshot: SourceSlice[];
   /** Top resident blocks by dwell (empty until lineage tracking lands). */

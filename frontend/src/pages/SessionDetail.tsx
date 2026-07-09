@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChevronRight, GitBranch } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from 'recharts';
 import { svg as claudeCodeSvg } from 'thesvg/claude-code';
@@ -7,7 +7,7 @@ import { svg as codexOpenAISvg } from 'thesvg/codex-openai';
 import { api } from '../api/client';
 import type { AgentNode, CallEntry, CallTrace } from '../api/types';
 import { ContextSunburst, srcColor, srcLabel } from '../components/ContextSunburst';
-import { InfoHint } from '../components/InfoHint';
+import { ESTIMATE_HINT, InfoHint } from '../components/InfoHint';
 import { CopyButton } from '../components/CopyButton';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -41,8 +41,8 @@ export function SessionDetailPage() {
   const [axis, setAxis] = useState<'source' | 'cache'>('source');
 
   const turns = useMemo(() => ctx.data?.turns ?? [], [ctx.data]);
-  const snapshot = ctx.data?.snapshot ?? [];
-  const lastTotal = turns.length ? turns[turns.length - 1].total : 0;
+  const distribution = ctx.data?.distribution;
+  const latestCompositionCallId = turns.length ? turns[turns.length - 1].call_id : null;
 
   const sourceKeys = useMemo(() => {
     const seen = new Set<string>();
@@ -178,13 +178,28 @@ export function SessionDetailPage() {
             </div>
           )}
 
-          {snapshot.length > 0 && (
+          {distribution && distribution.sources.length > 0 && (
             <div className="card" style={{ padding: 16 }}>
               <div className={styles.fieldLabel} style={{ marginBottom: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                Composition — latest turn
-                <InfoHint />
+                Context distribution
+                <InfoHint
+                  text={`${ESTIMATE_HINT} This session chart sums every decomposed request window; repeated context is counted once per request.`}
+                  content={
+                    <>
+                      <span>
+                        This session chart sums every decomposed request window, so repeated context is counted once per request.
+                      </span>
+                      <span style={{ display: 'block', marginTop: 8 }}>{ESTIMATE_HINT}</span>
+                      {latestCompositionCallId ? (
+                        <span style={{ display: 'block', marginTop: 8 }}>
+                          <Link to={`/calls/${latestCompositionCallId}`}>Open latest request</Link> for the single-request window.
+                        </span>
+                      ) : null}
+                    </>
+                  }
+                />
               </div>
-              <ContextSunburst data={{ avg_total: lastTotal, sources: snapshot }} centerLabel="window" />
+              <ContextSunburst data={distribution} />
             </div>
           )}
 
@@ -548,14 +563,65 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
     <details ref={ref} className={styles.toolCard} onToggle={handleToggle}>
       <summary className={styles.toolSummary}>
         <span className={styles.toolName}>{tool.name || '(unnamed tool)'}</span>
-        <span className={styles.toolMeta}>{tool.propertyCount} inputs</span>
+        <span className={styles.toolMeta}>{toolMeta(tool)}</span>
       </summary>
       <div className={`${styles.toolDetail} ${align === 'right' ? styles.toolDetailRight : styles.toolDetailLeft}`}>
         {tool.description ? <p className={styles.toolDesc}>{tool.description}</p> : null}
-        <SchemaView schema={tool.schema} />
+        {tool.type === 'namespace' ? (
+          <div className={styles.namespaceToolList}>
+            {tool.tools.length > 0 ? (
+              tool.tools.map((child, i) => (
+                <NestedToolCard key={`${child.name}-${i}`} tool={child} />
+              ))
+            ) : (
+              <div className={styles.schemaEmpty}>No tools in this namespace.</div>
+            )}
+          </div>
+        ) : (
+          <SchemaView schema={tool.schema} />
+        )}
       </div>
     </details>
   );
+}
+
+function NestedToolCard({ tool }: { tool: ToolInfo }) {
+  if (tool.type === 'namespace') {
+    return (
+      <details className={styles.namespaceNestedCard}>
+        <summary className={styles.namespaceNestedSummary}>
+          <span className={styles.toolName}>{tool.name || '(unnamed namespace)'}</span>
+          <span className={styles.toolMeta}>{toolMeta(tool)}</span>
+        </summary>
+        {tool.description ? <p className={styles.toolDesc}>{tool.description}</p> : null}
+        <div className={styles.namespaceToolList}>
+          {tool.tools.length > 0 ? (
+            tool.tools.map((child, i) => (
+              <NestedToolCard key={`${child.name}-${i}`} tool={child} />
+            ))
+          ) : (
+            <div className={styles.schemaEmpty}>No tools in this namespace.</div>
+          )}
+        </div>
+      </details>
+    );
+  }
+
+  return (
+    <details className={styles.namespaceNestedCard}>
+      <summary className={styles.namespaceNestedSummary}>
+        <span className={styles.toolName}>{tool.name || '(unnamed tool)'}</span>
+        <span className={styles.toolMeta}>{toolMeta(tool)}</span>
+      </summary>
+      {tool.description ? <p className={styles.toolDesc}>{tool.description}</p> : null}
+      <SchemaView schema={tool.schema} />
+    </details>
+  );
+}
+
+function toolMeta(tool: ToolInfo): string {
+  if (tool.type === 'namespace') return `${tool.tools.length} ${tool.tools.length === 1 ? 'tool' : 'tools'}`;
+  return `${tool.propertyCount} ${tool.propertyCount === 1 ? 'input' : 'inputs'}`;
 }
 
 interface PromptReconstruction {
@@ -565,10 +631,12 @@ interface PromptReconstruction {
 }
 
 interface ToolInfo {
+  type: string;
   name: string;
   description: string;
   propertyCount: number;
   schema: unknown;
+  tools: ToolInfo[];
 }
 
 interface PromptMessage {
@@ -836,29 +904,33 @@ function systemBlocks(system: unknown): string[] {
 
 function toolInfos(tools: unknown): ToolInfo[] {
   if (!Array.isArray(tools)) return [];
-  return tools.map((tool) => {
-    const record = isRecord(tool) ? tool : {};
-    const fn = isRecord(record.function) ? record.function : {};
-    const schema = record.input_schema ?? record.parameters ?? fn.parameters;
-    return {
-      name:
-        typeof record.name === 'string'
-          ? record.name
-          : typeof fn.name === 'string'
-            ? fn.name
-            : typeof record.type === 'string'
-              ? record.type
-              : '',
-      description:
-        typeof record.description === 'string'
-          ? record.description
-          : typeof fn.description === 'string'
-            ? fn.description
-            : '',
-      propertyCount: schemaPropertyCount(schema),
-      schema: stripCacheControl(schema ?? {}),
-    };
-  });
+  return tools.map(toolInfo);
+}
+
+function toolInfo(tool: unknown): ToolInfo {
+  const record = isRecord(tool) ? tool : {};
+  const fn = isRecord(record.function) ? record.function : {};
+  const type = typeof record.type === 'string' ? record.type : 'function';
+  const schema = record.input_schema ?? record.parameters ?? fn.parameters;
+  const nestedTools = Array.isArray(record.tools) ? record.tools.map(toolInfo) : [];
+  return {
+    type,
+    name:
+      typeof record.name === 'string'
+        ? record.name
+        : typeof fn.name === 'string'
+          ? fn.name
+          : type,
+    description:
+      typeof record.description === 'string'
+        ? record.description
+        : typeof fn.description === 'string'
+          ? fn.description
+          : '',
+    propertyCount: schemaPropertyCount(schema),
+    schema: stripCacheControl(schema ?? {}),
+    tools: nestedTools,
+  };
 }
 
 function SchemaView({ schema }: { schema: unknown }) {
