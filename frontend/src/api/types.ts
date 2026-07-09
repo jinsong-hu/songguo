@@ -230,6 +230,7 @@ export interface AgentNode {
 /** GET /api/sessions/{id}: session rollups, agent tree, and its calls. */
 export interface SessionDetail {
   session_id: string;
+  title?: string;
   calls: number;
   cost: number;
   input_tokens: number;
@@ -296,6 +297,7 @@ export interface DwellBlock {
 /** GET /api/sessions/{id}/context: growth series, snapshot, dwell. */
 export interface SessionContext {
   session_id: string;
+  title?: string;
   turns: ContextTurn[];
   /** Latest-window composition tree (snapshot). */
   snapshot: SourceSlice[];

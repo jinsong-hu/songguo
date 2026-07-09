@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"sort"
@@ -676,6 +677,7 @@ func (a *api) sessionData(id string) (sessionView, error) {
 
 	return sessionView{
 		SessionID:    id,
+		Title:        a.sessionTitleFromEntries(entries),
 		Calls:        len(entries),
 		Cost:         cost,
 		InputTokens:  in,
@@ -701,6 +703,201 @@ func (a *api) enrichClientFromTrace(v *entryView) {
 	ci := calls.ParseClientInfo(headerValue(p.ReqHeaders, "User-Agent"))
 	v.ClientName = ci.Name
 	v.ClientVersion = ci.Version
+}
+
+func (a *api) sessionTitle(id string) string {
+	entries, err := a.store.QueryCalls(store.CallFilter{SessionID: id, Limit: 1000})
+	if err != nil || len(entries) == 0 {
+		return ""
+	}
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+	return a.sessionTitleFromEntries(entries)
+}
+
+func (a *api) sessionTitleFromEntries(entries []calls.Entry) string {
+	for _, e := range entries {
+		if e.Wire != "anthropic/messages" {
+			continue
+		}
+		p, err := a.store.GetPayload(e.ID)
+		if err != nil {
+			continue
+		}
+		if title := titleFromPayload(p); title != "" {
+			return title
+		}
+	}
+	return ""
+}
+
+func titleFromPayload(p store.Payload) string {
+	reqBody := p.ReqBody
+	if decoded, ok := decodeGzipBody(reqBody, headerValue(p.ReqHeaders, "Content-Encoding")); ok {
+		reqBody = decoded
+	}
+	if !looksLikeTitleRequest(reqBody) {
+		return ""
+	}
+	body := p.RespBody
+	if decoded, ok := decodeGzipBody(body, headerValue(p.RespHeaders, "Content-Encoding")); ok {
+		body = decoded
+	}
+	text := extractAnthropicText(body)
+	if text == "" {
+		text = string(body)
+	}
+	return cleanSessionTitle(text)
+}
+
+func looksLikeTitleRequest(body []byte) bool {
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		return false
+	}
+
+	systemText := textFromJSONValue(req["system"])
+	return strings.Contains(systemText, "Generate a concise, sentence-case") && hasTitleOutputSchema(req["output_config"])
+}
+
+func extractAnthropicText(body []byte) string {
+	if text := extractAnthropicStreamText(string(body)); text != "" {
+		return text
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return ""
+	}
+	switch content := obj["content"].(type) {
+	case string:
+		return content
+	case []any:
+		var parts []string
+		for _, item := range content {
+			block, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if typ, _ := block["type"].(string); typ != "" && typ != "text" {
+				continue
+			}
+			if text, ok := block["text"].(string); ok && strings.TrimSpace(text) != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, " ")
+	default:
+		return ""
+	}
+}
+
+func hasTitleOutputSchema(value any) bool {
+	outputConfig, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	format, ok := outputConfig["format"].(map[string]any)
+	if !ok || format["type"] != "json_schema" {
+		return false
+	}
+	schema, ok := format["schema"].(map[string]any)
+	if !ok || schema["type"] != "object" {
+		return false
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return false
+	}
+	title, ok := properties["title"].(map[string]any)
+	if !ok || title["type"] != "string" {
+		return false
+	}
+	for _, item := range asAnySlice(schema["required"]) {
+		if item == "title" {
+			return true
+		}
+	}
+	return false
+}
+
+func asAnySlice(value any) []any {
+	items, _ := value.([]any)
+	return items
+}
+
+func extractAnthropicStreamText(body string) string {
+	var parts []string
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		var event map[string]any
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			continue
+		}
+		if typ, _ := event["type"].(string); typ != "content_block_delta" {
+			continue
+		}
+		delta, _ := event["delta"].(map[string]any)
+		if text, ok := delta["text"].(string); ok {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "")
+}
+
+func textFromJSONValue(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case []any:
+		var parts []string
+		for _, item := range v {
+			if text := textFromJSONValue(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	case map[string]any:
+		var parts []string
+		for _, child := range v {
+			if text := textFromJSONValue(child); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		return ""
+	}
+}
+
+func cleanSessionTitle(raw string) string {
+	title := strings.TrimSpace(raw)
+	if title == "" {
+		return ""
+	}
+	var jsonString string
+	if err := json.Unmarshal([]byte(title), &jsonString); err == nil {
+		title = strings.TrimSpace(jsonString)
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(title), &obj); err == nil {
+		if value, ok := obj["title"].(string); ok {
+			title = strings.TrimSpace(value)
+		} else {
+			return ""
+		}
+	}
+	title = strings.Trim(title, " \t\r\n\"'`")
+	title = strings.Join(strings.Fields(title), " ")
+	runes := []rune(title)
+	if len(runes) > 120 {
+		title = strings.TrimSpace(string(runes[:120]))
+	}
+	return title
 }
 
 func headerValue(headers map[string]string, key string) string {
@@ -777,6 +974,7 @@ func (a *api) handleSessionContext(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, sessionContextView{
 		SessionID: id,
+		Title:     a.sessionTitle(id),
 		Turns:     turns,
 		Snapshot:  snapshot,
 		Dwell:     []dwellBlockView{},

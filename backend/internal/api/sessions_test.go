@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/songguo/songguo/internal/calls"
+	"github.com/songguo/songguo/internal/store"
 )
 
 // TestBuildAgentTree checks calls fold into a main-loop→subagent forest with
@@ -43,5 +44,33 @@ func TestBuildAgentTree(t *testing.T) {
 	c := roots[1]
 	if c.AgentID != "c" || c.Calls != 1 || len(c.Children) != 0 {
 		t.Errorf("c node = %+v, want lone root c with 1 call", c)
+	}
+}
+
+func TestTitleFromPayload(t *testing.T) {
+	p := store.Payload{
+		ReqBody: []byte(`{
+			"messages":[{"role":"user","content":[{"type":"text","text":"<session>\nPlease polish the session detail page.\n</session>"}]}],
+			"system":[{"type":"text","text":"Generate a concise, sentence-case title (3-7 words) that captures the main topic or goal of this coding session. Return JSON with a single \"title\" field."}],
+			"tools":[],
+			"output_config":{"format":{"type":"json_schema","schema":{"type":"object","properties":{"title":{"type":"string"}},"required":["title"],"additionalProperties":false}}}
+		}`),
+		RespBody: []byte("event: content_block_delta\n" +
+			"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"{\\\"title\\\": \\\"Session\"}}\n\n" +
+			"event: content_block_delta\n" +
+			"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\" detail polish\\\"}\"}}\n\n"),
+	}
+	if got := titleFromPayload(p); got != "Session detail polish" {
+		t.Fatalf("titleFromPayload = %q, want Session detail polish", got)
+	}
+
+	p.ReqBody = []byte(`{
+		"messages":[{"role":"user","content":[{"type":"text","text":"Perform a web search for the query: Grafana generic_oauth 飞书 Feishu"}]}],
+		"system":[{"type":"text","text":"You are an assistant for performing a web search tool use"}],
+		"tools":[{"type":"web_search_20250305","name":"web_search","max_uses":8}],
+		"tool_choice":{"type":"tool","name":"web_search"}
+	}`)
+	if got := titleFromPayload(p); got != "" {
+		t.Fatalf("tool payload title = %q, want empty", got)
 	}
 }

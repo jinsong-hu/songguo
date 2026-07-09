@@ -84,6 +84,20 @@
   min-width: 0;
 }
 
+.sessionHeaderTitle {
+  position: absolute;
+  left: 50%;
+  max-width: min(48vw, 720px);
+  transform: translateX(-50%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 650;
+  text-align: center;
+}
+
 .sessionTitleId {
   min-width: 0;
   max-width: min(46vw, 420px);
@@ -790,6 +804,10 @@
 
   .sessionTitleId {
     max-width: 28vw;
+  }
+
+  .sessionHeaderTitle {
+    max-width: 42vw;
   }
 
   .messageCard {

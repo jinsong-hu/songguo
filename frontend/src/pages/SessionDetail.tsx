@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ChevronRight, GitBranch } from 'lucide-react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { ChevronRight, GitBranch } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from 'recharts';
 import { svg as claudeCodeSvg } from 'thesvg/claude-code';
 import { svg as codexOpenAISvg } from 'thesvg/codex-openai';
@@ -79,24 +79,27 @@ export function SessionDetailPage() {
   const spanMs = data ? new Date(data.last_ts).getTime() - new Date(data.first_ts).getTime() : 0;
   const sessionClient = useMemo(() => dominantClient(data?.entries ?? []), [data]);
   const mainPromptEntries = useMemo(() => data?.entries.filter(isMainPromptEntry) ?? [], [data]);
+  const sessionTitle = data?.title || ctx.data?.title || '';
 
   return (
     <Page
       title={
         data ? (
-          <span className={styles.sessionTitle}>
+          <>
             <span>Session</span>
-            <code className={`mono ${styles.sessionTitleId}`}>{data.session_id}</code>
-            <CopyButton value={data.session_id} ariaLabel="Copy session id" />
-          </span>
+            {sessionTitle ? <span className={styles.sessionHeaderTitle}>{sessionTitle}</span> : null}
+          </>
         ) : (
           'Session'
         )
       }
       actions={
-        <Link to="/" className="btn">
-          <ArrowLeft size={15} /> Back to overview
-        </Link>
+        data ? (
+          <span className={styles.sessionTitle}>
+            <code className={`mono ${styles.sessionTitleId}`}>{data.session_id}</code>
+            <CopyButton value={data.session_id} ariaLabel="Copy session id" />
+          </span>
+        ) : null
       }
     >
       {error ? (
@@ -208,11 +211,11 @@ export function SessionDetailPage() {
                   <thead>
                     <tr>
                       <th>Time</th>
+                      <th>Wire</th>
                       <th>Model</th>
-                      <th>Vendor</th>
-                      <th>Agent</th>
                       <th className="num">Tokens</th>
                       <th className="num">Cost</th>
+                      <th className="num">Duration</th>
                       <th>Status</th>
                     </tr>
                   </thead>
@@ -226,13 +229,11 @@ export function SessionDetailPage() {
                         <td className="mono" style={{ color: 'var(--text-muted)' }}>
                           {dateTime(e.ts)}
                         </td>
+                        <td className="mono">{e.wire || '—'}</td>
                         <td className="mono">{e.model || '—'}</td>
-                        <td>{e.vendor || '—'}</td>
-                        <td className="mono" style={{ fontSize: 11.5 }}>
-                          {shortAgent(e.agent_id)}
-                        </td>
                         <td className="num">{int(e.input_tokens + e.output_tokens)}</td>
                         <td className="num">{money(e.cost)}</td>
+                        <td className="num">{duration(e.latency_ms / 1000)}</td>
                         <td>
                           <StatusPill status={e.status} />
                         </td>
@@ -1033,11 +1034,6 @@ function AgentTreeNode({ node }: { node: AgentNode }) {
       )}
     </div>
   );
-}
-
-function shortAgent(id: string): string {
-  if (!id) return '—';
-  return id.length > 10 ? `${id.slice(0, 10)}…` : id;
 }
 
 function compactTokens(n: number): string {

@@ -350,6 +350,7 @@ type agentNodeView struct {
 // agent tree, and the session's calls (oldest first).
 type sessionView struct {
 	SessionID    string          `json:"session_id"`
+	Title        string          `json:"title,omitempty"`
 	Calls        int             `json:"calls"`
 	Cost         float64         `json:"cost"`
 	InputTokens  float64         `json:"input_tokens"`
@@ -575,6 +576,7 @@ type contextCompositionView struct {
 // list (empty until lineage tracking lands).
 type sessionContextView struct {
 	SessionID string            `json:"session_id"`
+	Title     string            `json:"title,omitempty"`
 	Turns     []contextTurnView `json:"turns"`
 	Snapshot  []compose.Source  `json:"snapshot"`
 	Dwell     []dwellBlockView  `json:"dwell"`
