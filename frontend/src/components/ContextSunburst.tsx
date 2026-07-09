@@ -56,6 +56,11 @@ interface SunburstData {
   sources: SourceSlice[];
 }
 
+export interface ContextSelection {
+  source: string;
+  producer?: string;
+}
+
 const MAIN_SIZE = 240;
 const MAIN_CENTER = MAIN_SIZE / 2;
 const MAIN_OUTER_R = 90;
@@ -135,7 +140,17 @@ function breakoutColumns(
  * Source-level context donut with producer drill-downs pulled out to small
  * side donuts for the largest child-bearing source buckets.
  */
-export function ContextSunburst({ data, centerLabel = 'avg window' }: { data: SunburstData; centerLabel?: string }) {
+export function ContextSunburst({
+  data,
+  centerLabel = 'avg window',
+  active,
+  onSelect,
+}: {
+  data: SunburstData;
+  centerLabel?: string;
+  active?: ContextSelection | null;
+  onSelect?: (selection: ContextSelection) => void;
+}) {
   const sources = data.sources;
   const total = sources.reduce((a, s) => a + s.tokens, 0) || 1;
 
@@ -146,7 +161,7 @@ export function ContextSunburst({ data, centerLabel = 'avg window' }: { data: Su
     for (const c of s.children ?? []) kidColor.set(`${s.key}/${c.key}`, PROD_PALETTE[pi++ % PROD_PALETTE.length]);
   }
 
-  const inner = sources.map((s) => ({ name: srcLabel(s.key), tokens: s.tokens, color: srcColor(s.key) }));
+  const inner = sources.map((s) => ({ key: s.key, name: srcLabel(s.key), tokens: s.tokens, color: srcColor(s.key) }));
   const { mode, breakouts } = chooseBreakouts(sources, total);
   const angles = sectorMidAngles(sources, total);
   const { left, right } = breakoutColumns(mode, breakouts, angles);
@@ -161,6 +176,10 @@ export function ContextSunburst({ data, centerLabel = 'avg window' }: { data: Su
       : styles.modeFour;
 
   const pct = (n: number) => `${Math.round((n / total) * 100)}%`;
+  const isActive = (source: string, producer?: string) =>
+    active?.source === source && (active.producer ?? '') === (producer ?? '');
+  const selectSource = (source: string) => onSelect?.({ source });
+  const selectProducer = (source: string, producer: string) => onSelect?.({ source, producer });
 
   const breakoutCard = (s: SourceSlice, side: 'left' | 'right') => {
     const children = s.children ?? [];
@@ -184,24 +203,41 @@ export function ContextSunburst({ data, centerLabel = 'avg window' }: { data: Su
                 isAnimationActive={false}
               >
                 {children.map((c) => (
-                  <Cell key={c.key} fill={kidColor.get(`${s.key}/${c.key}`)!} />
+                  <Cell
+                    key={c.key}
+                    fill={kidColor.get(`${s.key}/${c.key}`)!}
+                    cursor={onSelect ? 'pointer' : undefined}
+                    opacity={active && !isActive(s.key, c.key) ? 0.5 : 1}
+                    onClick={() => selectProducer(s.key, c.key)}
+                  />
                 ))}
               </Pie>
             </PieChart>
           </ChartContainer>
         </div>
         <div className={styles.breakoutText}>
-          <div className={styles.breakoutTitle}>
+          <button
+            type="button"
+            className={`${styles.breakoutTitle} ${styles.chartPick} ${isActive(s.key) ? styles.chartPickActive : ''}`}
+            onClick={() => selectSource(s.key)}
+            disabled={!onSelect}
+          >
             <span className={styles.nlSw} style={{ background: srcColor(s.key) }} />
             {srcLabel(s.key)}
             <b className={styles.nlPct}>{pct(s.tokens)}</b>
-          </div>
+          </button>
           <div className={styles.breakoutKids}>
             {children.slice(0, 4).map((c) => (
-              <span key={c.key}>
+              <button
+                type="button"
+                key={c.key}
+                className={`${styles.kidPick} ${isActive(s.key, c.key) ? styles.chartPickActive : ''}`}
+                onClick={() => selectProducer(s.key, c.key)}
+                disabled={!onSelect}
+              >
                 <span className={styles.nlDot} style={{ background: kidColor.get(`${s.key}/${c.key}`) }} />
                 {prodLabel(c.key)} <span className="mono">{Math.round((c.tokens / childTotal) * 100)}%</span>
-              </span>
+              </button>
             ))}
           </div>
         </div>
@@ -233,8 +269,14 @@ export function ContextSunburst({ data, centerLabel = 'avg window' }: { data: Su
                 stroke="var(--surface)"
                 isAnimationActive={false}
               >
-                {inner.map((d, i) => (
-                  <Cell key={i} fill={d.color} />
+                {inner.map((d) => (
+                  <Cell
+                    key={d.key}
+                    fill={d.color}
+                    cursor={onSelect ? 'pointer' : undefined}
+                    opacity={active && active.source !== d.key ? 0.45 : 1}
+                    onClick={() => selectSource(d.key)}
+                  />
                 ))}
               </Pie>
             </PieChart>
@@ -283,11 +325,16 @@ export function ContextSunburst({ data, centerLabel = 'avg window' }: { data: Su
       <div className={styles.sourceLegend}>
         {sources.map((s) => (
           <div key={s.key}>
-            <div className={styles.nlParent}>
+            <button
+              type="button"
+              className={`${styles.nlParent} ${styles.chartPick} ${isActive(s.key) ? styles.chartPickActive : ''}`}
+              onClick={() => selectSource(s.key)}
+              disabled={!onSelect}
+            >
               <span className={styles.nlSw} style={{ background: srcColor(s.key) }} />
               {srcLabel(s.key)}
               <b className={styles.nlPct}>{pct(s.tokens)}</b>
-            </div>
+            </button>
           </div>
         ))}
       </div>

@@ -6,7 +6,7 @@ import { svg as claudeCodeSvg } from 'thesvg/claude-code';
 import { svg as codexOpenAISvg } from 'thesvg/codex-openai';
 import { api } from '../api/client';
 import type { AgentNode, CallEntry, CallTrace } from '../api/types';
-import { ContextSunburst, srcColor, srcLabel } from '../components/ContextSunburst';
+import { ContextSunburst, prodLabel, srcColor, srcLabel, type ContextSelection } from '../components/ContextSunburst';
 import { ESTIMATE_HINT, InfoHint } from '../components/InfoHint';
 import { CopyButton } from '../components/CopyButton';
 import { EmptyState } from '../components/EmptyState';
@@ -80,6 +80,19 @@ export function SessionDetailPage() {
   const sessionClient = useMemo(() => dominantClient(data?.entries ?? []), [data]);
   const mainPromptEntries = useMemo(() => data?.entries.filter(isMainPromptEntry) ?? [], [data]);
   const sessionTitle = data?.title || ctx.data?.title || '';
+  const traceKey = useMemo(() => mainPromptEntries.map((entry) => entry.id).join(','), [mainPromptEntries]);
+  const promptTraces = useFetch<CallTrace[]>(
+    () => Promise.all(mainPromptEntries.map((entry) => api.trace(entry.id))),
+    [traceKey],
+    {
+      enabled: mainPromptEntries.length > 0,
+    },
+  );
+  const prompt = useMemo(
+    () => (promptTraces.data ? parsePromptReconstruction(promptTraces.data) : null),
+    [promptTraces.data],
+  );
+  const [ctxSelection, setCtxSelection] = useState<ContextSelection | null>(null);
 
   return (
     <Page
@@ -128,7 +141,14 @@ export function SessionDetailPage() {
             />
           </div>
 
-          {mainPromptEntries.length > 0 ? <PromptReconstructionCard entries={mainPromptEntries} /> : null}
+          {mainPromptEntries.length > 0 ? (
+            <PromptReconstructionCard
+              prompt={prompt}
+              loading={promptTraces.initialLoading || !prompt}
+              error={promptTraces.error}
+              onRetry={promptTraces.refetch}
+            />
+          ) : null}
 
           {turns.length > 0 && (
             <div className="card" style={{ padding: 16 }}>
@@ -199,7 +219,8 @@ export function SessionDetailPage() {
                   }
                 />
               </div>
-              <ContextSunburst data={distribution} />
+              <ContextSunburst data={distribution} active={ctxSelection} onSelect={setCtxSelection} />
+              <ContextBlockDrilldown selection={ctxSelection} blocks={prompt?.blocks ?? []} />
             </div>
           )}
 
@@ -338,23 +359,20 @@ function clientIconSvg(name: string): string {
   return '';
 }
 
-function PromptReconstructionCard({ entries }: { entries: CallEntry[] }) {
-  const traceKey = useMemo(() => entries.map((entry) => entry.id).join(','), [entries]);
-  const traces = useFetch<CallTrace[]>(
-    () => Promise.all(entries.map((entry) => api.trace(entry.id))),
-    [traceKey],
-    {
-      enabled: entries.length > 0,
-    },
-  );
-  const prompt = useMemo(
-    () => (traces.data ? parsePromptReconstruction(traces.data) : null),
-    [traces.data],
-  );
+function PromptReconstructionCard({
+  prompt,
+  loading,
+  error,
+  onRetry,
+}: {
+  prompt: PromptReconstruction | null;
+  loading: boolean;
+  error?: string | null;
+  onRetry: () => void;
+}) {
+  if (error) return <ErrorBanner message={error} onRetry={onRetry} />;
 
-  if (traces.error) return <ErrorBanner message={traces.error} onRetry={traces.refetch} />;
-
-  if (traces.initialLoading || !prompt) {
+  if (loading || !prompt) {
     return (
       <div className={styles.promptGrid}>
         <Skeleton height={180} />
@@ -377,7 +395,7 @@ function PromptReconstructionCard({ entries }: { entries: CallEntry[] }) {
         <div className={styles.promptScroll}>
           {prompt.system.length > 0 ? (
             prompt.system.map((block, i) => (
-              <pre key={i} className={styles.promptTextBlock}>{block}</pre>
+              <pre key={i} id={systemBlockDomId(i)} className={styles.promptTextBlock}>{block}</pre>
             ))
           ) : (
             <div className={styles.promptEmpty}>No system content in this request.</div>
@@ -396,7 +414,7 @@ function PromptReconstructionCard({ entries }: { entries: CallEntry[] }) {
         <div className={styles.toolList}>
           {prompt.tools.length > 0 ? (
             prompt.tools.map((tool, i) => (
-              <ToolCard key={`${tool.name}-${i}`} tool={tool} />
+              <ToolCard key={`${tool.name}-${i}`} tool={tool} index={i} />
             ))
           ) : (
             <div className={styles.promptEmpty}>No tools in this request.</div>
@@ -415,7 +433,7 @@ function PromptReconstructionCard({ entries }: { entries: CallEntry[] }) {
         {prompt.messages.length > 0 ? (
           <div className={styles.messageTimeline}>
             {prompt.messages.map((message, i) => (
-              <MessageCard key={`${message.role}-${i}`} message={message} />
+              <MessageCard key={`${message.role}-${i}`} message={message} index={i} />
             ))}
           </div>
         ) : (
@@ -426,23 +444,76 @@ function PromptReconstructionCard({ entries }: { entries: CallEntry[] }) {
   );
 }
 
-function MessageCard({ message }: { message: PromptMessage }) {
+function ContextBlockDrilldown({ selection, blocks }: { selection: ContextSelection | null; blocks: PromptBlock[] }) {
+  if (!selection) {
+    return (
+      <div className={styles.ctxBlockPanel}>
+        <div className={styles.ctxBlockEmpty}>Select a context slice to inspect its prompt blocks.</div>
+      </div>
+    );
+  }
+
+  const matches = blocks.filter(
+    (block) => block.source === selection.source && (!selection.producer || block.producer === selection.producer),
+  );
+  const title = selection.producer
+    ? `${srcLabel(selection.source)} / ${prodLabel(selection.producer)}`
+    : srcLabel(selection.source);
+
+  return (
+    <div className={styles.ctxBlockPanel}>
+      <div className={styles.ctxBlockHead}>
+        <span>{title}</span>
+        <span className="chip chip-mono">{matches.length}</span>
+      </div>
+      {matches.length > 0 ? (
+        <div className={styles.ctxBlockList}>
+          {matches.slice(0, 24).map((block) => (
+            <button key={block.id} type="button" className={styles.ctxBlockItem} onClick={() => jumpToPromptBlock(block.id)}>
+              <span className={styles.ctxBlockItemTop}>
+                <span className={styles.ctxBlockTitle}>{block.title}</span>
+                <span className={styles.ctxBlockDetail}>{block.detail}</span>
+              </span>
+              {block.snippet ? <span className={styles.ctxBlockSnippet}>{snippet(block.snippet)}</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className={styles.ctxBlockEmpty}>
+          No reconstructed prompt blocks for this slice. The distribution can include repeated request windows or captured bodies that are not visible in the merged message list.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MessageCard({ message, index }: { message: PromptMessage; index: number }) {
   return (
     <div className={styles.messageCard}>
       <div className={styles.messageRole}>{message.role}</div>
       <div className={styles.messageContent}>
         {message.parts.map((part, i) => (
-          <MessagePartView key={i} part={part} />
+          <MessagePartView key={i} part={part} domId={messagePartDomId(index, [i])} path={[i]} messageIndex={index} />
         ))}
       </div>
     </div>
   );
 }
 
-function MessagePartView({ part }: { part: MessagePart }) {
+function MessagePartView({
+  part,
+  domId,
+  messageIndex,
+  path,
+}: {
+  part: MessagePart;
+  domId: string;
+  messageIndex: number;
+  path: number[];
+}) {
   if (part.kind === 'text') {
     return (
-      <div className={`${styles.messagePartBlock} ${isSingleLineText(part.text) ? styles.messagePartSingleLine : ''}`}>
+      <div id={domId} className={`${styles.messagePartBlock} ${isSingleLineText(part.text) ? styles.messagePartSingleLine : ''}`}>
         <CopyButton value={messagePartCopyText(part)} ariaLabel="Copy text block" className={styles.messagePartCopy} />
         <pre className={styles.messageText}>{part.text}</pre>
       </div>
@@ -450,7 +521,7 @@ function MessagePartView({ part }: { part: MessagePart }) {
   }
   if (part.kind === 'tool_use') {
     return (
-      <div id={part.id ? toolPartDomId('use', part.id) : undefined} className={styles.messageToolBlock}>
+      <div id={part.id ? toolPartDomId('use', part.id) : domId} className={styles.messageToolBlock}>
         <div className={styles.messageToolHead}>
           <span className={styles.messageToolTitle}>
             <span>Tool Use</span>
@@ -480,7 +551,7 @@ function MessagePartView({ part }: { part: MessagePart }) {
   }
   if (part.kind === 'tool_result') {
     return (
-      <div id={part.toolUseId ? toolPartDomId('result', part.toolUseId) : undefined} className={styles.messageToolBlock}>
+      <div id={part.toolUseId ? toolPartDomId('result', part.toolUseId) : domId} className={styles.messageToolBlock}>
         <div className={styles.messageToolHead}>
           <span className={styles.messageToolTitle}>
             <span>Tool Result</span>
@@ -499,7 +570,13 @@ function MessagePartView({ part }: { part: MessagePart }) {
         {part.parts.length > 0 ? (
           <div className={styles.messageToolContent}>
             {part.parts.map((child, i) => (
-              <MessagePartView key={i} part={child} />
+              <MessagePartView
+                key={i}
+                part={child}
+                domId={messagePartDomId(messageIndex, [...path, i])}
+                messageIndex={messageIndex}
+                path={[...path, i]}
+              />
             ))}
           </div>
         ) : null}
@@ -508,7 +585,7 @@ function MessagePartView({ part }: { part: MessagePart }) {
   }
   if (part.kind === 'image') {
     return (
-      <figure className={styles.messageImageBlock}>
+      <figure id={domId} className={styles.messageImageBlock}>
         <CopyButton value={messagePartCopyText(part)} ariaLabel="Copy image source" className={styles.messagePartCopy} />
         <img className={styles.messageImage} src={part.src} alt={part.label} loading="lazy" />
         <figcaption className={styles.messageImageCaption}>{part.label}</figcaption>
@@ -517,7 +594,7 @@ function MessagePartView({ part }: { part: MessagePart }) {
   }
   if (part.kind === 'image_url') {
     return (
-      <figure className={styles.messageImageBlock}>
+      <figure id={domId} className={styles.messageImageBlock}>
         <CopyButton value={messagePartCopyText(part)} ariaLabel="Copy image URL" className={styles.messagePartCopy} />
         <img className={styles.messageImage} src={part.url} alt={part.label} loading="lazy" />
         <figcaption className={styles.messageImageCaption}>{part.label}</figcaption>
@@ -526,14 +603,14 @@ function MessagePartView({ part }: { part: MessagePart }) {
   }
   if (part.kind === 'empty') {
     return (
-      <div className={styles.messageEmptyPart}>
+      <div id={domId} className={styles.messageEmptyPart}>
         <span>{part.label}</span>
         <CopyButton value={messagePartCopyText(part)} ariaLabel="Copy block" className={styles.messagePartCopy} />
       </div>
     );
   }
   return (
-    <div className={`${styles.messagePartBlock} ${styles.messagePartSingleLine}`}>
+    <div id={domId} className={`${styles.messagePartBlock} ${styles.messagePartSingleLine}`}>
       <CopyButton value={messagePartCopyText(part)} ariaLabel="Copy raw block" className={styles.messagePartCopy} />
       <details className={styles.messageRawPart}>
         <summary>{part.label}</summary>
@@ -543,7 +620,7 @@ function MessagePartView({ part }: { part: MessagePart }) {
   );
 }
 
-function ToolCard({ tool }: { tool: ToolInfo }) {
+function ToolCard({ tool, index }: { tool: ToolInfo; index: number }) {
   const ref = useRef<HTMLDetailsElement | null>(null);
   const [align, setAlign] = useState<'left' | 'right'>('left');
 
@@ -560,7 +637,7 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
   }
 
   return (
-    <details ref={ref} className={styles.toolCard} onToggle={handleToggle}>
+    <details ref={ref} id={toolBlockDomId(index)} className={styles.toolCard} onToggle={handleToggle}>
       <summary className={styles.toolSummary}>
         <span className={styles.toolName}>{tool.name || '(unnamed tool)'}</span>
         <span className={styles.toolMeta}>{toolMeta(tool)}</span>
@@ -628,6 +705,7 @@ interface PromptReconstruction {
   system: string[];
   tools: ToolInfo[];
   messages: PromptMessage[];
+  blocks: PromptBlock[];
 }
 
 interface ToolInfo {
@@ -637,6 +715,15 @@ interface ToolInfo {
   propertyCount: number;
   schema: unknown;
   tools: ToolInfo[];
+}
+
+interface PromptBlock {
+  id: string;
+  source: string;
+  producer?: string;
+  title: string;
+  detail: string;
+  snippet: string;
 }
 
 interface PromptMessage {
@@ -671,11 +758,133 @@ function parsePromptReconstruction(traces: CallTrace[]): PromptReconstruction {
     messages = mergePromptMessages(messages, promptMessages(body));
   }
 
-  return {
+  const prompt = {
     system: systemBlocks(firstBody?.system ?? firstBody?.instructions),
     tools: toolInfos(firstBody?.tools),
     messages,
   };
+  return {
+    ...prompt,
+    blocks: promptBlocks(prompt),
+  };
+}
+
+function promptBlocks(prompt: Omit<PromptReconstruction, 'blocks'>): PromptBlock[] {
+  const out: PromptBlock[] = [];
+
+  prompt.system.forEach((block, i) => {
+    out.push({
+      id: systemBlockDomId(i),
+      source: 'system',
+      title: `System block ${i + 1}`,
+      detail: 'System prompt',
+      snippet: snippet(block),
+    });
+  });
+
+  prompt.tools.forEach((tool, i) => {
+    out.push({
+      id: toolBlockDomId(i),
+      source: 'tool_schemas',
+      producer: schemaProducer(tool.name),
+      title: tool.name || `Tool schema ${i + 1}`,
+      detail: 'Tool schema',
+      snippet: tool.description || toolMeta(tool),
+    });
+  });
+
+  const toolNames = toolUseNames(prompt.messages);
+  prompt.messages.forEach((message, messageIndex) => {
+    message.parts.forEach((part, partIndex) => {
+      collectPartBlocks(out, message.role, part, messageIndex, [partIndex], toolNames);
+    });
+  });
+
+  return out;
+}
+
+function collectPartBlocks(
+  out: PromptBlock[],
+  role: string,
+  part: MessagePart,
+  messageIndex: number,
+  path: number[],
+  toolNames: Map<string, string>,
+) {
+  const baseId = messagePartDomId(messageIndex, path);
+  const baseDetail = `${role} message`;
+  if (part.kind === 'tool_result') {
+    const producer = toolProducer(toolNames.get(part.toolUseId) ?? '');
+    out.push({
+      id: part.toolUseId ? toolPartDomId('result', part.toolUseId) : baseId,
+      source: 'tool_results',
+      producer,
+      title: part.toolUseId ? `Tool result ${part.toolUseId}` : 'Tool result',
+      detail: baseDetail,
+      snippet: part.parts.map(messagePartCopyText).join('\n'),
+    });
+    return;
+  }
+  if (part.kind === 'tool_use') {
+    out.push({
+      id: part.id ? toolPartDomId('use', part.id) : baseId,
+      source: 'actions',
+      title: part.name || 'Tool use',
+      detail: baseDetail,
+      snippet: messagePartCopyText(part),
+    });
+    return;
+  }
+  if (part.kind === 'image' || part.kind === 'image_url') {
+    out.push({
+      id: baseId,
+      source: 'attachments',
+      title: part.label,
+      detail: baseDetail,
+      snippet: messagePartCopyText(part),
+    });
+    return;
+  }
+  if (part.kind === 'raw' && part.label.includes('thinking')) {
+    out.push({
+      id: baseId,
+      source: 'reasoning',
+      title: part.label,
+      detail: baseDetail,
+      snippet: messagePartCopyText(part),
+    });
+    return;
+  }
+
+  const source = role === 'assistant' ? 'actions' : role === 'system' || role === 'developer' ? 'system' : 'user';
+  out.push({
+    id: baseId,
+    source,
+    title: partTitle(part),
+    detail: baseDetail,
+    snippet: messagePartCopyText(part),
+  });
+}
+
+function toolUseNames(messages: PromptMessage[]): Map<string, string> {
+  const out = new Map<string, string>();
+  const visit = (part: MessagePart) => {
+    if (part.kind === 'tool_use' && part.id) out.set(part.id, part.name);
+    if (part.kind === 'tool_result') part.parts.forEach(visit);
+  };
+  messages.forEach((message) => message.parts.forEach(visit));
+  return out;
+}
+
+function partTitle(part: MessagePart): string {
+  if (part.kind === 'text') return 'Text block';
+  if (part.kind === 'empty') return part.label;
+  if (part.kind === 'raw') return part.label;
+  return messagePartCopyText(part).split('\n')[0] || 'Message block';
+}
+
+function snippet(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().slice(0, 220);
 }
 
 function promptMessages(body: Record<string, unknown>): PromptMessage[] {
@@ -709,6 +918,12 @@ function promptMessage(raw: unknown): PromptMessage {
       : type === 'message'
         ? 'message'
         : type || 'unknown';
+  if (role === 'tool' && typeof raw.tool_call_id === 'string') {
+    return {
+      role,
+      parts: [{ kind: 'tool_result', toolUseId: raw.tool_call_id, parts: messageParts(raw.content) }],
+    };
+  }
   const parts = messageParts(raw.content);
   if (Array.isArray(raw.tool_calls)) {
     parts.push(...raw.tool_calls.map(functionCallPart));
@@ -854,13 +1069,45 @@ function sameMessage(a: PromptMessage, b: PromptMessage): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+function systemBlockDomId(index: number): string {
+  return `prompt-system-${index}`;
+}
+
+function toolBlockDomId(index: number): string {
+  return `prompt-tool-${index}`;
+}
+
+function messagePartDomId(messageIndex: number, path: number[]): string {
+  return `prompt-message-${messageIndex}-part-${path.join('-')}`;
+}
+
 function toolPartDomId(kind: 'use' | 'result', id: string): string {
   return `tool-${kind}-${id.replace(/[^A-Za-z0-9_-]/g, '_')}`;
+}
+
+function jumpToPromptBlock(id: string): void {
+  const el = document.getElementById(id);
+  if (!el) return;
+  revealDetails(el);
+  highlightElement(el);
 }
 
 function jumpToToolPart(kind: 'use' | 'result', id: string): void {
   const el = document.getElementById(toolPartDomId(kind, id));
   if (!el) return;
+  revealDetails(el);
+  highlightElement(el);
+}
+
+function revealDetails(el: HTMLElement): void {
+  let parent = el.parentElement;
+  while (parent) {
+    if (parent instanceof HTMLDetailsElement) parent.open = true;
+    parent = parent.parentElement;
+  }
+}
+
+function highlightElement(el: HTMLElement): void {
   el.scrollIntoView({ behavior: 'auto', block: 'start' });
   el.classList.remove(styles.messageJumpHighlight);
   window.requestAnimationFrame(() => {
@@ -931,6 +1178,40 @@ function toolInfo(tool: unknown): ToolInfo {
     schema: stripCacheControl(schema ?? {}),
     tools: nestedTools,
   };
+}
+
+function toolProducer(name: string): string {
+  switch (name) {
+    case 'Read':
+      return 'read';
+    case 'Bash':
+      return 'bash';
+    case 'Grep':
+      return 'grep';
+    case 'Glob':
+      return 'glob';
+    case 'Task':
+      return 'task';
+    case 'WebFetch':
+    case 'WebSearch':
+      return 'web';
+    default:
+      break;
+  }
+  const server = mcpServer(name);
+  if (server) return `mcp:${server}`;
+  return name ? name.toLowerCase() : 'unknown';
+}
+
+function schemaProducer(name: string): string {
+  const server = mcpServer(name);
+  return server ? `mcp:${server}` : 'builtin';
+}
+
+function mcpServer(name: string): string {
+  if (!name.startsWith('mcp__')) return '';
+  const parts = name.split('__');
+  return parts[1] || 'mcp';
 }
 
 function SchemaView({ schema }: { schema: unknown }) {

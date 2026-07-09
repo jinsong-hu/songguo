@@ -145,6 +145,46 @@
   font-weight: 600;
 }
 
+.chartPick,
+.kidPick {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.chartPick {
+  width: 100%;
+  padding: 3px 5px;
+  border-radius: 6px;
+}
+
+.kidPick {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 3px;
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-size: inherit;
+}
+
+.chartPick:not(:disabled):hover,
+.chartPick:not(:disabled):focus-visible,
+.kidPick:not(:disabled):hover,
+.kidPick:not(:disabled):focus-visible,
+.chartPickActive {
+  background: var(--accent-weak);
+  color: var(--accent);
+  outline: none;
+}
+
+.chartPick:disabled,
+.kidPick:disabled {
+  cursor: default;
+}
+
 .breakoutTitle .nlPct {
   margin-left: 4px;
 }
