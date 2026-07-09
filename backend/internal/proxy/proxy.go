@@ -38,8 +38,6 @@
 package proxy
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -52,6 +50,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/songguo/songguo/internal/bodycodec"
 	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/compose"
 	"github.com/songguo/songguo/internal/config"
@@ -890,7 +889,7 @@ func meteringScannerWriter(scanner wire.StreamScanner, contentEncoding string, l
 	if scanner == nil {
 		return func([]byte) {}, func() {}
 	}
-	if !hasGzipEncoding(contentEncoding) {
+	if contentEncoding == "" {
 		return func(chunk []byte) { _, _ = scanner.Write(chunk) }, func() {}
 	}
 
@@ -900,10 +899,22 @@ func meteringScannerWriter(scanner wire.StreamScanner, contentEncoding string, l
 		defer close(done)
 		defer pr.Close()
 
-		zr, err := gzip.NewReader(pr)
+		zr, ok, err := bodycodec.NewReader(pr, contentEncoding)
+		if !ok {
+			buf := make([]byte, 32*1024)
+			for {
+				n, err := pr.Read(buf)
+				if n > 0 {
+					_, _ = scanner.Write(buf[:n])
+				}
+				if err != nil {
+					return
+				}
+			}
+		}
 		if err != nil {
 			if logger != nil {
-				logger.Warn("gzip metering disabled", "err", err)
+				logger.Warn("encoded stream metering disabled", "encoding", contentEncoding, "err", err)
 			}
 			return
 		}
@@ -917,7 +928,7 @@ func meteringScannerWriter(scanner wire.StreamScanner, contentEncoding string, l
 			}
 			if err != nil {
 				if err != io.EOF && logger != nil {
-					logger.Warn("gzip metering read failed", "err", err)
+					logger.Warn("encoded stream metering read failed", "encoding", contentEncoding, "err", err)
 				}
 				return
 			}
@@ -933,35 +944,17 @@ func meteringScannerWriter(scanner wire.StreamScanner, contentEncoding string, l
 }
 
 func bodyForMeter(body []byte, contentEncoding string, logger *slog.Logger) []byte {
-	if len(body) == 0 || !hasGzipEncoding(contentEncoding) {
+	decoded, ok, err := bodycodec.Decode(body, contentEncoding)
+	if !ok {
 		return body
 	}
-	zr, err := gzip.NewReader(bytes.NewReader(body))
 	if err != nil {
 		if logger != nil {
-			logger.Warn("gzip body decode failed", "err", err)
-		}
-		return body
-	}
-	defer zr.Close()
-
-	decoded, err := io.ReadAll(zr)
-	if err != nil {
-		if logger != nil {
-			logger.Warn("gzip body read failed", "err", err)
+			logger.Warn("encoded body decode failed", "encoding", contentEncoding, "err", err)
 		}
 		return body
 	}
 	return decoded
-}
-
-func hasGzipEncoding(contentEncoding string) bool {
-	for _, enc := range strings.Split(contentEncoding, ",") {
-		if strings.EqualFold(strings.TrimSpace(enc), "gzip") {
-			return true
-		}
-	}
-	return false
 }
 
 // copyBody reads the full non-streaming body and writes it to the client

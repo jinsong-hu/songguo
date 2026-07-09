@@ -739,14 +739,14 @@ func (a *api) sessionTitleFromEntries(entries []calls.Entry) string {
 
 func titleFromPayload(p store.Payload) string {
 	reqBody := p.ReqBody
-	if decoded, ok := decodeGzipBody(reqBody, headerValue(p.ReqHeaders, "Content-Encoding")); ok {
+	if decoded, ok := decodeTraceBody(reqBody, headerValue(p.ReqHeaders, "Content-Encoding")); ok {
 		reqBody = decoded
 	}
 	if !looksLikeTitleRequest(reqBody) {
 		return ""
 	}
 	body := p.RespBody
-	if decoded, ok := decodeGzipBody(body, headerValue(p.RespHeaders, "Content-Encoding")); ok {
+	if decoded, ok := decodeTraceBody(body, headerValue(p.RespHeaders, "Content-Encoding")); ok {
 		body = decoded
 	}
 	text := extractAnthropicText(body)

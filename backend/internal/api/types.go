@@ -1,14 +1,11 @@
 package api
 
 import (
-	"bytes"
-	"compress/gzip"
 	"encoding/base64"
-	"io"
-	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/songguo/songguo/internal/bodycodec"
 	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/compose"
 	"github.com/songguo/songguo/internal/config"
@@ -509,7 +506,7 @@ func newTraceSide(headers map[string]string, body []byte, contentType string) tr
 		headers = map[string]string{}
 	}
 	displayBody := body
-	if decoded, ok := decodeGzipBody(body, headers["Content-Encoding"]); ok {
+	if decoded, ok := decodeTraceBody(body, headers["Content-Encoding"]); ok {
 		displayBody = decoded
 	}
 	side := traceSideView{
@@ -525,29 +522,12 @@ func newTraceSide(headers map[string]string, body []byte, contentType string) tr
 	return side
 }
 
-func decodeGzipBody(body []byte, contentEncoding string) ([]byte, bool) {
-	if len(body) == 0 || !traceHasGzipEncoding(contentEncoding) {
-		return nil, false
-	}
-	zr, err := gzip.NewReader(bytes.NewReader(body))
+func decodeTraceBody(body []byte, contentEncoding string) ([]byte, bool) {
+	decoded, ok, err := bodycodec.Decode(body, contentEncoding)
 	if err != nil {
 		return nil, false
 	}
-	defer zr.Close()
-	decoded, err := io.ReadAll(zr)
-	if err != nil {
-		return nil, false
-	}
-	return decoded, true
-}
-
-func traceHasGzipEncoding(contentEncoding string) bool {
-	for _, enc := range strings.Split(contentEncoding, ",") {
-		if strings.EqualFold(strings.TrimSpace(enc), "gzip") {
-			return true
-		}
-	}
-	return false
+	return decoded, ok
 }
 
 // maskKey returns a masked preview of an API key: first 3 + "…" + last 2 chars,

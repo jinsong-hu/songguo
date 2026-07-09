@@ -1,6 +1,6 @@
-// Package web embeds the built React dashboard so the gateway ships as a single
-// binary. The dist directory is produced by `npm run build` in this folder and
-// is committed to the repository so the Go build does not require Node.
+// Package web embeds the built React dashboard so production builds ship as a
+// single binary. The repository keeps a placeholder in dist so Go commands still
+// compile on a clean checkout; release builds generate the real bundle first.
 package web
 
 import (

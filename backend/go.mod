@@ -3,7 +3,9 @@ module github.com/songguo/songguo
 go 1.26.4
 
 require (
+	github.com/andybalholm/brotli v1.2.2
 	github.com/coder/websocket v1.8.15
+	github.com/klauspost/compress v1.19.0
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/pkoukk/tiktoken-go v0.1.7
 	github.com/pkoukk/tiktoken-go-loader v0.0.2

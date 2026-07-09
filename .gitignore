@@ -11,11 +11,12 @@
 
 /.env
 
-# Frontend build artifacts (backend/web/dist is committed so the binary builds without Node)
+# Frontend build artifacts
 frontend/node_modules/
 frontend/*.tsbuildinfo
 frontend/dist/
-backend/web/dist/
+backend/web/dist/*
+!backend/web/dist/.gitkeep
 
 # Misc
 .DS_Store

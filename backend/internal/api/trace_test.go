@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/store"
@@ -126,6 +128,91 @@ func TestCallTraceDisplaysGzipText(t *testing.T) {
 		t.Fatalf("response body_base64 = true, want decoded text")
 	}
 	if !strings.Contains(tv.Response.Body, `"input_tokens":77`) {
+		t.Errorf("response body = %q, want decoded SSE", tv.Response.Body)
+	}
+}
+
+func TestCallTraceDisplaysZstdText(t *testing.T) {
+	s := newTestStore(t)
+	id, err := s.AppendCall(calls.Entry{
+		TS: time.Now(), UserID: "tokA", Model: "claude-opus-4-8", Modality: calls.ModalityChat,
+		Vendor: "anthropic", Status: 200,
+	})
+	if err != nil {
+		t.Fatalf("AppendCall: %v", err)
+	}
+	var buf bytes.Buffer
+	zw, err := zstd.NewWriter(&buf)
+	if err != nil {
+		t.Fatalf("zstd writer: %v", err)
+	}
+	_, _ = zw.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":12}}\n\n"))
+	_ = zw.Close()
+	if err := s.SavePayload(store.Payload{
+		CallID:          id,
+		ReqHeaders:      map[string]string{"Content-Type": "application/json"},
+		ReqBody:         []byte(`{"model":"claude-opus-4-8"}`),
+		ReqContentType:  "application/json",
+		RespHeaders:     map[string]string{"Content-Type": "text/event-stream", "Content-Encoding": "zstd"},
+		RespBody:        buf.Bytes(),
+		RespContentType: "text/event-stream",
+		CreatedAt:       time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("SavePayload: %v", err)
+	}
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
+
+	rec := do(h, "GET", "/api/calls/"+strconv.FormatInt(id, 10)+"/trace", "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("trace: code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var tv traceView
+	decodeBody(t, rec, &tv)
+	if tv.Response.BodyBase64 {
+		t.Fatalf("response body_base64 = true, want decoded text")
+	}
+	if !strings.Contains(tv.Response.Body, `"output_tokens":12`) {
+		t.Errorf("response body = %q, want decoded SSE", tv.Response.Body)
+	}
+}
+
+func TestCallTraceDisplaysBrotliText(t *testing.T) {
+	s := newTestStore(t)
+	id, err := s.AppendCall(calls.Entry{
+		TS: time.Now(), UserID: "tokA", Model: "claude-opus-4-8", Modality: calls.ModalityChat,
+		Vendor: "anthropic", Status: 200,
+	})
+	if err != nil {
+		t.Fatalf("AppendCall: %v", err)
+	}
+	var buf bytes.Buffer
+	zw := brotli.NewWriter(&buf)
+	_, _ = zw.Write([]byte("data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":18}}\n\n"))
+	_ = zw.Close()
+	if err := s.SavePayload(store.Payload{
+		CallID:          id,
+		ReqHeaders:      map[string]string{"Content-Type": "application/json"},
+		ReqBody:         []byte(`{"model":"claude-opus-4-8"}`),
+		ReqContentType:  "application/json",
+		RespHeaders:     map[string]string{"Content-Type": "text/event-stream", "Content-Encoding": "br"},
+		RespBody:        buf.Bytes(),
+		RespContentType: "text/event-stream",
+		CreatedAt:       time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("SavePayload: %v", err)
+	}
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
+
+	rec := do(h, "GET", "/api/calls/"+strconv.FormatInt(id, 10)+"/trace", "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("trace: code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var tv traceView
+	decodeBody(t, rec, &tv)
+	if tv.Response.BodyBase64 {
+		t.Fatalf("response body_base64 = true, want decoded text")
+	}
+	if !strings.Contains(tv.Response.Body, `"output_tokens":18`) {
 		t.Errorf("response body = %q, want decoded SSE", tv.Response.Body)
 	}
 }

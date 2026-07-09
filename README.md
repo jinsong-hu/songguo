@@ -43,7 +43,7 @@ export SONGGUO_ADMIN_KEY="$(openssl rand -hex 16)"   # gates the dashboard + adm
 #    Open http://localhost:12345/, go to Catalog, pick a provider, paste your API key.
 ```
 
-The dashboard is also pre-built and committed (in `backend/web/dist`), so if you already have it built you can compile the binary with Go alone: `cd backend && go build -o ../songguo ./cmd/songguo`.
+The dashboard bundle is generated into `backend/web/dist` and is not committed. `make build` and the Docker build generate it before compiling the Go binary. A Go-only build from a clean checkout still compiles, but the embedded dashboard is unavailable until the frontend bundle has been built.
 
 For local development, run `make dev` and open **http://localhost:12346** — this starts the Go backend on `:12345` and the Vite dev server on `:12346` (which proxies API traffic to the backend); Ctrl+C stops both.
 
@@ -119,7 +119,7 @@ backend/
     proxy/      the transparent /v1 + /x handler (adapter-aware auth)
     api/        admin /api handlers
     server/     HTTP wiring (proxy, api, dashboard, health)
-  web/        embeds the built dashboard (web/dist) via go:embed
+  web/        embeds the generated dashboard (web/dist) via go:embed
 frontend/     React + Vite dashboard source (built into backend/web/dist)
 Makefile      dev / build orchestration
 ```
@@ -138,7 +138,7 @@ make build
 make test            # cd backend && go test ./...
 ```
 
-The dashboard build output goes to `backend/web/dist`, which is committed so the Go binary builds without Node. After frontend changes, run `make build` (or `cd frontend && npm run build`) and commit the refreshed `backend/web/dist`.
+The dashboard build output goes to `backend/web/dist`, which is ignored except for a placeholder needed by `go:embed`. After frontend changes, commit the source changes, not the refreshed build output.
 
 ## Not in v1 (deferred)
 
