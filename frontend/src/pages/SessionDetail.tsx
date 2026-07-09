@@ -249,7 +249,7 @@ export function SessionDetailPage() {
                       <tr
                         key={e.id}
                         className={styles.clickRow}
-                        onClick={() => navigate(`/calls/${e.id}`)}
+                        onClick={() => navigate(`/calls/${encodeURIComponent(e.id)}`)}
                       >
                         <td className="mono" style={{ color: 'var(--text-muted)' }}>
                           {dateTime(e.ts)}

@@ -120,8 +120,13 @@ export interface ErrorBreakdown {
 }
 
 export interface CallEntry {
-  id: number;
+  /** UUID minted by the gateway at request-start. */
+  id: string;
   ts: string;
+  /** End time; absent while the call is still in flight (pending). */
+  ts_end?: string;
+  /** True when the call was created but not yet finalized (in flight). */
+  pending: boolean;
   user_id: string;
   model: string;
   modality: string;
@@ -164,7 +169,7 @@ export interface TraceSide {
 }
 
 export interface CallTrace {
-  call_id: number;
+  call_id: string;
   request: TraceSide;
   response: TraceSide;
   captured_at: string;
@@ -186,8 +191,8 @@ export interface FeedRow {
   kind: 'session' | 'request';
   /** Set for session rows — captured coding-agent session id to link to. */
   session_id?: string;
-  /** Set for request rows — the call id to link to. */
-  request_id?: number;
+  /** Set for request rows — the call id (UUID) to link to. */
+  request_id?: string;
   calls: number;
   cost: number;
   input_tokens: number;
@@ -307,7 +312,7 @@ export interface ContextComposition {
 
 /** Per-turn context snapshot for the session growth chart. */
 export interface ContextTurn {
-  call_id: number;
+  call_id: string;
   seq: number;
   ts: string;
   agent_id: string;

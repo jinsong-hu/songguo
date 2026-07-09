@@ -15,10 +15,17 @@ import { useFetch } from '../lib/useFetch';
 import { dateTime, int, money, ms } from '../lib/format';
 import styles from './Detail.module.css';
 
+// shortId renders a UUID as a compact prefix for titles; the full id is still
+// copyable from the trace card.
+function shortId(id: string): string {
+  return id.length > 8 ? id.slice(0, 8) : id;
+}
+
 export function RequestDetailPage() {
   const { id = '' } = useParams();
-  const callId = Number(id);
-  const valid = id !== '' && Number.isFinite(callId);
+  // The call id is a UUID string, used as-is (no numeric coercion).
+  const callId = id;
+  const valid = id !== '';
 
   const { data, error, initialLoading, refetch } = useFetch(
     () => api.call(callId),
@@ -28,7 +35,7 @@ export function RequestDetailPage() {
 
   return (
     <Page
-      title={`Request #${id}`}
+      title={`Request ${shortId(id)}`}
       actions={
         <Link to="/" className="btn">
           <ArrowLeft size={15} /> Back to overview

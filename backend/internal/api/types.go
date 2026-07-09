@@ -600,7 +600,7 @@ type sessionContextView struct {
 // contextTurnView is one turn's composition. Sources maps top-level source key
 // to tokens only (producers and cached are dropped from this map).
 type contextTurnView struct {
-	CallID  int64            `json:"call_id"`
+	CallID  string           `json:"call_id"`
 	Seq     int              `json:"seq"`
 	TS      string           `json:"ts"`
 	AgentID string           `json:"agent_id"`

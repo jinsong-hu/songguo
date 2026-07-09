@@ -46,7 +46,7 @@ export function ActivityFeed({ since, until }: ActivityFeedProps) {
       if (row.kind === 'session' && row.session_id) {
         navigate(`/sessions/${encodeURIComponent(row.session_id)}`);
       } else if (row.request_id) {
-        navigate(`/calls/${row.request_id}`);
+        navigate(`/calls/${encodeURIComponent(row.request_id)}`);
       }
     },
     [navigate],

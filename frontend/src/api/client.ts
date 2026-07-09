@@ -171,8 +171,8 @@ export const api = {
   /** Activity feed: one row per session (aggregated) or standalone request. */
   feed: (f: CallsFilters) => request<FeedPage>(`/feed${callsQuery(f)}`),
 
-  /** Fetch a single call entry by id. 404 if absent. */
-  call: (id: number) => request<CallEntry>(`/calls/${id}`),
+  /** Fetch a single call entry by id (UUID). 404 if absent. */
+  call: (id: string) => request<CallEntry>(`/calls/${encodeURIComponent(id)}`),
 
   /** Fetch one session's rollups, agent tree, and calls. 404 if absent. */
   session: (id: string) => request<SessionDetail>(`/sessions/${encodeURIComponent(id)}`),
@@ -185,8 +185,8 @@ export const api = {
   sessionContext: (id: string) =>
     request<SessionContext>(`/sessions/${encodeURIComponent(id)}/context`),
 
-  /** Fetch the captured request/response trace for a call. 404 if none. */
-  trace: (id: number) => request<CallTrace>(`/calls/${id}/trace`),
+  /** Fetch the captured request/response trace for a call (UUID). 404 if none. */
+  trace: (id: string) => request<CallTrace>(`/calls/${encodeURIComponent(id)}/trace`),
 
   users: () => request<User[]>('/users'),
 
