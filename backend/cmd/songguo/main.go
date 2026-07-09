@@ -6,11 +6,13 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/songguo/songguo/internal/api"
 	"github.com/songguo/songguo/internal/configsvc"
+	"github.com/songguo/songguo/internal/janitor"
 	"github.com/songguo/songguo/internal/proxy"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/server"
@@ -22,6 +24,18 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// getdays reads an integer number of days from an env var, falling back to def
+// (also in days) when unset or unparseable. A value of 0 disables that
+// retention tier (the janitor treats a zero window as "never prune").
+func getdays(key string, def int) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return time.Duration(n) * 24 * time.Hour
+		}
+	}
+	return time.Duration(def) * 24 * time.Hour
 }
 
 func main() {
@@ -96,6 +110,18 @@ func main() {
 		OpenAPIHandler: api.NewOpenAPIHandler(),
 		Logger:         logger,
 	})
+
+	// Retention janitor: prune derived/captured data on a fixed clock, off the
+	// gateway hot path. Windows are days, overridable per tier; 0 disables a tier.
+	// See docs/arch.md.
+	janitorCtx, stopJanitor := context.WithCancel(context.Background())
+	defer stopJanitor()
+	jan := janitor.New(st, logger, janitor.Windows{
+		Raw:      getdays("SONGGUO_RETAIN_RAW_DAYS", 7),
+		Calls:    getdays("SONGGUO_RETAIN_CALLS_DAYS", 90),
+		Sessions: getdays("SONGGUO_RETAIN_SESSIONS_DAYS", 90),
+	}, time.Hour)
+	go jan.Run(janitorCtx)
 
 	errCh := make(chan error, 1)
 	go func() {
