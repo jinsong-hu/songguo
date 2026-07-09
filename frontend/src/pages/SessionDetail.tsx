@@ -1,11 +1,11 @@
 import { useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChevronRight, GitBranch } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from 'recharts';
 import { svg as claudeCodeSvg } from 'thesvg/claude-code';
 import { svg as codexOpenAISvg } from 'thesvg/codex-openai';
 import { api } from '../api/client';
-import type { AgentNode, CallEntry, CallTrace, ContextBlock, SourceSlice } from '../api/types';
+import type { CallEntry, CallTrace, ContextBlock, SourceSlice } from '../api/types';
 import { ContextSunburst, srcColor, srcLabel, type ContextSelection } from '../components/ContextSunburst';
 import { InfoHint } from '../components/InfoHint';
 import { CopyButton } from '../components/CopyButton';
@@ -142,14 +142,33 @@ export function SessionDetailPage() {
             />
           </div>
 
-          {mainPromptEntries.length > 0 ? (
-            <PromptReconstructionCard
-              prompt={prompt}
-              loading={promptTraces.initialLoading || !prompt}
-              error={promptTraces.error}
-              onRetry={promptTraces.refetch}
-            />
-          ) : null}
+          {distribution && distribution.sources.length > 0 && (
+            <div className="card" style={{ padding: 16 }}>
+              <div className={styles.fieldLabel} style={{ marginBottom: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                Context distribution
+                <InfoHint
+                  text="Total tokens across request windows, including repeated context. Calculated with Songguo's local token counter, so counts may differ from official provider counts."
+                  content={
+                    <>
+                      <span>
+                        Total tokens across request windows, including repeated context.
+                        Calculated with Songguo's local token counter, so counts may differ
+                        from official provider counts.
+                      </span>
+                      {latestCompositionCallId ? (
+                        <span style={{ display: 'block', marginTop: 8 }}>
+                          For one request window, open the{' '}
+                          <Link to={`/calls/${latestCompositionCallId}`}>latest request</Link>.
+                        </span>
+                      ) : null}
+                    </>
+                  }
+                />
+              </div>
+              <ContextSunburst data={distribution} centerValue={distributionTotal} centerLabel="total windows" active={ctxSelection} onSelect={setCtxSelection} />
+              <ContextBlockDrilldown selection={ctxSelection} blocks={distribution.blocks ?? []} promptBlocks={prompt?.blocks ?? []} sources={distribution.sources} />
+            </div>
+          )}
 
           {turns.length > 0 && (
             <div className="card" style={{ padding: 16 }}>
@@ -199,43 +218,14 @@ export function SessionDetailPage() {
             </div>
           )}
 
-          {distribution && distribution.sources.length > 0 && (
-            <div className="card" style={{ padding: 16 }}>
-              <div className={styles.fieldLabel} style={{ marginBottom: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                Context distribution
-                <InfoHint
-                  text="Total tokens across request windows, including repeated context."
-                  content={
-                    <>
-                      <span>Total tokens across request windows, including repeated context.</span>
-                      {latestCompositionCallId ? (
-                        <span style={{ display: 'block', marginTop: 8 }}>
-                          For one request window, open the{' '}
-                          <Link to={`/calls/${latestCompositionCallId}`}>latest request</Link>.
-                        </span>
-                      ) : null}
-                    </>
-                  }
-                />
-              </div>
-              <ContextSunburst data={distribution} centerValue={distributionTotal} centerLabel="total windows" active={ctxSelection} onSelect={setCtxSelection} />
-              <ContextBlockDrilldown selection={ctxSelection} blocks={distribution.blocks ?? []} promptBlocks={prompt?.blocks ?? []} sources={distribution.sources} />
-            </div>
-          )}
-
-          {data.agents.length > 0 && (
-            <div className="card" style={{ padding: 16 }}>
-              <div className={styles.fieldLabel} style={{ marginBottom: 12 }}>
-                <GitBranch size={13} style={{ verticalAlign: -2, marginRight: 6 }} />
-                Agent tree
-              </div>
-              <div className={styles.treeChildren}>
-                {data.agents.map((node) => (
-                  <AgentTreeNode key={node.agent_id || '(root)'} node={node} />
-                ))}
-              </div>
-            </div>
-          )}
+          {mainPromptEntries.length > 0 ? (
+            <PromptReconstructionCard
+              prompt={prompt}
+              loading={promptTraces.initialLoading || !prompt}
+              error={promptTraces.error}
+              onRetry={promptTraces.refetch}
+            />
+          ) : null}
 
           <div className={`card ${styles.stack}`} style={{ padding: 0 }}>
             {data.entries.length === 0 ? (
@@ -1805,26 +1795,6 @@ function stripCacheControl(value: unknown): unknown {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function AgentTreeNode({ node }: { node: AgentNode }) {
-  return (
-    <div className={styles.treeNode}>
-      <div className={styles.treeRow}>
-        <span className={styles.treeAgent}>{node.agent_id || '(main)'}</span>
-        <span className={styles.treeMeta}>
-          {int(node.calls)} calls · {money(node.cost)} · {int(node.input_tokens + node.output_tokens)} tok
-        </span>
-      </div>
-      {node.children.length > 0 && (
-        <div className={styles.treeChildren}>
-          {node.children.map((child) => (
-            <AgentTreeNode key={child.agent_id} node={child} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 function compactTokens(n: number): string {
