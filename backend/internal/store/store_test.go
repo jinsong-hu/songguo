@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -53,6 +54,58 @@ func TestMigrationsIdempotent(t *testing.T) {
 	}
 	if len(toks) != 1 {
 		t.Fatalf("expected 1 token after reopen, got %d", len(toks))
+	}
+}
+
+func TestMigrationBackfillsNullUserCapture(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-null-capture.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql open: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE users (
+			id         TEXT PRIMARY KEY,
+			name       TEXT NOT NULL,
+			key_hash   TEXT NOT NULL UNIQUE,
+			key_prefix TEXT NOT NULL,
+			key_full   TEXT NOT NULL DEFAULT '',
+			budget     REAL,
+			scope      TEXT NOT NULL DEFAULT '[]',
+			rpm        INTEGER NOT NULL DEFAULT 0,
+			capture    INTEGER,
+			created_at INTEGER NOT NULL,
+			revoked_at INTEGER
+		);
+		INSERT INTO users (id, name, key_hash, key_prefix, key_full, scope, rpm, capture, created_at)
+		VALUES ('legacy-id', 'legacy', 'legacy-hash', 'sg-legacy', 'sg-legacy-key', '[]', 0, NULL, 1);
+	`); err != nil {
+		t.Fatalf("seed legacy users table: %v", err)
+	}
+	_ = db.Close()
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+
+	users, err := s2.ListUsers()
+	if err != nil {
+		t.Fatalf("ListUsers: %v", err)
+	}
+	if len(users) != 1 {
+		t.Fatalf("users len = %d, want 1", len(users))
+	}
+	if users[0].Capture {
+		t.Error("NULL capture should backfill to false")
+	}
+	var nulls int
+	if err := s2.db.QueryRow(`SELECT COUNT(*) FROM users WHERE capture IS NULL`).Scan(&nulls); err != nil {
+		t.Fatalf("count null capture: %v", err)
+	}
+	if nulls != 0 {
+		t.Fatalf("capture NULL rows = %d, want 0", nulls)
 	}
 }
 

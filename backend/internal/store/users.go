@@ -176,7 +176,7 @@ func scanUser(sc interface{ Scan(...any) error }) (User, error) {
 		u         User
 		budget    sql.NullFloat64
 		scopeJSON string
-		capture   int64
+		capture   sql.NullInt64
 		createdAt int64
 		revokedAt sql.NullInt64
 	)
@@ -193,7 +193,7 @@ func scanUser(sc interface{ Scan(...any) error }) (User, error) {
 	if u.Scope == nil {
 		u.Scope = []string{}
 	}
-	u.Capture = capture != 0
+	u.Capture = capture.Valid && capture.Int64 != 0
 	u.CreatedAt = time.Unix(createdAt, 0)
 	if revokedAt.Valid {
 		rt := time.Unix(revokedAt.Int64, 0)

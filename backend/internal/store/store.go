@@ -250,6 +250,9 @@ func (s *Store) migrate() error {
 			return err
 		}
 	}
+	if _, err := s.db.Exec(`UPDATE users SET capture = 0 WHERE capture IS NULL`); err != nil {
+		return fmt.Errorf("store: backfill users.capture: %w", err)
+	}
 
 	// Index the session id for the activity feed's session grouping. Created
 	// after the adds loop because session_id is a post-v1 column (agent_id needs
