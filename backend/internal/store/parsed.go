@@ -11,7 +11,7 @@ import (
 // calls.id. Data is the JSON-encoded parse.Call (the store stays agnostic of
 // its shape); Format names the parser that produced it.
 type ParsedCall struct {
-	CallID    int64
+	CallID    string
 	Format    string
 	Data      []byte
 	CreatedAt time.Time
@@ -41,7 +41,7 @@ func (s *Store) SaveParsedCall(p ParsedCall) error {
 
 // GetParsedCall returns the parsed view for a call, or ErrNotFound if the call
 // has not been parsed (yet, or at all).
-func (s *Store) GetParsedCall(callID int64) (ParsedCall, error) {
+func (s *Store) GetParsedCall(callID string) (ParsedCall, error) {
 	row := s.db.QueryRow(
 		`SELECT call_id, format, data, created_at FROM parsed_calls WHERE call_id = ?`,
 		callID,
@@ -53,7 +53,7 @@ func (s *Store) GetParsedCall(callID int64) (ParsedCall, error) {
 	)
 	err := row.Scan(&p.CallID, &p.Format, &data, &createdMillis)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ParsedCall{}, fmt.Errorf("store: parsed call %d: %w", callID, ErrNotFound)
+		return ParsedCall{}, fmt.Errorf("store: parsed call %s: %w", callID, ErrNotFound)
 	}
 	if err != nil {
 		return ParsedCall{}, fmt.Errorf("store: get parsed call: %w", err)

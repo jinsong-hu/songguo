@@ -3,7 +3,10 @@ package store
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
+
+	"github.com/songguo/songguo/internal/calls"
 )
 
 // SessionStats summarizes coding-agent sessions — calls sharing a non-empty
@@ -48,84 +51,78 @@ type SessionStats struct {
 	DurationP95 int64 // seconds
 }
 
-// sessionAgg accumulates one session's calls as they stream out of SQLite,
-// ordered by (session_id, ts). lastStatus tracks the status of the newest call
-// seen, which drives the inferred outcome.
-type sessionAgg struct {
-	turns       int
-	tokens      float64
-	firstMs     int64
-	lastMs      int64
-	lastStatus  int
-	hasSubagent bool
-}
-
 // SessionStats aggregates coding-agent sessions over the optional [since, until)
-// window. It streams the window's session-bearing calls ordered by session then
-// time, folds them into per-session aggregates in Go (mirroring OverviewStats),
-// then derives outcomes, totals, and percentiles.
+// window. It reads the materialized `sessions` rollup (the write-through cache
+// maintained incrementally by UpsertSessionCall — see docs/arch-insights.md),
+// NOT a live GROUP BY over calls. The window filters on each session's last
+// activity (last_ts), the same key the rollup is pruned by. Outcomes, totals,
+// and per-session percentiles are derived from the rolled-up rows.
 func (s *Store) SessionStats(since, until *time.Time) (SessionStats, error) {
-	clause, args := windowClause(since, until)
-	// Restrict to session-bearing traffic. windowClause emits a leading
-	// " WHERE ..." or "", so splice the session-id predicate in accordingly.
-	if clause == "" {
-		clause = " WHERE session_id != ''"
-	} else {
-		clause += " AND session_id != ''"
+	// windowClause emits predicates on `ts`; the sessions table keys activity on
+	// last_ts, so build the clause by hand.
+	var (
+		conds []string
+		args  []any
+	)
+	if since != nil {
+		conds = append(conds, "last_ts >= ?")
+		args = append(args, since.UnixMilli())
+	}
+	if until != nil {
+		conds = append(conds, "last_ts < ?")
+		args = append(args, until.UnixMilli())
+	}
+	clause := ""
+	if len(conds) > 0 {
+		clause = " WHERE " + strings.Join(conds, " AND ")
 	}
 
 	rows, err := s.db.Query(
-		`SELECT session_id, ts, status, input_tokens, output_tokens, parent_agent_id
-		   FROM calls`+clause+`
-		  ORDER BY session_id ASC, ts ASC, id ASC`,
-		args...,
+		`SELECT first_ts, last_ts, turns, input_tokens, output_tokens, last_status, has_subagents
+		   FROM sessions`+clause, args...,
 	)
 	if err != nil {
 		return SessionStats{}, fmt.Errorf("store: session stats: %w", err)
 	}
 	defer rows.Close()
 
-	sessions := make(map[string]*sessionAgg)
+	type agg struct {
+		turns       int
+		tokens      float64
+		firstMs     int64
+		lastMs      int64
+		lastStatus  int
+		hasSubagent bool
+	}
+	var aggs []agg
 	for rows.Next() {
 		var (
-			sid           string
-			tsMs          int64
-			status        int
+			a             agg
 			inTok, outTok float64
-			parentAgent   string
+			hasSub        int
 		)
-		if err := rows.Scan(&sid, &tsMs, &status, &inTok, &outTok, &parentAgent); err != nil {
+		if err := rows.Scan(&a.firstMs, &a.lastMs, &a.turns, &inTok, &outTok, &a.lastStatus, &hasSub); err != nil {
 			return SessionStats{}, fmt.Errorf("store: scan session stats: %w", err)
 		}
-		agg := sessions[sid]
-		if agg == nil {
-			agg = &sessionAgg{firstMs: tsMs}
-			sessions[sid] = agg
-		}
-		agg.turns++
-		agg.tokens += inTok + outTok
-		if tsMs < agg.firstMs {
-			agg.firstMs = tsMs
-		}
-		// Rows arrive in ascending ts, so the newest call wins lastStatus/lastMs.
-		agg.lastMs = tsMs
-		agg.lastStatus = status
-		if parentAgent != "" {
-			agg.hasSubagent = true
-		}
+		a.tokens = inTok + outTok
+		a.hasSubagent = hasSub != 0
+		aggs = append(aggs, a)
 	}
 	if err := rows.Err(); err != nil {
 		return SessionStats{}, fmt.Errorf("store: session stats: %w", err)
 	}
 
-	out := SessionStats{Sessions: len(sessions)}
+	out := SessionStats{Sessions: len(aggs)}
 	var (
-		turnsVals    = make([]int64, 0, len(sessions))
-		tokensVals   = make([]int64, 0, len(sessions))
-		durationVals = make([]int64, 0, len(sessions))
+		turnsVals    = make([]int64, 0, len(aggs))
+		tokensVals   = make([]int64, 0, len(aggs))
+		durationVals = make([]int64, 0, len(aggs))
 	)
-	for _, agg := range sessions {
+	for _, agg := range aggs {
 		switch {
+		case agg.lastStatus == calls.StatusPending:
+			// Still in flight — count as interrupted-in-progress for the mix.
+			out.Interrupted++
 		case agg.lastStatus == 0:
 			out.Interrupted++
 		case agg.lastStatus >= 400:

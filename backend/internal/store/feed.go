@@ -16,7 +16,7 @@ import (
 type FeedRow struct {
 	Kind         string // "session" | "request"
 	SessionID    string // set when Kind == "session"
-	RequestID    int64  // the call id to link to when Kind == "request"
+	RequestID    string // the call id (UUID) to link to when Kind == "request"
 	Calls        int    // number of calls in the group (1 for a request row)
 	Cost         float64
 	InputTokens  float64
@@ -158,7 +158,7 @@ func scanFeedRow(rows *sql.Rows) (FeedRow, error) {
 
 	if isSession != 0 {
 		r.Kind = "session"
-		r.RequestID = 0 // a session row is not a single call
+		r.RequestID = "" // a session row is not a single call
 	} else {
 		r.Kind = "request"
 		r.SessionID = ""

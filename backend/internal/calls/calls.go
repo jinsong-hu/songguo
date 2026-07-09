@@ -43,16 +43,20 @@ const (
 
 // Entry is one append-only call record (one call attempt).
 type Entry struct {
-	ID           int64
-	TS           time.Time // when the call completed
-	UserID       string    // which Songguo user (may be "" for admin/unknown)
+	ID string // UUID minted by the gateway at request-start
+	// TS is when the call started (phase 1, create-at-start); TSEnd is when it
+	// finished (phase 2, update-at-end) and is the zero value while the call is
+	// still in flight. See docs/arch-gateway.md.
+	TS           time.Time
+	TSEnd        time.Time
+	UserID       string // which Songguo user (may be "" for admin/unknown)
 	Model        string
 	Modality     Modality
 	Vendor       string         // serving vendor name
 	CredentialID string         // which credential in the 号池 served it
 	Wire         string         // matched wire name (e.g. "openai/chat"); "" if unmatched
 	Confidence   Confidence     // metering trustworthiness
-	Status       int            // upstream HTTP status (0 if no response)
+	Status       int            // upstream HTTP status (0 if no response; StatusPending while in flight)
 	Err          string         // error detail if any
 	Usage        map[string]any // raw extracted usage (tokens/images/seconds/...), JSON-encoded in DB
 	// Normalized cross-vendor token counts (persisted as typed columns so usage
@@ -102,3 +106,11 @@ func ParseClientInfo(ua string) ClientInfo {
 	}
 	return ClientInfo{}
 }
+
+// StatusPending is the sentinel status for a call that has been created (phase
+// 1) but not yet finalized (phase 2): the request is in flight. It is
+// deliberately outside the HTTP status range and distinct from 0 (which means a
+// finalized call that got no upstream response — a transport failure). A row
+// left at StatusPending is a crashed/hung/aborted call that never reached
+// update-at-end.
+const StatusPending = -1

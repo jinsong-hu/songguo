@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/songguo/songguo/internal/calls"
 )
 
@@ -16,18 +18,20 @@ const (
 	maxCallsLimit     = 1000
 )
 
-// AppendCall writes one append-only entry and returns its autoincrement id.
+// CreateCall writes phase 1 of the two-phase call lifecycle (see
+// docs/arch-gateway.md): it inserts a row for a call that has just started, keyed
+// by the caller-minted UUID e.ID, with status = StatusPending and no end time.
+// The gateway later calls FinalizeCall on the same id. Only the identity fields
+// known at request-start are persisted here; the rest are filled in at finalize.
 // Usage and Tags are JSON-encoded; ts is stored as unix milliseconds.
-func (s *Store) AppendCall(e calls.Entry) (int64, error) {
-	usageJSON, err := marshalMap(e.Usage)
-	if err != nil {
-		return 0, fmt.Errorf("store: encode usage: %w", err)
+func (s *Store) CreateCall(e calls.Entry) error {
+	if e.ID == "" {
+		return fmt.Errorf("store: create call: empty id")
 	}
 	tagsJSON, err := marshalStringMap(e.Tags)
 	if err != nil {
-		return 0, fmt.Errorf("store: encode tags: %w", err)
+		return fmt.Errorf("store: encode tags: %w", err)
 	}
-
 	ts := e.TS
 	if ts.IsZero() {
 		ts = time.Now()
@@ -36,24 +40,88 @@ func (s *Store) AppendCall(e calls.Entry) (int64, error) {
 	if modality == "" {
 		modality = calls.ModalityUnknown
 	}
-
-	res, err := s.db.Exec(
+	if _, err := s.db.Exec(
 		`INSERT INTO calls
-		 (ts, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens, session_id, agent_id, parent_agent_id, client_name, client_version)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ts.UnixMilli(), e.UserID, e.Model, string(modality), e.Vendor, e.CredentialID,
-		e.Status, e.Err, usageJSON, e.Cost, e.LatencyMS, boolToInt(e.Stream), tagsJSON,
+		 (id, ts, ts_end, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens, session_id, agent_id, parent_agent_id, client_name, client_version)
+		 VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, '', '{}', 0, 0, ?, ?, '', '', 0, 0, 0, ?, ?, ?, ?, ?)`,
+		e.ID, ts.UnixMilli(), e.UserID, e.Model, string(modality), e.Vendor, e.CredentialID,
+		calls.StatusPending, boolToInt(e.Stream), tagsJSON, e.SessionID, e.AgentID, e.ParentAgentID,
+		e.ClientName, e.ClientVersion,
+	); err != nil {
+		return fmt.Errorf("store: create call: %w", err)
+	}
+	return nil
+}
+
+// FinalizeCall writes phase 2: it updates the row created by CreateCall with the
+// call's outcome — status, error, usage, tokens, cost, latency, stream, wire,
+// confidence, modality (which a matched wire may refine), and the end time. The
+// identity fields written at create are left untouched except model/modality/
+// vendor/credential, which finalize overwrites with their resolved values (a
+// denial may know them only at the end). Usage and Tags are JSON-encoded.
+func (s *Store) FinalizeCall(e calls.Entry) error {
+	if e.ID == "" {
+		return fmt.Errorf("store: finalize call: empty id")
+	}
+	usageJSON, err := marshalMap(e.Usage)
+	if err != nil {
+		return fmt.Errorf("store: encode usage: %w", err)
+	}
+	tsEnd := e.TSEnd
+	if tsEnd.IsZero() {
+		tsEnd = time.Now()
+	}
+	modality := e.Modality
+	if modality == "" {
+		modality = calls.ModalityUnknown
+	}
+	if _, err := s.db.Exec(
+		`UPDATE calls SET
+		   ts_end = ?, model = ?, modality = ?, vendor = ?, credential_id = ?,
+		   status = ?, err = ?, usage = ?, cost = ?, latency_ms = ?, stream = ?,
+		   wire = ?, confidence = ?, input_tokens = ?, output_tokens = ?, cached_tokens = ?
+		 WHERE id = ?`,
+		tsEnd.UnixMilli(), e.Model, string(modality), e.Vendor, e.CredentialID,
+		e.Status, e.Err, usageJSON, e.Cost, e.LatencyMS, boolToInt(e.Stream),
 		e.Wire, string(e.Confidence), e.InputTokens, e.OutputTokens, e.CachedTokens,
-		e.SessionID, e.AgentID, e.ParentAgentID, e.ClientName, e.ClientVersion,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("store: append call: %w", err)
+		e.ID,
+	); err != nil {
+		return fmt.Errorf("store: finalize call: %w", err)
 	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("store: append call id: %w", err)
+	return nil
+}
+
+// AppendCall writes a call in a single shot: it mints a UUID if the entry has
+// none, opens the row (phase 1), immediately finalizes it (phase 2), and returns
+// the id. It is the convenience used by paths with no real two-phase lifecycle —
+// tests seeding the ledger, and any caller that already has the complete outcome
+// — layered over CreateCall/FinalizeCall. The gateway's live path uses the two
+// phases directly (see docs/arch-gateway.md). If the entry has no TSEnd, the
+// finalize stamps it to TS (or now).
+func (s *Store) AppendCall(e calls.Entry) (string, error) {
+	if e.ID == "" {
+		e.ID = uuid.NewString()
 	}
-	return id, nil
+	if e.TS.IsZero() {
+		e.TS = time.Now()
+	}
+	if e.TSEnd.IsZero() {
+		e.TSEnd = e.TS
+	}
+	if err := s.CreateCall(e); err != nil {
+		return "", err
+	}
+	if err := s.FinalizeCall(e); err != nil {
+		return "", err
+	}
+	// Single-shot callers get the session rollup folded in synchronously, so the
+	// store stays self-consistent without the proxy's async insights fork. The
+	// live gateway path does NOT use AppendCall (it splits the two phases and
+	// forks the session update off the hot path), so this never double-counts.
+	if err := s.UpsertSessionCall(e); err != nil {
+		return "", err
+	}
+	return e.ID, nil
 }
 
 // CallFilter selects and pages call rows. Zero-value fields are ignored.
@@ -109,7 +177,7 @@ func (f CallFilter) where() (string, []any) {
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
-const callsSelect = `SELECT id, ts, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens, session_id, agent_id, parent_agent_id, client_name, client_version FROM calls`
+const callsSelect = `SELECT id, ts, ts_end, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens, session_id, agent_id, parent_agent_id, client_name, client_version FROM calls`
 
 // QueryCalls returns matching entries ordered by ts DESC. Limit defaults to
 // 100 and is capped at 1000.
@@ -151,7 +219,7 @@ func (s *Store) QueryCalls(f CallFilter) ([]calls.Entry, error) {
 }
 
 // GetCall returns a single call entry by id, or ErrNotFound if absent.
-func (s *Store) GetCall(id int64) (calls.Entry, error) {
+func (s *Store) GetCall(id string) (calls.Entry, error) {
 	rows, err := s.db.Query(callsSelect+" WHERE id = ? LIMIT 1", id)
 	if err != nil {
 		return calls.Entry{}, fmt.Errorf("store: get call: %w", err)
@@ -270,16 +338,17 @@ func (s *Store) SpendByModality(since, until *time.Time) (map[string]float64, er
 // scanEntry reads a single calls.Entry from a *sql.Rows.
 func scanEntry(rows *sql.Rows) (calls.Entry, error) {
 	var (
-		e          calls.Entry
-		tsMillis   int64
-		modality   string
-		usageJSON  string
-		tagsJSON   string
-		stream     int
-		confidence string
+		e           calls.Entry
+		tsMillis    int64
+		tsEndMillis sql.NullInt64
+		modality    string
+		usageJSON   string
+		tagsJSON    string
+		stream      int
+		confidence  string
 	)
 	if err := rows.Scan(
-		&e.ID, &tsMillis, &e.UserID, &e.Model, &modality, &e.Vendor, &e.CredentialID,
+		&e.ID, &tsMillis, &tsEndMillis, &e.UserID, &e.Model, &modality, &e.Vendor, &e.CredentialID,
 		&e.Status, &e.Err, &usageJSON, &e.Cost, &e.LatencyMS, &stream, &tagsJSON,
 		&e.Wire, &confidence, &e.InputTokens, &e.OutputTokens, &e.CachedTokens,
 		&e.SessionID, &e.AgentID, &e.ParentAgentID, &e.ClientName, &e.ClientVersion,
@@ -287,6 +356,9 @@ func scanEntry(rows *sql.Rows) (calls.Entry, error) {
 		return calls.Entry{}, err
 	}
 	e.TS = time.UnixMilli(tsMillis)
+	if tsEndMillis.Valid {
+		e.TSEnd = time.UnixMilli(tsEndMillis.Int64)
+	}
 	e.Modality = calls.Modality(modality)
 	e.Stream = stream != 0
 	e.Confidence = calls.Confidence(confidence)

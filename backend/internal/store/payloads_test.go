@@ -11,7 +11,7 @@ import (
 
 // appendBareCall inserts a minimal call row and returns its id, so payload
 // tests have valid foreign keys to attach to.
-func appendBareCall(t *testing.T, s *Store) int64 {
+func appendBareCall(t *testing.T, s *Store) string {
 	t.Helper()
 	id, err := s.AppendCall(calls.Entry{UserID: "tok", Model: "m", Status: 200})
 	if err != nil {
@@ -47,7 +47,7 @@ func TestPayloadRoundTrip(t *testing.T) {
 		t.Fatalf("GetPayload: %v", err)
 	}
 	if got.CallID != callID {
-		t.Errorf("CallID = %d, want %d", got.CallID, callID)
+		t.Errorf("CallID = %q, want %q", got.CallID, callID)
 	}
 	if !bytes.Equal(got.ReqBody, reqBody) {
 		t.Errorf("ReqBody = %v, want %v (binary must round-trip)", got.ReqBody, reqBody)
@@ -84,7 +84,7 @@ func TestPayloadRoundTrip(t *testing.T) {
 
 func TestGetPayloadNotFound(t *testing.T) {
 	s := openTestStore(t)
-	if _, err := s.GetPayload(999); !errors.Is(err, ErrNotFound) {
+	if _, err := s.GetPayload("nonexistent"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("GetPayload(missing) err = %v, want ErrNotFound", err)
 	}
 }
@@ -97,17 +97,17 @@ func TestHasPayloads(t *testing.T) {
 		t.Fatalf("SavePayload: %v", err)
 	}
 
-	got, err := s.HasPayloads([]int64{withTrace, without, 12345})
+	got, err := s.HasPayloads([]string{withTrace, without, "nonexistent"})
 	if err != nil {
 		t.Fatalf("HasPayloads: %v", err)
 	}
 	if !got[withTrace] {
-		t.Errorf("expected has_trace true for %d", withTrace)
+		t.Errorf("expected has_trace true for %q", withTrace)
 	}
 	if got[without] {
-		t.Errorf("expected has_trace false for %d", without)
+		t.Errorf("expected has_trace false for %q", without)
 	}
-	if got[12345] {
+	if got["nonexistent"] {
 		t.Error("expected has_trace false for nonexistent id")
 	}
 

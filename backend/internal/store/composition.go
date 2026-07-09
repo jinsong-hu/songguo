@@ -14,7 +14,7 @@ import (
 // SaveComposition upserts the context-window decomposition for a call (keyed by
 // call_id). Written off the hot path after the client response is sent; callers
 // log failures rather than surfacing them. Safe to call concurrently.
-func (s *Store) SaveComposition(callID int64, c compose.Composition) error {
+func (s *Store) SaveComposition(callID string, c compose.Composition) error {
 	sources, err := json.Marshal(c.Sources)
 	if err != nil {
 		return fmt.Errorf("store: marshal composition: %w", err)
@@ -35,7 +35,7 @@ func (s *Store) SaveComposition(callID int64, c compose.Composition) error {
 
 // GetComposition returns a call's context-window decomposition, or ErrNotFound
 // when the call has no decomposed composition row.
-func (s *Store) GetComposition(callID int64) (compose.Composition, error) {
+func (s *Store) GetComposition(callID string) (compose.Composition, error) {
 	var (
 		total  float64
 		cached float64
@@ -168,7 +168,7 @@ func (s *Store) AggregateComposition(since, until *time.Time) (AggComposition, e
 // SessionCompositionRow is one call's decomposition within a session, carrying
 // the call's timestamp and agent id for turn ordering and labeling.
 type SessionCompositionRow struct {
-	CallID  int64
+	CallID  string
 	TS      time.Time
 	AgentID string
 	Wire    string

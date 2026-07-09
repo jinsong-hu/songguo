@@ -139,13 +139,14 @@ func (s *Store) VendorStats(since, until *time.Time) (map[string]VendorStat, err
 		return nil, fmt.Errorf("store: vendor stats: %w", err)
 	}
 
-	// Resolve the last status per vendor: the row with the largest id (the
-	// calls table is append-only, so the max id is the most recent row) within the window.
+	// Resolve the last status per vendor: the row with the greatest ts (the most
+	// recent call) within the window. The call id is now a random UUID, so it is
+	// no longer a recency proxy — order by ts, tie-broken by id for determinism.
 	lastRows, err := s.db.Query(
 		`SELECT l.vendor, l.status
 		   FROM calls l
-		   JOIN (SELECT vendor, MAX(id) AS mid FROM calls`+clause+` GROUP BY vendor) m
-		     ON l.vendor = m.vendor AND l.id = m.mid`,
+		   JOIN (SELECT vendor, MAX(ts) AS mts FROM calls`+clause+` GROUP BY vendor) m
+		     ON l.vendor = m.vendor AND l.ts = m.mts`,
 		args...,
 	)
 	if err != nil {

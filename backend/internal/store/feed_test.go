@@ -73,7 +73,7 @@ func TestFeedGroupsSessions(t *testing.T) {
 	if req.Kind != "request" {
 		t.Errorf("rows[0].Kind = %q, want request", req.Kind)
 	}
-	if req.RequestID == 0 || req.Model != "m3" || req.Calls != 1 {
+	if req.RequestID == "" || req.Model != "m3" || req.Calls != 1 {
 		t.Errorf("request row = %+v, want single m3 call with an id", req)
 	}
 	if req.DurationMS != 4000 {

@@ -338,19 +338,19 @@ func TestCallsAppendQueryAndAggregations(t *testing.T) {
 		},
 	}
 
-	var ids []int64
+	seen := map[string]bool{}
 	for i, e := range entries {
 		id, err := s.AppendCall(e)
 		if err != nil {
 			t.Fatalf("AppendCall[%d]: %v", i, err)
 		}
-		if id <= 0 {
-			t.Fatalf("AppendCall[%d] id = %d", i, id)
+		if id == "" {
+			t.Fatalf("AppendCall[%d] id = %q", i, id)
 		}
-		ids = append(ids, id)
-	}
-	if ids[len(ids)-1] <= ids[0] {
-		t.Errorf("expected increasing autoincrement ids, got %v", ids)
+		if seen[id] {
+			t.Fatalf("AppendCall[%d] duplicate id %q", i, id)
+		}
+		seen[id] = true
 	}
 
 	// Ordering: newest first.
@@ -519,7 +519,7 @@ func TestAppendCallDefaults(t *testing.T) {
 	}
 	e := got[0]
 	if e.ID != id {
-		t.Errorf("id = %d, want %d", e.ID, id)
+		t.Errorf("id = %q, want %q", e.ID, id)
 	}
 	if e.Modality != calls.ModalityUnknown {
 		t.Errorf("default Modality = %q, want unknown", e.Modality)
