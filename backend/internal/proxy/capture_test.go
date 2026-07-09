@@ -12,12 +12,9 @@ import (
 	"github.com/songguo/songguo/internal/store"
 )
 
-// captureYAML builds a one-vendor config with the global capture switch set.
-func captureYAML(baseURL string, capture bool) string {
+// captureYAML builds a one-vendor config; capture is configured per user.
+func captureYAML(baseURL string) string {
 	return fmt.Sprintf(`
-settings:
-  listen: ":8080"
-  capture: %t
 vendors:
   - name: vendorA
     origin: %s/v1
@@ -27,7 +24,7 @@ vendors:
     credential: {id: credA, api_key: vendor-secret-key}
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
-`, capture, baseURL)
+`, baseURL)
 }
 
 // --- capture ON: non-streaming round-trip with redaction ---
@@ -38,8 +35,8 @@ func TestCaptureNonStreaming(t *testing.T) {
 	defer mock.Close()
 
 	st := openStore(t)
-	_, key := mustUser(t, st, store.NewUser{Name: "t"})
-	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, true)), st)
+	_, key := mustUser(t, st, store.NewUser{Name: "t", Capture: true})
+	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL)), st)
 
 	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
 	resp := env.post(t, "/v1/chat/completions", key, reqBody)
@@ -88,8 +85,8 @@ func TestCaptureStreaming(t *testing.T) {
 	defer mock.Close()
 
 	st := openStore(t)
-	_, key := mustUser(t, st, store.NewUser{Name: "t"})
-	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, true)), st)
+	_, key := mustUser(t, st, store.NewUser{Name: "t", Capture: true})
+	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL)), st)
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","stream":true,"messages":[]}`)
 	streamed, _ := io.ReadAll(resp.Body)
@@ -114,7 +111,7 @@ func TestCaptureStreaming(t *testing.T) {
 	}
 }
 
-// --- capture OFF (global): no payload stored ---
+// --- capture OFF (user): no payload stored ---
 
 func TestCaptureOffStoresNothing(t *testing.T) {
 	up := &mockUpstream{}
@@ -123,7 +120,7 @@ func TestCaptureOffStoresNothing(t *testing.T) {
 
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
-	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, false)), st)
+	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL)), st)
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","messages":[]}`)
 	resp.Body.Close()
@@ -148,9 +145,6 @@ func TestCaptureNoPayloadOnTransportFailure(t *testing.T) {
 	dead.Close()
 
 	yaml := fmt.Sprintf(`
-settings:
-  listen: ":8080"
-  capture: true
 vendors:
   - name: vendorA
     origin: %s/v1
@@ -163,7 +157,7 @@ vendors:
 `, deadURL)
 
 	st := openStore(t)
-	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	_, key := mustUser(t, st, store.NewUser{Name: "t", Capture: true})
 	env := newEnv(t, snapshotFunc(t, yaml), st)
 
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","messages":[]}`)
@@ -195,8 +189,8 @@ func TestCaptureDeniedUnmatched(t *testing.T) {
 	defer mock.Close()
 
 	st := openStore(t)
-	_, key := mustUser(t, st, store.NewUser{Name: "t"})
-	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, true)), st)
+	_, key := mustUser(t, st, store.NewUser{Name: "t", Capture: true})
+	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL)), st)
 
 	reqBody := `{"model":"gpt-4o","messages":[]}`
 	// /v1/rerank matches no enabled wire (vendorA serves only openai/chat).
@@ -233,7 +227,7 @@ func TestCaptureOffDeniedNoPayload(t *testing.T) {
 
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
-	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL, false)), st)
+	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL)), st)
 
 	resp := env.post(t, "/v1/rerank", key, `{"model":"gpt-4o","messages":[]}`)
 	resp.Body.Close()

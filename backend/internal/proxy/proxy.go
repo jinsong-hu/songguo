@@ -186,9 +186,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Decide capture once from the global setting, read here so it is stable
-	// even if config hot-reloads mid-flight.
-	capture := h.captureOn()
+	// Decide capture once from the authenticated user's setting so it is stable
+	// for this in-flight request.
+	capture := user.Capture
 
 	// 3. Resolve the route: match the wire by path suffix and select the
 	// provider (X-Songguo-Provider header, else body model, else default).
@@ -405,7 +405,8 @@ func (h *handler) denyCapture(w http.ResponseWriter, r *http.Request, body []byt
 // model string, else the default (every vendor serving the matched path,
 // priority-ordered). It enforces scope and writes any error response itself,
 // returning ok=false when it has already responded. Denials are recorded and
-// captured via denyCapture, so they conform to the global capture flag.
+// captured via denyCapture, so they conform to the authenticated user's capture
+// setting.
 func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.User, capture bool, body []byte) (route, bool) {
 	res := meter.Classify(r.Method, r.URL.Path, body)
 	tags := extractTags(r.Header.Get("X-Songguo-Tags"), body)
@@ -678,16 +679,6 @@ func mergeQuery(u, inboundQuery string) string {
 		merged[k] = vs
 	}
 	return base + "?" + merged.Encode()
-}
-
-// captureOn resolves whether to capture this request from the global snapshot
-// setting. It is read once per request so a mid-request config reload cannot
-// change the behaviour for an in-flight call.
-func (h *handler) captureOn() bool {
-	if snap := h.snapshot(); snap != nil {
-		return snap.Settings().Capture
-	}
-	return false
 }
 
 // forward copies the chosen upstream response to the client verbatim and sniffs

@@ -71,16 +71,7 @@ func (m *Manager) build() (*config.Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configsvc: list providers: %w", err)
 	}
-	as, err := m.store.GetAppSettings()
-	if err != nil {
-		return nil, fmt.Errorf("configsvc: get settings: %w", err)
-	}
-
-	cfg := config.Config{
-		Settings: config.Settings{
-			Capture: as.Capture,
-		},
-	}
+	cfg := config.Config{}
 	for _, pvd := range providers {
 		if !pvd.Enabled {
 			continue

@@ -50,6 +50,30 @@
   accent-color: var(--accent);
 }
 
+.checkRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.checkRow input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.checkRow > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.checkTitle {
+  font-weight: 500;
+}
+
 .error {
   color: var(--danger);
   font-size: 12.5px;

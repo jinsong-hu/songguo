@@ -11,21 +11,20 @@ const READ_TOOLS: ReadonlyArray<[string, string]> = [
   ['get_usage_series', 'Cost, request and error totals bucketed over time for plotting trends. Defaults to the last 7 days; bucket is hour or day.'],
   ['list_calls', 'Browse individual gateway calls (the per-request ledger), newest first, with filters by user, model, vendor, status and time. Returns entries plus total count.'],
   ['get_call_trace', 'Return the captured request/response payload for one call id (only when capture is enabled for that call).'],
-  ['list_users', 'List all gateway users (consumer keys) with budget, scope, RPM limit, lifetime spend and active state. Plaintext keys are never returned.'],
+  ['list_users', 'List all gateway users (consumer keys) with budget, scope, RPM limit, capture setting, lifetime spend and active state. Plaintext keys are never returned.'],
   ['list_providers', 'List all configured upstream providers with their wire endpoints, models/prices, quirks and health stats. API keys are masked.'],
   ['list_services', 'List the auto-derived, model-centric services: each unique model name and the providers behind it, with aggregate call stats.'],
   ['list_pricing', 'List every per-provider model price (input, output, unit) currently configured.'],
-  ['get_settings', 'Return non-secret runtime settings: listen address, db path, whether the admin API is protected, version, and capture configuration.'],
+  ['get_settings', 'Return non-secret runtime settings: listen address, db path, whether the admin API is protected, and version.'],
 ];
 
 const WRITE_TOOLS: ReadonlyArray<[string, string]> = [
-  ['create_user', 'Create a gateway user (consumer key). Returns the plaintext key once. Fields: name (required), budget, scope, rpm.'],
-  ['update_user', 'Update a user’s mutable fields via a patch object (name, budget, scope, rpm).'],
+  ['create_user', 'Create a gateway user (consumer key). Returns the plaintext key once. Fields: name (required), budget, scope, rpm, capture.'],
+  ['update_user', 'Update a user’s mutable fields via a patch object (name, budget, scope, rpm, capture).'],
   ['revoke_user', 'Revoke a user by id, immediately disabling its key.'],
   ['create_provider', 'Create an upstream provider: name, vendor, api_key, priority, weight, enabled, quirks, models and wire endpoints.'],
   ['update_provider', 'Update a provider’s mutable fields. Supplying models or endpoints replaces those lists wholesale.'],
   ['delete_provider', 'Delete a provider by id; services it backed are re-derived without it.'],
-  ['update_settings', 'Update the capture setting: capture on/off. Returns the resulting settings.'],
   ['test_provider', 'Probe a provider’s host for reachability using its API key. Returns reachability, status and latency.'],
 ];
 

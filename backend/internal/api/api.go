@@ -146,7 +146,6 @@ var adminRoutes = []adminRoute{
 	{"GET", "/api/catalog", (*api).handleCatalog, true},
 	{"GET", "/api/wires", (*api).handleWires, true},
 	{"GET", "/api/settings", (*api).handleSettings, false},
-	{"PATCH", "/api/settings", (*api).handlePatchSettings, false},
 	{"GET", "/api/pricing", (*api).handlePricing, false},
 }
 

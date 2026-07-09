@@ -21,6 +21,7 @@ export function UserForm({ user, modelOptions, onCancel, onCreated, onSaved }: U
   );
   const [rpm, setRpm] = useState(user?.rpm ? String(user.rpm) : '');
   const [scope, setScope] = useState<string[]>(user?.scope ?? []);
+  const [capture, setCapture] = useState(user?.capture ?? false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -58,6 +59,7 @@ export function UserForm({ user, modelOptions, onCancel, onCreated, onSaved }: U
           budget: budgetVal,
           scope,
           rpm: rpmVal,
+          capture,
         };
         await api.patchUser(user.id, body);
         onSaved?.();
@@ -67,6 +69,7 @@ export function UserForm({ user, modelOptions, onCancel, onCreated, onSaved }: U
           budget: budgetVal,
           scope,
           rpm: rpmVal,
+          capture,
         };
         const created = await api.createUser(body);
         onCreated?.(created);
@@ -146,6 +149,20 @@ export function UserForm({ user, modelOptions, onCancel, onCreated, onSaved }: U
           </div>
         )}
       </div>
+
+      <label className={styles.checkRow}>
+        <input
+          type="checkbox"
+          checked={capture}
+          onChange={(e) => setCapture(e.target.checked)}
+        />
+        <span>
+          <span className={styles.checkTitle}>Capture request and response payloads</span>
+          <span className={styles.fieldHint}>
+            Store raw payload traces for calls made with this user key.
+          </span>
+        </span>
+      </label>
 
       {err && <div className={styles.error}>{err}</div>}
 

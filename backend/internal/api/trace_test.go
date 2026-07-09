@@ -12,7 +12,6 @@ import (
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
 	"github.com/songguo/songguo/internal/calls"
-	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/store"
 )
 
@@ -267,40 +266,15 @@ func TestCallsListHasTrace(t *testing.T) {
 	}
 }
 
-func TestSettingsExposeCapture(t *testing.T) {
-	yaml := `
-settings:
-  listen: ":8080"
-  capture: true
-vendors:
-  - name: openai
-    origin: https://api.openai.com
-    served_models: [gpt-4o]
-    credential: {id: k1, api_key: sk-x}
-    prices:
-      gpt-4o: { input: 1, output: 1, unit: per_1m_tokens }
-`
-	snap := mustSnapshot(t, yaml)
-	h := testHandler(t, Deps{AdminKey: "secret", Snapshot: func() *config.Snapshot { return snap }})
-
+func TestSettingsDoNotExposeCapture(t *testing.T) {
+	h := testHandler(t, Deps{AdminKey: "secret"})
 	rec := do(h, "GET", "/api/settings", "secret", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("settings: code = %d", rec.Code)
 	}
-	var sv settingsView
-	decodeBody(t, rec, &sv)
-	if !sv.Capture {
-		t.Error("capture = false, want true")
-	}
-}
-
-func TestSettingsCaptureDefaults(t *testing.T) {
-	// The default test config has no capture block: capture off.
-	h := testHandler(t, Deps{AdminKey: "secret"})
-	rec := do(h, "GET", "/api/settings", "secret", nil)
-	var sv settingsView
-	decodeBody(t, rec, &sv)
-	if sv.Capture {
-		t.Error("capture default should be false")
+	var raw map[string]any
+	decodeBody(t, rec, &raw)
+	if _, ok := raw["capture"]; ok {
+		t.Error("settings should not expose capture")
 	}
 }

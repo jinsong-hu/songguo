@@ -14,9 +14,7 @@ import (
 )
 
 // Settings holds gateway-wide options.
-type Settings struct {
-	Capture bool `yaml:"capture"`
-}
+type Settings struct{}
 
 // Credential is a vendor's upstream API key. A vendor holds exactly one; to
 // use several keys against the same platform, configure several services that
@@ -73,7 +71,7 @@ const (
 // Vendor is an upstream AI provider.
 type Vendor struct {
 	Name         string           `yaml:"name"`
-	Origin       string           `yaml:"origin"` // scheme://host, used for passthrough/WebSocket and forwarding unmatched paths
+	Origin       string           `yaml:"origin"`  // scheme://host, used for passthrough/WebSocket and forwarding unmatched paths
 	Adapter      string           `yaml:"adapter"` // auth scheme; default openai-compatible
 	ServedModels []string         `yaml:"served_models"`
 	Priority     int              `yaml:"priority"` // lower = preferred; default 0

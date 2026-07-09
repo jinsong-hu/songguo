@@ -56,7 +56,7 @@ func (a *api) buildMCPServer(enableWrites bool) *mcp.Server {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "list_users",
-		Description: "List all gateway users (consumer keys) with their budget, scope, RPM limit, lifetime spend and active state. Plaintext keys are never returned.",
+		Description: "List all gateway users (consumer keys) with their budget, scope, RPM limit, capture setting, lifetime spend and active state. Plaintext keys are never returned.",
 	}, a.mcpListUsers)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -76,7 +76,7 @@ func (a *api) buildMCPServer(enableWrites bool) *mcp.Server {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "get_settings",
-		Description: "Return non-secret runtime settings: listen address, db path, whether the admin API is protected, version, and whether payload capture is on.",
+		Description: "Return non-secret runtime settings: listen address, db path, whether the admin API is protected, and version.",
 	}, a.mcpGetSettings)
 
 	if !enableWrites {
@@ -86,12 +86,12 @@ func (a *api) buildMCPServer(enableWrites bool) *mcp.Server {
 	// --- write tools (SONGGUO_MCP_WRITE=1 only) ---
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "create_user",
-		Description: "Create a gateway user (consumer key). Returns the user including the plaintext key — shown only once. Fields: name (required), budget (USD, optional), scope (allowed models, optional), rpm (per-minute limit, optional).",
+		Description: "Create a gateway user (consumer key). Returns the user including the plaintext key — shown only once. Fields: name (required), budget (USD, optional), scope (allowed models, optional), rpm (per-minute limit, optional), capture (payload capture, optional).",
 	}, a.mcpCreateUser)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "update_user",
-		Description: "Update a user's mutable fields. Provide the user id and a patch object with only the fields to change (name, budget, scope, rpm).",
+		Description: "Update a user's mutable fields. Provide the user id and a patch object with only the fields to change (name, budget, scope, rpm, capture).",
 	}, a.mcpUpdateUser)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -113,11 +113,6 @@ func (a *api) buildMCPServer(enableWrites bool) *mcp.Server {
 		Name:        "delete_provider",
 		Description: "Delete a provider by id. This removes its credential and endpoints; services it backed are re-derived without it.",
 	}, a.mcpDeleteProvider)
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "update_settings",
-		Description: "Update the gateway capture setting: capture (on/off). Returns the resulting settings.",
-	}, a.mcpUpdateSettings)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "test_provider",
@@ -315,7 +310,7 @@ func (a *api) mcpCreateProvider(_ context.Context, _ *mcp.CallToolRequest, args 
 }
 
 type updateProviderArgs struct {
-	ID    string          `json:"id" jsonschema:"the provider id to update"`
+	ID    string           `json:"id" jsonschema:"the provider id to update"`
 	Patch patchProviderReq `json:"patch" jsonschema:"fields to change; omit a field to leave it unchanged"`
 }
 
@@ -336,14 +331,6 @@ func (a *api) mcpDeleteProvider(_ context.Context, _ *mcp.CallToolRequest, args 
 		return nil, deletedOut{}, err
 	}
 	return nil, deletedOut{Deleted: true}, nil
-}
-
-func (a *api) mcpUpdateSettings(_ context.Context, _ *mcp.CallToolRequest, args patchSettingsReq) (*mcp.CallToolResult, settingsView, error) {
-	v, err := a.updateSettingsData(args)
-	if err != nil {
-		return nil, settingsView{}, err
-	}
-	return nil, v, nil
 }
 
 func (a *api) mcpTestProvider(ctx context.Context, _ *mcp.CallToolRequest, args idArgs) (*mcp.CallToolResult, testVendorView, error) {

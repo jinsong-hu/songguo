@@ -555,23 +555,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Settings" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-    patch:
-      tags: [config]
-      summary: Update capture settings
-      operationId: patchSettings
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/PatchSettings" }
-      responses:
-        "200":
-          description: The updated settings
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Settings" }
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
   /api/pricing:
     get:
       tags: [config]
@@ -917,7 +900,7 @@ components:
         budget: { type: [number, "null"] }
         scope: { type: array, items: { type: string } }
         rpm: { type: integer }
-        capture: { type: [boolean, "null"] }
+        capture: { type: boolean }
         created_at: { type: string, format: date-time }
         revoked_at: { type: [string, "null"], format: date-time }
         spent: { type: number }
@@ -1046,15 +1029,6 @@ components:
         db_path: { type: string }
         admin_protected: { type: boolean }
         version: { type: string }
-        capture: { type: boolean }
-        capture_max_bytes: { type: integer }
-        capture_retain: { type: integer }
-    PatchSettings:
-      type: object
-      properties:
-        capture: { type: boolean }
-        capture_max_bytes: { type: integer }
-        capture_retain: { type: integer }
     Credential:
       type: object
       properties:

@@ -207,14 +207,6 @@ func (s *Store) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(provider_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_provider_wires_provider ON provider_wires(provider_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_provider_endpoints_provider ON provider_endpoints(provider_id)`,
-
-		// Gateway-wide settings as a singleton row, hot-applied via the config
-		// manager when changed from the dashboard.
-		`CREATE TABLE IF NOT EXISTS app_settings (
-			id      INTEGER PRIMARY KEY CHECK (id = 1),
-			capture INTEGER NOT NULL DEFAULT 0
-		)`,
-		`INSERT OR IGNORE INTO app_settings (id, capture) VALUES (1, 0)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -251,6 +243,7 @@ func (s *Store) migrate() error {
 		// key_full stores the plaintext key so the dashboard can display and copy
 		// it after creation. Empty for rows created before this column existed.
 		{"users", "key_full", "TEXT NOT NULL DEFAULT ''"},
+		{"users", "capture", "INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, a := range adds {
 		if err := s.addColumn(a.table, a.col, a.decl); err != nil {

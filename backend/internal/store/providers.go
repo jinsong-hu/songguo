@@ -84,11 +84,6 @@ type ProviderUpdate struct {
 	Endpoints      []ProviderEndpoint
 }
 
-// AppSettings is the gateway-wide settings singleton.
-type AppSettings struct {
-	Capture bool
-}
-
 // CountProviders returns the number of configured providers.
 func (s *Store) CountProviders() (int, error) {
 	var n int
@@ -394,28 +389,6 @@ func (s *Store) DeleteProvider(id string) error {
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("store: provider %q: %w", id, ErrNotFound)
-	}
-	return nil
-}
-
-// GetAppSettings returns the settings singleton, falling back to defaults.
-func (s *Store) GetAppSettings() (AppSettings, error) {
-	row := s.db.QueryRow(`SELECT capture FROM app_settings WHERE id = 1`)
-	var capture int64
-	err := row.Scan(&capture)
-	if errors.Is(err, sql.ErrNoRows) {
-		return AppSettings{}, nil
-	}
-	if err != nil {
-		return AppSettings{}, fmt.Errorf("store: get app settings: %w", err)
-	}
-	return AppSettings{Capture: capture != 0}, nil
-}
-
-// UpdateAppSettings overwrites the settings singleton.
-func (s *Store) UpdateAppSettings(as AppSettings) error {
-	if _, err := s.db.Exec(`UPDATE app_settings SET capture = ? WHERE id = 1`, boolToInt(as.Capture)); err != nil {
-		return fmt.Errorf("store: update app settings: %w", err)
 	}
 	return nil
 }

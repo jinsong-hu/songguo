@@ -23,7 +23,7 @@ Songguo is **single-tenant, multi-token**: one owner, many scoped keys. No accou
 - **Read-only metering** — usage sniffed from the native payload (with coarse fallback); a parse failure never blocks traffic. Per-model pricing yields true cost.
 - **Append-only call log** — one row per call attempt; every dashboard view is a query over it.
 - **WebSocket passthrough** — realtime APIs (OpenAI Realtime, streaming ASR/TTS) proxied at the native path with an `X-Songguo-Provider` pin: the handshake is replayed with the credential swapped, frames are piped untouched, and the session is metered by bytes + duration.
-- **Opt-in request/response capture** — store the raw request + response bodies (headers redacted, size-capped, retained) and inspect them by expanding a call in the dashboard. Off by default; per-token override.
+- **Per-user request/response capture** — store raw request + response bodies for selected user keys (headers redacted) and inspect them by expanding a call in the dashboard. Off by default.
 - **Dashboard** (light + dark, pine-green) — Overview (spend, runway, by-modality, latency percentiles, recent calls with filters + CSV/JSON export, expand a row to view its captured request/response), **Services** (manage upstreams: keys, models, prices, health/connectivity test), **Catalog** (browse known providers and add one in a click), Tokens (CRUD with budget bars), Settings.
 - **Vendor config in SQLite, managed from the dashboard** — add/edit services, rotate keys, and set prices on the **Services**/**Catalog** pages; changes apply immediately with no restart.
 - **One binary.** Pure-Go SQLite (no cgo), the dashboard embedded via `go:embed`.
@@ -75,7 +75,7 @@ This makes model-less calls — model listings, the `volc/*` speech wires, and a
 
 ### Request/response capture (optional)
 
-Off by default. Toggle capture from the dashboard **Settings** page to record the raw request + response bodies for each call — view them by expanding a call row in the dashboard. Bodies are size-capped (`capture_max_bytes`, default 32 KB) and pruned to the newest `capture_retain` rows (default 10000); captured headers are redacted (no `Authorization`). A token can override the global setting (`capture: true|false`). WebSocket sessions record metadata only (bytes/duration), not frames.
+Off by default per user. Enable capture on a user from the dashboard **Users** page to record raw request + response bodies for calls made with that user key — view them by expanding a call row in the dashboard. Captured headers are redacted (no `Authorization`). WebSocket sessions record metadata only (bytes/duration), not frames.
 
 ### Environment variables
 

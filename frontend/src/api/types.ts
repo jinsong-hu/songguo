@@ -331,6 +331,7 @@ export interface User {
   budget: number | null;
   scope: string[];
   rpm: number;
+  capture: boolean;
   created_at: string;
   revoked_at: string | null;
   spent: number;
@@ -358,10 +359,11 @@ export interface CreateUserBody {
   budget?: number | null;
   scope?: string[];
   rpm?: number;
+  capture?: boolean;
 }
 
 export type PatchUserBody = Partial<
-  Pick<User, 'name' | 'budget' | 'scope' | 'rpm'>
+  Pick<User, 'name' | 'budget' | 'scope' | 'rpm' | 'capture'>
 >;
 
 export interface Credential {
@@ -533,8 +535,6 @@ export interface Settings {
   db_path: string;
   admin_protected: boolean;
   version: string;
-  /** Whether request/response capture is globally enabled. */
-  capture: boolean;
 }
 
 export interface PricingRow {

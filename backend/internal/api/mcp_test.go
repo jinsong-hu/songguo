@@ -19,7 +19,7 @@ var mcpReadTools = []string{
 
 var mcpWriteTools = []string{
 	"create_user", "update_user", "revoke_user", "create_provider",
-	"update_provider", "delete_provider", "update_settings", "test_provider",
+	"update_provider", "delete_provider", "test_provider",
 }
 
 // connectMCP wires an in-memory client to a server built from a, returning the

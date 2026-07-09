@@ -72,3 +72,11 @@
 .statusRevoked {
   color: var(--text-muted);
 }
+
+.captureOn {
+  color: var(--accent);
+}
+
+.captureOff {
+  color: var(--text-muted);
+}

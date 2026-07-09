@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { Camera, Info, Lock, LockOpen, LogOut, Moon, Sun } from 'lucide-react';
+import { Info, Lock, LockOpen, LogOut, Moon, Sun } from 'lucide-react';
 import { api } from '../api/client';
 import { CopyButton } from '../components/CopyButton';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -11,28 +10,11 @@ import { useTheme } from '../lib/useTheme';
 import styles from './SettingsPage.module.css';
 
 export function SettingsPage() {
-  const { settings, setSettings, signOut } = useSettings();
+  const { settings, signOut } = useSettings();
   const { theme, setTheme } = useTheme();
   const pricing = useFetch(() => api.pricing(), []);
 
-  const [captureBusy, setCaptureBusy] = useState(false);
-  const [captureErr, setCaptureErr] = useState<string | null>(null);
-
   const consumerUrl = `${window.location.origin}/v1`;
-
-  const toggleCapture = async () => {
-    if (captureBusy) return;
-    setCaptureBusy(true);
-    setCaptureErr(null);
-    try {
-      const updated = await api.patchSettings({ capture: !settings.capture });
-      setSettings(updated);
-    } catch (e) {
-      setCaptureErr(e instanceof Error ? e.message : 'Failed to update capture.');
-    } finally {
-      setCaptureBusy(false);
-    }
-  };
 
   return (
     <Page
@@ -109,41 +91,6 @@ export function SettingsPage() {
 
             <span className={styles.metaKey}>Database path</span>
             <span className={styles.metaVal}>{settings.db_path || '—'}</span>
-          </div>
-        </div>
-
-        {/* Capture */}
-        <div className={`card ${styles.panel}`}>
-          <div className={styles.panelTitle}>Capture</div>
-          <div className={styles.panelDesc}>
-            Request/response payload capture for logged calls. Off by default.
-          </div>
-          <div className={styles.captureRow}>
-            <span
-              className={`${styles.statusBadge} ${
-                settings.capture ? styles.statusProtected : styles.statusOpen
-              }`}
-            >
-              <Camera size={11} />
-              {settings.capture ? 'On' : 'Off'}
-            </span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={settings.capture}
-              aria-label="Toggle capture"
-              className={`${styles.switch} ${settings.capture ? styles.switchOn : ''}`}
-              onClick={toggleCapture}
-              disabled={captureBusy}
-            >
-              <span className={styles.switchKnob} />
-            </button>
-          </div>
-          {captureErr && <div className={styles.captureErr}>{captureErr}</div>}
-          <div className={styles.hint}>
-            <Info size={14} />
-            When on, each call&apos;s full request and response payload is stored in the
-            database. When off, nothing is captured.
           </div>
         </div>
 

@@ -439,42 +439,6 @@ func (a *api) handleWires(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, wire.Names())
 }
 
-type patchSettingsReq struct {
-	Capture *bool `json:"capture,omitempty"`
-}
-
-// handlePatchSettings updates the gateway settings singleton and reloads.
-func (a *api) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
-	var req patchSettingsReq
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
-		return
-	}
-	view, err := a.updateSettingsData(req)
-	if err != nil {
-		a.writeDataErr(w, "update settings", err)
-		return
-	}
-	writeJSON(w, http.StatusOK, view)
-}
-
-// updateSettingsData applies the capture setting to the singleton, reloads the
-// live config, and returns the resulting (non-secret) settings view.
-func (a *api) updateSettingsData(req patchSettingsReq) (settingsView, error) {
-	cur, err := a.store.GetAppSettings()
-	if err != nil {
-		return settingsView{}, err
-	}
-	if req.Capture != nil {
-		cur.Capture = *req.Capture
-	}
-	if err := a.store.UpdateAppSettings(cur); err != nil {
-		return settingsView{}, err
-	}
-	a.reloadAfterWrite()
-	return a.settingsData(), nil
-}
-
 // --- helpers ---
 
 // reloadAfterWrite rebuilds the live snapshot after a config change, logging

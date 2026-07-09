@@ -21,6 +21,7 @@ type userView struct {
 	Budget    *float64 `json:"budget"`
 	Scope     []string `json:"scope"`
 	RPM       int      `json:"rpm"`
+	Capture   bool     `json:"capture"`
 	CreatedAt string   `json:"created_at"`
 	RevokedAt *string  `json:"revoked_at"`
 	Spent     float64  `json:"spent"`
@@ -46,6 +47,7 @@ func newUserView(u store.User, spent float64) userView {
 		Budget:    u.Budget,
 		Scope:     scope,
 		RPM:       u.RPM,
+		Capture:   u.Capture,
 		CreatedAt: u.CreatedAt.UTC().Format(time.RFC3339),
 		Spent:     spent,
 		Active:    u.RevokedAt == nil,
@@ -459,7 +461,6 @@ type settingsView struct {
 	DBPath         string `json:"db_path"`
 	AdminProtected bool   `json:"admin_protected"`
 	Version        string `json:"version"`
-	Capture        bool   `json:"capture"`
 }
 
 // traceSideView is one side (request or response) of a captured trace.

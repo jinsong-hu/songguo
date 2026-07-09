@@ -147,9 +147,6 @@ export const api = {
 
   settings: () => request<Settings>('/settings'),
 
-  patchSettings: (body: { capture: boolean }) =>
-    request<Settings>('/settings', { method: 'PATCH', body: JSON.stringify(body) }),
-
   overview: (since: number, until: number) =>
     request<Overview>(`/overview${qs({ since, until })}`),
 

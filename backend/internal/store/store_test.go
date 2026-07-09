@@ -26,6 +26,7 @@ func openTestStore(t *testing.T) *Store {
 
 func ptrF(v float64) *float64 { return &v }
 func ptrS(v string) *string   { return &v }
+func ptrB(v bool) *bool       { return &v }
 
 func TestMigrationsIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "idem.db")
@@ -108,10 +109,11 @@ func TestUserLifecycle(t *testing.T) {
 
 	budget := 12.5
 	tok, plaintext, err := s.CreateUser(NewUser{
-		Name:   "primary",
-		Budget: &budget,
-		Scope:  []string{"gpt-4o", "text-embedding-3-small"},
-		RPM:    60,
+		Name:    "primary",
+		Budget:  &budget,
+		Scope:   []string{"gpt-4o", "text-embedding-3-small"},
+		RPM:     60,
+		Capture: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
@@ -135,6 +137,9 @@ func TestUserLifecycle(t *testing.T) {
 	}
 	if tok.RPM != 60 {
 		t.Errorf("RPM = %d, want 60", tok.RPM)
+	}
+	if !tok.Capture {
+		t.Error("Capture = false, want true")
 	}
 	if tok.RevokedAt != nil {
 		t.Errorf("new token should be active, got RevokedAt=%v", tok.RevokedAt)
@@ -170,8 +175,9 @@ func TestUserLifecycle(t *testing.T) {
 
 	// Update name/budget/scope/rpm; nil leaves unchanged.
 	upd, err := s.UpdateUser(tok.ID, UserUpdate{
-		Name:  ptrS("renamed"),
-		Scope: &[]string{"only-model"},
+		Name:    ptrS("renamed"),
+		Scope:   &[]string{"only-model"},
+		Capture: ptrB(false),
 	})
 	if err != nil {
 		t.Fatalf("UpdateUser: %v", err)
@@ -187,6 +193,9 @@ func TestUserLifecycle(t *testing.T) {
 	}
 	if upd.RPM != 60 {
 		t.Errorf("RPM should be unchanged, got %d", upd.RPM)
+	}
+	if upd.Capture {
+		t.Error("Capture = true, want false after update")
 	}
 
 	// Revoke -> active lookup fails, GetUser still works (shows RevokedAt).

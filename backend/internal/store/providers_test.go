@@ -106,26 +106,6 @@ func TestProviderCRUDRoundTrip(t *testing.T) {
 	}
 }
 
-func TestAppSettingsRoundTrip(t *testing.T) {
-	s := openTestStore(t)
-
-	as, err := s.GetAppSettings()
-	if err != nil {
-		t.Fatalf("GetAppSettings: %v", err)
-	}
-	if as.Capture {
-		t.Error("capture should default off")
-	}
-
-	if err := s.UpdateAppSettings(AppSettings{Capture: true}); err != nil {
-		t.Fatalf("UpdateAppSettings: %v", err)
-	}
-	as, _ = s.GetAppSettings()
-	if !as.Capture {
-		t.Errorf("settings not persisted: %+v", as)
-	}
-}
-
 // TestEndpointBackfillOnMigration simulates a database that predates the
 // provider_endpoints table: a provider with the legacy per-provider base_url +
 // adapter columns and provider_wires rows. When migrate() creates

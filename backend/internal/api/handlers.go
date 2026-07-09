@@ -1151,12 +1151,13 @@ func (a *api) handleGetUser(w http.ResponseWriter, r *http.Request) {
 
 // createUserReq is the POST /api/users body.
 type createUserReq struct {
-	Name   string    `json:"name"`
-	Budget *float64  `json:"budget,omitempty"`
-	Scope  *[]string `json:"scope,omitempty"`
-	RPM    *int      `json:"rpm,omitempty"`
+	Name    string    `json:"name"`
+	Budget  *float64  `json:"budget,omitempty"`
+	Scope   *[]string `json:"scope,omitempty"`
+	RPM     *int      `json:"rpm,omitempty"`
+	Capture *bool     `json:"capture,omitempty"`
 	// Idempotent: when true, if a non-revoked user with this name already exists,
-	// return it (with its plaintext key) and update its budget to the requested
+	// return it (with its plaintext key) and update its mutable fields to the requested
 	// value, instead of creating a duplicate. Lets a caller that lost its local
 	// record — or a second instance sharing this gateway — re-adopt the existing
 	// token rather than mint another with the same name.
@@ -1204,6 +1205,9 @@ func (a *api) createUserData(req createUserReq) (userView, error) {
 	if req.RPM != nil {
 		nu.RPM = *req.RPM
 	}
+	if req.Capture != nil {
+		nu.Capture = *req.Capture
+	}
 
 	usr, plaintext, err := a.store.CreateUser(nu)
 	if err != nil {
@@ -1216,11 +1220,24 @@ func (a *api) createUserData(req createUserReq) (userView, error) {
 
 // adoptExistingUser returns an existing user for an idempotent create — its view
 // carries the plaintext key (from KeyFull) so the caller can reuse the token —
-// after updating its budget to the requested value if it changed. Only budget is
-// reconciled; the token id/key are untouched (no rotation).
+// after updating the requested mutable fields if they changed. The token id/key
+// are untouched (no rotation).
 func (a *api) adoptExistingUser(u store.User, req createUserReq) (userView, error) {
+	upd := store.UserUpdate{}
 	if req.Budget != nil && !sameFloatPtr(u.Budget, req.Budget) {
-		updated, err := a.store.UpdateUser(u.ID, store.UserUpdate{Budget: req.Budget})
+		upd.Budget = req.Budget
+	}
+	if req.Scope != nil {
+		upd.Scope = req.Scope
+	}
+	if req.RPM != nil && u.RPM != *req.RPM {
+		upd.RPM = req.RPM
+	}
+	if req.Capture != nil && u.Capture != *req.Capture {
+		upd.Capture = req.Capture
+	}
+	if upd.Budget != nil || upd.Scope != nil || upd.RPM != nil || upd.Capture != nil {
+		updated, err := a.store.UpdateUser(u.ID, upd)
 		if err != nil {
 			return userView{}, err
 		}
@@ -1247,10 +1264,11 @@ func sameFloatPtr(a, b *float64) bool {
 // UserUpdate uses a *float64 set-or-unchanged; PATCH cannot reset budget to
 // null (documented limitation for v1).
 type patchUserReq struct {
-	Name   *string   `json:"name,omitempty"`
-	Budget *float64  `json:"budget,omitempty"`
-	Scope  *[]string `json:"scope,omitempty"`
-	RPM    *int      `json:"rpm,omitempty"`
+	Name    *string   `json:"name,omitempty"`
+	Budget  *float64  `json:"budget,omitempty"`
+	Scope   *[]string `json:"scope,omitempty"`
+	RPM     *int      `json:"rpm,omitempty"`
+	Capture *bool     `json:"capture,omitempty"`
 }
 
 // handlePatchUser applies a subset of fields to a user.
@@ -1272,10 +1290,11 @@ func (a *api) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 // view with computed spend. An unknown id is a *apiError (404).
 func (a *api) updateUserData(id string, req patchUserReq) (userView, error) {
 	upd := store.UserUpdate{
-		Name:   req.Name,
-		Budget: req.Budget,
-		Scope:  req.Scope,
-		RPM:    req.RPM,
+		Name:    req.Name,
+		Budget:  req.Budget,
+		Scope:   req.Scope,
+		RPM:     req.RPM,
+		Capture: req.Capture,
 	}
 	usr, err := a.store.UpdateUser(id, upd)
 	if err != nil {
@@ -1426,16 +1445,11 @@ func (a *api) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 // settingsData returns non-secret runtime settings (never the admin key).
 func (a *api) settingsData() settingsView {
-	var settings config.Settings
-	if snap := a.snap(); snap != nil {
-		settings = snap.Settings()
-	}
 	return settingsView{
 		Listen:         a.listenAddr,
 		DBPath:         a.dbPath,
 		AdminProtected: a.adminKey != "",
 		Version:        a.version,
-		Capture:        settings.Capture,
 	}
 }
 

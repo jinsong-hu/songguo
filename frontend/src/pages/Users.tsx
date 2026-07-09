@@ -70,6 +70,7 @@ export function UsersPage() {
                   <th>Key</th>
                   <th>Spent / Budget</th>
                   <th>Last Seen</th>
+                  <th>Capture</th>
                   <th>Status</th>
                   <th style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
@@ -90,6 +91,11 @@ export function UsersPage() {
                     </td>
                     <td className="mono" style={{ color: 'var(--text-muted)' }}>
                       {u.last_seen ? dateTime(u.last_seen) : '—'}
+                    </td>
+                    <td>
+                      <span className={u.capture ? styles.captureOn : styles.captureOff}>
+                        {u.capture ? 'On' : 'Off'}
+                      </span>
                     </td>
                     <td>
                       <span className={u.active ? styles.statusActive : styles.statusRevoked}>
