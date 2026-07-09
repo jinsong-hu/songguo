@@ -250,6 +250,240 @@
   font-size: 12.5px;
 }
 
+.messageTimeline {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-2);
+  gap: 10px;
+}
+
+.messageCard {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.messageRole {
+  align-self: start;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: center;
+  text-transform: capitalize;
+}
+
+.messageContent {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.messagePartBlock {
+  min-width: 0;
+  position: relative;
+}
+
+.messagePartCopy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+  opacity: 0.72;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+}
+
+.messagePartCopy:hover,
+.messagePartCopy:focus-visible {
+  opacity: 1;
+}
+
+.messagePartSingleLine .messagePartCopy {
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.messagePartSingleLine:has(.messageRawPart[open]) .messagePartCopy {
+  top: 8px;
+  transform: none;
+}
+
+.messageText,
+.messageJson {
+  margin: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  line-height: 1.48;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding-right: 46px;
+}
+
+.messageToolBlock,
+.messageRawPart {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.messageToolHead {
+  min-height: 32px;
+  padding: 7px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.messageToolTitle {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.messageToolName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.messageToolId {
+  min-width: 0;
+  max-width: 42%;
+  margin-left: auto;
+  border: none;
+  border-radius: 4px;
+  padding: 2px 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.messageToolId:hover,
+.messageToolId:focus-visible {
+  background: var(--surface-2);
+  color: var(--accent);
+}
+
+.messageJumpHighlight {
+  animation: messageJumpPulse 1800ms ease-out;
+}
+
+@keyframes messageJumpPulse {
+  0% {
+    background: var(--accent-weak);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 54%, transparent);
+    border-color: var(--accent);
+  }
+  55% {
+    background: var(--accent-weak);
+    box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 0%, transparent);
+    border-color: var(--accent);
+  }
+  100% {
+    background: var(--surface);
+    box-shadow: none;
+  }
+}
+
+.messageToolBlock .messageText,
+.messageToolBlock .messageJson {
+  border: none;
+  border-radius: 0;
+}
+
+.messageToolContent {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.messageToolContent .messageText,
+.messageToolContent .messageJson {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.messageImageBlock {
+  margin: 0;
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.messageImage {
+  display: block;
+  width: 100%;
+  max-height: 520px;
+  object-fit: contain;
+  background: var(--surface-2);
+}
+
+.messageImageCaption {
+  padding: 7px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.messageEmptyPart {
+  position: relative;
+  padding: 10px 11px;
+  padding-right: 46px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.messageRawPart summary {
+  padding: 8px 10px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .toolList {
   overflow: visible;
   padding: 12px;
@@ -556,6 +790,14 @@
 
   .sessionTitleId {
     max-width: 28vw;
+  }
+
+  .messageCard {
+    grid-template-columns: 1fr;
+  }
+
+  .messageRole {
+    justify-self: start;
   }
 
 }

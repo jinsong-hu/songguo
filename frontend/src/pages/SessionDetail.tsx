@@ -78,7 +78,7 @@ export function SessionDetailPage() {
 
   const spanMs = data ? new Date(data.last_ts).getTime() - new Date(data.first_ts).getTime() : 0;
   const sessionClient = useMemo(() => dominantClient(data?.entries ?? []), [data]);
-  const mainPromptEntry = useMemo(() => data?.entries.find(isMainPromptEntry) ?? null, [data]);
+  const mainPromptEntries = useMemo(() => data?.entries.filter(isMainPromptEntry) ?? [], [data]);
 
   return (
     <Page
@@ -125,7 +125,7 @@ export function SessionDetailPage() {
             />
           </div>
 
-          {mainPromptEntry ? <InitialPromptCard entry={mainPromptEntry} /> : null}
+          {mainPromptEntries.length > 0 ? <PromptReconstructionCard entries={mainPromptEntries} /> : null}
 
           {turns.length > 0 && (
             <div className="card" style={{ padding: 16 }}>
@@ -322,19 +322,28 @@ function clientIconSvg(name: string): string {
   return '';
 }
 
-function InitialPromptCard({ entry }: { entry: CallEntry }) {
-  const trace = useFetch<CallTrace>(() => api.trace(entry.id), [entry.id], {
-    enabled: entry.has_trace,
-  });
-  const prompt = useMemo(() => (trace.data ? parseInitialPrompt(trace.data) : null), [trace.data]);
+function PromptReconstructionCard({ entries }: { entries: CallEntry[] }) {
+  const traceKey = useMemo(() => entries.map((entry) => entry.id).join(','), [entries]);
+  const traces = useFetch<CallTrace[]>(
+    () => Promise.all(entries.map((entry) => api.trace(entry.id))),
+    [traceKey],
+    {
+      enabled: entries.length > 0,
+    },
+  );
+  const prompt = useMemo(
+    () => (traces.data ? parsePromptReconstruction(traces.data) : null),
+    [traces.data],
+  );
 
-  if (trace.error) return <ErrorBanner message={trace.error} onRetry={trace.refetch} />;
+  if (traces.error) return <ErrorBanner message={traces.error} onRetry={traces.refetch} />;
 
-  if (trace.initialLoading || !prompt) {
+  if (traces.initialLoading || !prompt) {
     return (
       <div className={styles.promptGrid}>
         <Skeleton height={180} />
         <Skeleton height={180} />
+        <Skeleton height={220} />
       </div>
     );
   }
@@ -378,6 +387,142 @@ function InitialPromptCard({ entry }: { entry: CallEntry }) {
           )}
         </div>
       </details>
+
+      <details className={styles.promptPanel}>
+        <summary className={styles.promptPanelHead}>
+          <span className={styles.promptPanelTitle}>
+            <ChevronRight size={15} className={styles.promptChevron} />
+            Messages
+          </span>
+          <span className="chip chip-mono">{prompt.messages.length}</span>
+        </summary>
+        {prompt.messages.length > 0 ? (
+          <div className={styles.messageTimeline}>
+            {prompt.messages.map((message, i) => (
+              <MessageCard key={`${message.role}-${i}`} message={message} />
+            ))}
+          </div>
+        ) : (
+          <div className={styles.promptEmpty}>No messages in these requests.</div>
+        )}
+      </details>
+    </div>
+  );
+}
+
+function MessageCard({ message }: { message: PromptMessage }) {
+  return (
+    <div className={styles.messageCard}>
+      <div className={styles.messageRole}>{message.role}</div>
+      <div className={styles.messageContent}>
+        {message.parts.map((part, i) => (
+          <MessagePartView key={i} part={part} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MessagePartView({ part }: { part: MessagePart }) {
+  if (part.kind === 'text') {
+    return (
+      <div className={`${styles.messagePartBlock} ${isSingleLineText(part.text) ? styles.messagePartSingleLine : ''}`}>
+        <CopyButton value={messagePartCopyText(part)} ariaLabel="Copy text block" className={styles.messagePartCopy} />
+        <pre className={styles.messageText}>{part.text}</pre>
+      </div>
+    );
+  }
+  if (part.kind === 'tool_use') {
+    return (
+      <div id={part.id ? toolPartDomId('use', part.id) : undefined} className={styles.messageToolBlock}>
+        <div className={styles.messageToolHead}>
+          <span className={styles.messageToolTitle}>
+            <span>Tool Use</span>
+            {part.name ? <span className={styles.messageToolName}>{part.name}</span> : null}
+          </span>
+          {part.id ? (
+            <button
+              type="button"
+              className={styles.messageToolId}
+              onClick={() => jumpToToolPart('result', part.id)}
+              title="Jump to tool result"
+            >
+              {part.id}
+            </button>
+          ) : null}
+        </div>
+        {part.input !== undefined ? (
+          <div className={styles.messageToolContent}>
+            <div className={styles.messagePartBlock}>
+              <CopyButton value={prettyJson(part.input)} ariaLabel="Copy tool input" className={styles.messagePartCopy} />
+              <pre className={styles.messageJson}>{prettyJson(part.input)}</pre>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+  if (part.kind === 'tool_result') {
+    return (
+      <div id={part.toolUseId ? toolPartDomId('result', part.toolUseId) : undefined} className={styles.messageToolBlock}>
+        <div className={styles.messageToolHead}>
+          <span className={styles.messageToolTitle}>
+            <span>Tool Result</span>
+          </span>
+          {part.toolUseId ? (
+            <button
+              type="button"
+              className={styles.messageToolId}
+              onClick={() => jumpToToolPart('use', part.toolUseId)}
+              title="Jump to tool use"
+            >
+              {part.toolUseId}
+            </button>
+          ) : null}
+        </div>
+        {part.parts.length > 0 ? (
+          <div className={styles.messageToolContent}>
+            {part.parts.map((child, i) => (
+              <MessagePartView key={i} part={child} />
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+  if (part.kind === 'image') {
+    return (
+      <figure className={styles.messageImageBlock}>
+        <CopyButton value={messagePartCopyText(part)} ariaLabel="Copy image source" className={styles.messagePartCopy} />
+        <img className={styles.messageImage} src={part.src} alt={part.label} loading="lazy" />
+        <figcaption className={styles.messageImageCaption}>{part.label}</figcaption>
+      </figure>
+    );
+  }
+  if (part.kind === 'image_url') {
+    return (
+      <figure className={styles.messageImageBlock}>
+        <CopyButton value={messagePartCopyText(part)} ariaLabel="Copy image URL" className={styles.messagePartCopy} />
+        <img className={styles.messageImage} src={part.url} alt={part.label} loading="lazy" />
+        <figcaption className={styles.messageImageCaption}>{part.label}</figcaption>
+      </figure>
+    );
+  }
+  if (part.kind === 'empty') {
+    return (
+      <div className={styles.messageEmptyPart}>
+        <span>{part.label}</span>
+        <CopyButton value={messagePartCopyText(part)} ariaLabel="Copy block" className={styles.messagePartCopy} />
+      </div>
+    );
+  }
+  return (
+    <div className={`${styles.messagePartBlock} ${styles.messagePartSingleLine}`}>
+      <CopyButton value={messagePartCopyText(part)} ariaLabel="Copy raw block" className={styles.messagePartCopy} />
+      <details className={styles.messageRawPart}>
+        <summary>{part.label}</summary>
+        <pre className={styles.messageJson}>{prettyJson(part.raw)}</pre>
+      </details>
     </div>
   );
 }
@@ -412,9 +557,10 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
   );
 }
 
-interface InitialPrompt {
+interface PromptReconstruction {
   system: string[];
   tools: ToolInfo[];
+  messages: PromptMessage[];
 }
 
 interface ToolInfo {
@@ -424,6 +570,20 @@ interface ToolInfo {
   schema: unknown;
 }
 
+interface PromptMessage {
+  role: string;
+  parts: MessagePart[];
+}
+
+type MessagePart =
+  | { kind: 'text'; text: string }
+  | { kind: 'tool_use'; id: string; name: string; input: unknown }
+  | { kind: 'tool_result'; toolUseId: string; parts: MessagePart[] }
+  | { kind: 'image'; src: string; label: string }
+  | { kind: 'image_url'; url: string; label: string }
+  | { kind: 'empty'; label: string }
+  | { kind: 'raw'; label: string; raw: unknown };
+
 function isMainPromptEntry(entry: CallEntry): boolean {
   return entry.has_trace && entry.wire !== 'anthropic/count_tokens' && !isHaikuAuxiliary(entry);
 }
@@ -432,13 +592,233 @@ function isHaikuAuxiliary(entry: CallEntry): boolean {
   return entry.wire === 'anthropic/messages' && entry.model.toLowerCase().includes('haiku');
 }
 
-function parseInitialPrompt(trace: CallTrace): InitialPrompt {
-  const body = parseJsonObject(trace.request.body);
-  if (!body) return { system: [], tools: [] };
+function parsePromptReconstruction(traces: CallTrace[]): PromptReconstruction {
+  const firstBody = parseJsonObject(traces[0]?.request.body ?? '');
+  let messages: PromptMessage[] = [];
+
+  for (let i = 0; i < traces.length; i += 1) {
+    const body = parseJsonObject(traces[i].request.body);
+    if (!body) continue;
+    messages = mergePromptMessages(messages, promptMessages(body));
+  }
+
   return {
-    system: systemBlocks(body.system ?? body.instructions),
-    tools: toolInfos(body.tools),
+    system: systemBlocks(firstBody?.system ?? firstBody?.instructions),
+    tools: toolInfos(firstBody?.tools),
+    messages,
   };
+}
+
+function promptMessages(body: Record<string, unknown>): PromptMessage[] {
+  const source = Array.isArray(body.messages) ? body.messages : body.input;
+  if (typeof source === 'string') return [{ role: 'user', parts: [{ kind: 'text', text: source }] }];
+  if (!Array.isArray(source)) return [];
+  return source.map(promptMessage).filter((message) => message.parts.length > 0);
+}
+
+function promptMessage(raw: unknown): PromptMessage {
+  if (typeof raw === 'string') return { role: 'user', parts: [{ kind: 'text', text: raw }] };
+  if (!isRecord(raw)) return { role: 'unknown', parts: [{ kind: 'raw', label: 'value', raw: stripCacheControl(raw) }] };
+
+  const type = typeof raw.type === 'string' ? raw.type : '';
+  if (type === 'function_call') {
+    return {
+      role: 'assistant',
+      parts: [functionCallPart(raw)],
+    };
+  }
+  if (type === 'function_call_output') {
+    return {
+      role: 'tool',
+      parts: [functionCallOutputPart(raw)],
+    };
+  }
+
+  const role =
+    typeof raw.role === 'string'
+      ? raw.role
+      : type === 'message'
+        ? 'message'
+        : type || 'unknown';
+  const parts = messageParts(raw.content);
+  if (Array.isArray(raw.tool_calls)) {
+    parts.push(...raw.tool_calls.map(functionCallPart));
+  }
+  if (parts.length === 0) parts.push({ kind: 'raw', label: type || role, raw: stripCacheControl(raw) });
+  return { role, parts };
+}
+
+function messageParts(content: unknown): MessagePart[] {
+  if (typeof content === 'string') return [{ kind: 'text', text: content }];
+  if (Array.isArray(content)) return content.flatMap(messagePart);
+  if (content == null) return [];
+  return [messagePart(content)].flat();
+}
+
+function messagePart(raw: unknown): MessagePart | MessagePart[] {
+  if (typeof raw === 'string') return { kind: 'text', text: raw };
+  if (!isRecord(raw)) return { kind: 'raw', label: 'value', raw: stripCacheControl(raw) };
+
+  const type = typeof raw.type === 'string' ? raw.type : '';
+  if (type === 'tool_use') {
+    return {
+      kind: 'tool_use',
+      id: typeof raw.id === 'string' ? raw.id : '',
+      name: typeof raw.name === 'string' ? raw.name : '',
+      input: stripCacheControl(raw.input ?? {}),
+    };
+  }
+  if (type === 'tool_result') {
+    return {
+      kind: 'tool_result',
+      toolUseId: typeof raw.tool_use_id === 'string' ? raw.tool_use_id : '',
+      parts: messageParts(raw.content),
+    };
+  }
+  if (type === 'image') {
+    const image = imagePart(raw);
+    if (image) return image;
+  }
+  if (type === 'input_image') {
+    const image = inputImagePart(raw);
+    if (image) return image;
+  }
+  if (type === 'function_call') return functionCallPart(raw);
+  if (type === 'function_call_output') return functionCallOutputPart(raw);
+
+  const text = textField(raw);
+  if (text !== null) return { kind: 'text', text };
+  return { kind: 'raw', label: type || 'part', raw: stripCacheControl(raw) };
+}
+
+function functionCallPart(raw: unknown): MessagePart {
+  const record = isRecord(raw) ? raw : {};
+  const fn = isRecord(record.function) ? record.function : {};
+  const name =
+    typeof record.name === 'string'
+      ? record.name
+      : typeof fn.name === 'string'
+        ? fn.name
+        : '';
+  const id =
+    typeof record.id === 'string'
+      ? record.id
+      : typeof record.call_id === 'string'
+        ? record.call_id
+        : '';
+  const input = record.arguments ?? fn.arguments ?? record.input ?? {};
+  return {
+    kind: 'tool_use',
+    id,
+    name,
+    input: parseJsonMaybe(input),
+  };
+}
+
+function functionCallOutputPart(raw: unknown): MessagePart {
+  const record = isRecord(raw) ? raw : {};
+  return {
+    kind: 'tool_result',
+    toolUseId: typeof record.call_id === 'string' ? record.call_id : '',
+    parts: messageParts(record.output),
+  };
+}
+
+function imagePart(record: Record<string, unknown>): MessagePart | null {
+  const source = isRecord(record.source) ? record.source : null;
+  if (!source) return null;
+  if (typeof source.url === 'string') {
+    return { kind: 'image_url', url: source.url, label: 'Image' };
+  }
+  if (source.type === 'base64' && typeof source.data === 'string') {
+    const mediaType = typeof source.media_type === 'string' ? source.media_type : 'image/jpeg';
+    return { kind: 'image', src: `data:${mediaType};base64,${source.data}`, label: mediaType };
+  }
+  return null;
+}
+
+function inputImagePart(record: Record<string, unknown>): MessagePart | null {
+  if (typeof record.image_url === 'string') {
+    return { kind: 'image_url', url: record.image_url, label: 'Image' };
+  }
+  if (isRecord(record.image_url) && typeof record.image_url.url === 'string') {
+    return { kind: 'image_url', url: record.image_url.url, label: 'Image' };
+  }
+  return null;
+}
+
+function textField(record: Record<string, unknown>): string | null {
+  if (typeof record.text === 'string') return record.text;
+  if (typeof record.output_text === 'string') return record.output_text;
+  if (typeof record.input_text === 'string') return record.input_text;
+  return null;
+}
+
+function parseJsonMaybe(value: unknown): unknown {
+  if (typeof value !== 'string') return stripCacheControl(value);
+  try {
+    return stripCacheControl(JSON.parse(value));
+  } catch {
+    return value;
+  }
+}
+
+function mergePromptMessages(existing: PromptMessage[], next: PromptMessage[]): PromptMessage[] {
+  if (next.length === 0) return existing;
+  let overlap = Math.min(existing.length, next.length);
+  while (overlap > 0) {
+    const existingStart = existing.length - overlap;
+    let matches = true;
+    for (let i = 0; i < overlap; i += 1) {
+      if (!sameMessage(existing[existingStart + i], next[i])) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) break;
+    overlap -= 1;
+  }
+  return existing.concat(next.slice(overlap));
+}
+
+function sameMessage(a: PromptMessage, b: PromptMessage): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function toolPartDomId(kind: 'use' | 'result', id: string): string {
+  return `tool-${kind}-${id.replace(/[^A-Za-z0-9_-]/g, '_')}`;
+}
+
+function jumpToToolPart(kind: 'use' | 'result', id: string): void {
+  const el = document.getElementById(toolPartDomId(kind, id));
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'auto', block: 'start' });
+  el.classList.remove(styles.messageJumpHighlight);
+  window.requestAnimationFrame(() => {
+    el.classList.add(styles.messageJumpHighlight);
+    window.setTimeout(() => el.classList.remove(styles.messageJumpHighlight), 1800);
+  });
+}
+
+function messagePartCopyText(part: MessagePart): string {
+  if (part.kind === 'text') return part.text;
+  if (part.kind === 'tool_use') {
+    const name = part.name ? ` ${part.name}` : '';
+    const id = part.id ? ` (${part.id})` : '';
+    return `Tool Use${name}${id}\n${prettyJson(part.input)}`;
+  }
+  if (part.kind === 'tool_result') {
+    const id = part.toolUseId ? ` ${part.toolUseId}` : '';
+    return [`Tool Result${id}`, ...part.parts.map(messagePartCopyText)].join('\n');
+  }
+  if (part.kind === 'image') return `Image: ${part.label}\n${part.src}`;
+  if (part.kind === 'image_url') return `Image: ${part.label}\n${part.url}`;
+  if (part.kind === 'empty') return part.label;
+  return `${part.label}\n${prettyJson(part.raw)}`;
+}
+
+function isSingleLineText(text: string): boolean {
+  return !text.includes('\n') && text.length <= 160;
 }
 
 function systemBlocks(system: unknown): string[] {
