@@ -1,15 +1,17 @@
 // Package compose estimates how a chat request's input context window
 // decomposes across sources (system prompt, tool schemas, tool results, ...).
 //
-// It counts tokens LOCALLY with the o200k_base tokenizer (tiktoken), per block,
-// and sums them — deliberately decoupled from the vendor's official usage. This
-// buys STABILITY: the same block of text always counts the same, so a caller
-// tuning prompt-cache reuse sees a fixed number for an unchanged prefix instead
-// of a value that wobbles as the rest of the window shifts. The tradeoff, taken
-// on purpose, is that these counts do NOT match the vendor's official input
-// total (a different, proprietary tokenizer, plus message framing we don't see).
-// So: official usage is authoritative for billing/totals; this decomposition is
-// for proportions and growth trends only, and the UI labels it an estimate.
+// It counts text locally with the o200k_base tokenizer (tiktoken), adds Claude
+// visual-token estimates for recognized images, and sums the per-block weights
+// — deliberately decoupled from the vendor's official usage. This buys
+// STABILITY: the same block of text/image content always counts the same, so a
+// caller tuning prompt-cache reuse sees a fixed number for an unchanged prefix
+// instead of a value that wobbles as the rest of the window shifts. The tradeoff,
+// taken on purpose, is that these counts do NOT match the vendor's official
+// input total (a different, proprietary tokenizer, plus message framing we don't
+// see). So: official usage is authoritative for billing/totals; this
+// decomposition is for proportions and growth trends only, and the UI labels it
+// an estimate.
 //
 // The one number we cannot self-count is the cached (cache-read) portion — only
 // the vendor knows which blocks were served from cache. So the official
@@ -22,7 +24,13 @@ package compose
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -84,13 +92,15 @@ type Composition struct {
 }
 
 // unit is one indivisible decomposable block in render order (tools → system →
-// messages). text is the semantic content tokenized to weigh the block. Opaque
+// messages). text is the semantic content tokenized to weigh the block; tokens
+// carries pre-counted non-text weight such as Claude visual tokens. Opaque
 // continuity state such as reasoning signatures is deliberately excluded: it is
 // request metadata, not inspectable context content.
 type unit struct {
-	src  string
-	prod string
-	text string
+	src    string
+	prod   string
+	text   string
+	tokens int64
 }
 
 // Compose decomposes body's input context across sources, counting each block's
@@ -122,7 +132,7 @@ func Compose(wireName string, body []byte, cachedTokens int64) (Composition, boo
 	tokens := make([]int64, len(units))
 	var total int64
 	for i, u := range units {
-		tokens[i] = countTokens(e, u.text)
+		tokens[i] = countTokens(e, u.text) + u.tokens
 		total += tokens[i]
 	}
 	if total <= 0 {
@@ -291,6 +301,7 @@ func mcpServer(name string) (string, bool) {
 
 func parseAnthropic(body []byte) []unit {
 	var req struct {
+		Model    string          `json:"model"`
 		System   json.RawMessage `json:"system"`
 		Messages []struct {
 			Role    string          `json:"role"`
@@ -359,26 +370,190 @@ func parseAnthropic(body []byte) []unit {
 			if src == "" {
 				continue
 			}
-			if text := anthBlockText(raw, b.Type); text != "" {
-				units = append(units, unit{src: src, prod: prod, text: text})
+			text, tokens := anthBlockWeight(raw, b.Type, req.Model)
+			if text != "" || tokens > 0 {
+				units = append(units, unit{src: src, prod: prod, text: text, tokens: tokens})
 			}
 		}
 	}
 	return units
 }
 
-func anthBlockText(raw json.RawMessage, typ string) string {
+func anthBlockWeight(raw json.RawMessage, typ, model string) (string, int64) {
 	if typ == "thinking" {
 		var b struct {
 			Thinking string `json:"thinking"`
 		}
 		_ = json.Unmarshal(raw, &b)
-		return b.Thinking
+		return b.Thinking, 0
 	}
 	if typ == "redacted_thinking" {
-		return ""
+		return "", 0
 	}
-	return compactStr(raw)
+	if typ == "text" {
+		var b struct {
+			Text string `json:"text"`
+		}
+		_ = json.Unmarshal(raw, &b)
+		return b.Text, 0
+	}
+	if typ == "image" {
+		return "", anthropicImageTokens(raw, model)
+	}
+	if typ == "tool_result" {
+		var b struct {
+			Content json.RawMessage `json:"content"`
+		}
+		_ = json.Unmarshal(raw, &b)
+		return anthropicContentWeight(b.Content, model)
+	}
+	return compactStr(raw), 0
+}
+
+func anthropicContentWeight(raw json.RawMessage, model string) (string, int64) {
+	if len(raw) == 0 {
+		return "", 0
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s, 0
+	}
+	var blocks []json.RawMessage
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return compactStr(raw), 0
+	}
+	var texts []string
+	var tokens int64
+	for _, block := range blocks {
+		text, visual := anthropicContentBlockWeight(block, model)
+		if text != "" {
+			texts = append(texts, text)
+		}
+		tokens += visual
+	}
+	return strings.Join(texts, "\n"), tokens
+}
+
+func anthropicContentBlockWeight(raw json.RawMessage, model string) (string, int64) {
+	var b struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	_ = json.Unmarshal(raw, &b)
+	switch b.Type {
+	case "text":
+		return b.Text, 0
+	case "image":
+		return "", anthropicImageTokens(raw, model)
+	default:
+		return compactStr(raw), 0
+	}
+}
+
+func anthropicImageTokens(raw json.RawMessage, model string) int64 {
+	var b struct {
+		Source struct {
+			Type string `json:"type"`
+			Data string `json:"data"`
+		} `json:"source"`
+	}
+	if err := json.Unmarshal(raw, &b); err != nil {
+		return 0
+	}
+	if b.Source.Type != "base64" || b.Source.Data == "" {
+		return 0
+	}
+	decoded, err := base64.StdEncoding.DecodeString(b.Source.Data)
+	if err != nil {
+		return 0
+	}
+	cfg, ok := imageConfigFromBytes(decoded)
+	if !ok {
+		return 0
+	}
+	return visualTokensForSize(cfg.Width, cfg.Height, claudeImageTier(model))
+}
+
+func imageConfigFromDataURL(rawURL string) (image.Config, bool) {
+	i := strings.Index(rawURL, ",")
+	if !strings.HasPrefix(rawURL, "data:") || i < 0 || !strings.Contains(rawURL[:i], ";base64") {
+		return image.Config{}, false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(rawURL[i+1:])
+	if err != nil {
+		return image.Config{}, false
+	}
+	return imageConfigFromBytes(decoded)
+}
+
+func imageConfigFromBytes(decoded []byte) (image.Config, bool) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(decoded))
+	if err != nil {
+		return image.Config{}, false
+	}
+	return cfg, true
+}
+
+type imageTier struct {
+	maxLongEdge int
+	maxTokens   int64
+}
+
+var (
+	standardImageTier = imageTier{maxLongEdge: 1568, maxTokens: 1568}
+	highImageTier     = imageTier{maxLongEdge: 2576, maxTokens: 4784}
+)
+
+func claudeImageTier(model string) imageTier {
+	name := strings.ToLower(model)
+	highModels := []string{
+		"fable-5", "fable 5",
+		"mythos-5", "mythos 5",
+		"opus-4.8", "opus 4.8",
+		"opus-4.7", "opus 4.7",
+		"sonnet-5", "sonnet 5",
+	}
+	for _, high := range highModels {
+		if strings.Contains(name, high) {
+			return highImageTier
+		}
+	}
+	return standardImageTier
+}
+
+func visualTokensForSize(width, height int, tier imageTier) int64 {
+	if width <= 0 || height <= 0 {
+		return 0
+	}
+
+	w, h := float64(width), float64(height)
+	long := math.Max(w, h)
+	if long > float64(tier.maxLongEdge) {
+		scale := float64(tier.maxLongEdge) / long
+		w *= scale
+		h *= scale
+	}
+	if visualPatchCount(w, h) <= tier.maxTokens {
+		return visualPatchCount(w, h)
+	}
+
+	lo, hi := 0.0, 1.0
+	for i := 0; i < 64; i++ {
+		mid := (lo + hi) / 2
+		if visualPatchCount(w*mid, h*mid) <= tier.maxTokens {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	return visualPatchCount(w*lo, h*lo)
+}
+
+func visualPatchCount(width, height float64) int64 {
+	if width <= 0 || height <= 0 {
+		return 0
+	}
+	return int64(math.Ceil(width/28) * math.Ceil(height/28))
 }
 
 // anthClassify maps a (role, block type) to a source key and optional producer.
@@ -434,6 +609,7 @@ func anthBlocks(raw json.RawMessage) []json.RawMessage {
 
 func parseOpenAI(body []byte) []unit {
 	var req struct {
+		Model    string `json:"model"`
 		Messages []struct {
 			Role       string          `json:"role"`
 			Content    json.RawMessage `json:"content"`
@@ -480,17 +656,11 @@ func parseOpenAI(body []byte) []unit {
 	for _, m := range req.Messages {
 		switch m.Role {
 		case "system":
-			if s := rawContentStr(m.Content); s != "" {
-				units = append(units, unit{src: "system", text: s})
-			}
+			units = append(units, openAIContentUnits(m.Content, req.Model, "system")...)
 		case "user":
-			if s := rawContentStr(m.Content); s != "" {
-				units = append(units, unit{src: "user", text: s})
-			}
+			units = append(units, openAIContentUnits(m.Content, req.Model, "user")...)
 		case "assistant":
-			if s := rawContentStr(m.Content); s != "" {
-				units = append(units, unit{src: "actions", text: s})
-			}
+			units = append(units, openAIContentUnits(m.Content, req.Model, "actions")...)
 			for _, tc := range m.ToolCalls {
 				raw, _ := json.Marshal(tc)
 				units = append(units, unit{src: "actions", text: compactStr(raw)})
@@ -509,10 +679,219 @@ func parseOpenAI(body []byte) []unit {
 	return units
 }
 
+func openAIContentUnits(raw json.RawMessage, model, textSrc string) []unit {
+	if len(raw) == 0 {
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if s == "" {
+			return nil
+		}
+		return []unit{{src: textSrc, text: s}}
+	}
+	var blocks []json.RawMessage
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return []unit{{src: textSrc, text: compactStr(raw)}}
+	}
+	units := make([]unit, 0, len(blocks))
+	for _, block := range blocks {
+		src, text, tokens := openAIContentBlockWeight(block, model, textSrc)
+		if src != "" && (text != "" || tokens > 0) {
+			units = append(units, unit{src: src, text: text, tokens: tokens})
+		}
+	}
+	return units
+}
+
+func openAIContentBlockWeight(raw json.RawMessage, model, textSrc string) (src, text string, tokens int64) {
+	var b struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	_ = json.Unmarshal(raw, &b)
+	switch b.Type {
+	case "text", "input_text", "output_text":
+		return textSrc, b.Text, 0
+	case "image_url", "input_image":
+		tokens = openAIImageTokens(raw, model)
+		if tokens > 0 {
+			return "attachments", "", tokens
+		}
+		if detail := openAIImageDetail(raw); detail == "low" {
+			if spec, ok := openAITileSpec(model); ok {
+				return "attachments", "", spec.base
+			}
+		}
+		return "", "", 0
+	default:
+		if s := compactStr(raw); s != "" {
+			return textSrc, s, 0
+		}
+		return "", "", 0
+	}
+}
+
+func openAIImageTokens(raw json.RawMessage, model string) int64 {
+	url, detail := openAIImageURLAndDetail(raw)
+	if detail == "" {
+		detail = "auto"
+	}
+	if spec, ok := openAIPatchSpec(model); ok {
+		cfg, ok := imageConfigFromDataURL(url)
+		if !ok {
+			return 0
+		}
+		patches := openAIPatchCount(cfg.Width, cfg.Height, spec.patchBudget)
+		return int64(math.Ceil(float64(patches) * spec.multiplier))
+	}
+	if spec, ok := openAITileSpec(model); ok {
+		if detail == "low" {
+			return spec.base
+		}
+		cfg, ok := imageConfigFromDataURL(url)
+		if !ok {
+			return spec.base
+		}
+		return openAITileTokens(cfg.Width, cfg.Height, spec)
+	}
+	return 0
+}
+
+func openAIImageURLAndDetail(raw json.RawMessage) (string, string) {
+	var b struct {
+		Detail   string          `json:"detail"`
+		ImageURL json.RawMessage `json:"image_url"`
+	}
+	_ = json.Unmarshal(raw, &b)
+	detail := strings.ToLower(b.Detail)
+	if len(b.ImageURL) == 0 {
+		return "", detail
+	}
+	var url string
+	if err := json.Unmarshal(b.ImageURL, &url); err == nil {
+		return url, detail
+	}
+	var obj struct {
+		URL    string `json:"url"`
+		Detail string `json:"detail"`
+	}
+	_ = json.Unmarshal(b.ImageURL, &obj)
+	if detail == "" {
+		detail = strings.ToLower(obj.Detail)
+	}
+	return obj.URL, detail
+}
+
+func openAIImageDetail(raw json.RawMessage) string {
+	_, detail := openAIImageURLAndDetail(raw)
+	return detail
+}
+
+type openAIPatchImageSpec struct {
+	patchBudget int64
+	multiplier  float64
+}
+
+func openAIPatchSpec(model string) (openAIPatchImageSpec, bool) {
+	name := strings.ToLower(model)
+	switch {
+	case strings.Contains(name, "gpt-5.4-mini"), strings.Contains(name, "gpt-5-mini"), strings.Contains(name, "gpt-4.1-mini"):
+		return openAIPatchImageSpec{patchBudget: 1536, multiplier: 1.62}, true
+	case strings.Contains(name, "gpt-5.4-nano"), strings.Contains(name, "gpt-5-nano"), strings.Contains(name, "gpt-4.1-nano"):
+		return openAIPatchImageSpec{patchBudget: 1536, multiplier: 2.46}, true
+	case name == "o4-mini" || strings.Contains(name, "o4-mini-"):
+		return openAIPatchImageSpec{patchBudget: 1536, multiplier: 1.72}, true
+	default:
+		return openAIPatchImageSpec{}, false
+	}
+}
+
+func openAIPatchCount(width, height int, patchBudget int64) int64 {
+	if width <= 0 || height <= 0 {
+		return 0
+	}
+	w, h := float64(width), float64(height)
+	if long := math.Max(w, h); long > 2048 {
+		scale := 2048 / long
+		w *= scale
+		h *= scale
+	}
+	patches := patch32Count(w, h)
+	if patches <= patchBudget {
+		return patches
+	}
+	shrink := math.Sqrt((32 * 32 * float64(patchBudget)) / (w * h))
+	adjusted := shrink * math.Min(
+		math.Floor(w*shrink/32)/(w*shrink/32),
+		math.Floor(h*shrink/32)/(h*shrink/32),
+	)
+	if adjusted <= 0 || math.IsNaN(adjusted) || math.IsInf(adjusted, 0) {
+		return patchBudget
+	}
+	resizedW := math.Floor(w * adjusted)
+	resizedH := math.Floor(h * adjusted)
+	patches = patch32Count(resizedW, resizedH)
+	if patches > patchBudget {
+		return patchBudget
+	}
+	return patches
+}
+
+func patch32Count(width, height float64) int64 {
+	if width <= 0 || height <= 0 {
+		return 0
+	}
+	return int64(math.Ceil(width/32) * math.Ceil(height/32))
+}
+
+type openAITileImageSpec struct {
+	base int64
+	tile int64
+}
+
+func openAITileSpec(model string) (openAITileImageSpec, bool) {
+	name := strings.ToLower(model)
+	switch {
+	case name == "gpt-5" || name == "gpt-5-chat-latest":
+		return openAITileImageSpec{base: 70, tile: 140}, true
+	case strings.Contains(name, "gpt-4o-mini"):
+		return openAITileImageSpec{base: 2833, tile: 5667}, true
+	case strings.Contains(name, "gpt-4o"), strings.Contains(name, "gpt-4.1"), strings.Contains(name, "gpt-4.5"):
+		return openAITileImageSpec{base: 85, tile: 170}, true
+	case name == "o1" || strings.Contains(name, "o1-") || name == "o1-pro" || strings.Contains(name, "o1-pro-") || name == "o3" || strings.Contains(name, "o3-"):
+		return openAITileImageSpec{base: 75, tile: 150}, true
+	case strings.Contains(name, "computer-use-preview"):
+		return openAITileImageSpec{base: 65, tile: 129}, true
+	default:
+		return openAITileImageSpec{}, false
+	}
+}
+
+func openAITileTokens(width, height int, spec openAITileImageSpec) int64 {
+	if width <= 0 || height <= 0 {
+		return spec.base
+	}
+	w, h := float64(width), float64(height)
+	if long := math.Max(w, h); long > 2048 {
+		scale := 2048 / long
+		w *= scale
+		h *= scale
+	}
+	if short := math.Min(w, h); short > 0 && short != 768 {
+		scale := 768 / short
+		w *= scale
+		h *= scale
+	}
+	tiles := int64(math.Ceil(w/512) * math.Ceil(h/512))
+	return spec.base + tiles*spec.tile
+}
+
 // ---- OpenAI Responses request ----
 
 func parseOpenAIResponses(body []byte) []unit {
 	var req struct {
+		Model        string            `json:"model"`
 		Instructions json.RawMessage   `json:"instructions"`
 		Input        []json.RawMessage `json:"input"`
 		Tools        []json.RawMessage `json:"tools"`
@@ -570,11 +949,7 @@ func parseOpenAIResponses(body []byte) []unit {
 			if src == "" {
 				continue
 			}
-			for _, text := range responsesContentTexts(item.Content) {
-				if text != "" {
-					units = append(units, unit{src: src, text: text})
-				}
-			}
+			units = append(units, openAIContentUnits(item.Content, req.Model, src)...)
 		case "reasoning":
 			if s := responsesReasoningText(raw); s != "" {
 				units = append(units, unit{src: "reasoning", text: s})

@@ -205,66 +205,45 @@
   font-weight: 600;
 }
 
-.ctxBlockList {
-  max-height: 260px;
+.ctxBlockHeadMeta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ctxBlockTableScroll {
+  max-height: 320px;
   overflow: auto;
-  padding: 8px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
-  gap: 8px;
 }
 
-.ctxBlockItem {
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 9px 10px;
-  background: var(--surface);
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
+.ctxBlockTable {
+  min-width: 900px;
 }
 
-.ctxBlockItem:hover,
-.ctxBlockItem:focus-visible {
-  border-color: var(--accent);
+.ctxBlockTable tbody tr:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--accent-weak);
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
-.ctxBlockItemTop {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.ctxBlockTitle {
-  min-width: 0;
+.ctxBlockTable td {
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
+}
+
+.ctxBlockTitleCell {
+  color: var(--text);
   font-weight: 600;
 }
 
-.ctxBlockDetail {
-  flex: none;
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.ctxBlockSnippet {
-  margin-top: 5px;
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+.ctxBlockTable .ctxBlockSnippetCell {
+  min-width: 260px;
+  max-width: 420px;
   color: var(--text-muted);
   font-family: var(--mono, ui-monospace, monospace);
-  font-size: 11px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
+  font-size: 11.5px;
 }
 
 .ctxBlockEmpty {

@@ -1,6 +1,14 @@
 package compose
 
-import "testing"
+import (
+	"bytes"
+	"encoding/base64"
+	"fmt"
+	"image"
+	"image/color"
+	"image/png"
+	"testing"
+)
 
 // sampleAnthropic is a small but representative Claude Code request: a system
 // prompt, two tool schemas (one builtin, one MCP), and a multi-turn message list
@@ -21,7 +29,7 @@ const sampleAnthropic = `{
     ]},
     {"role": "user", "content": [
       {"type": "tool_result", "tool_use_id": "tu_1", "content": "package main\nfunc main() {}"},
-      {"type": "image", "source": {"type": "base64", "data": "AAAA"}},
+      {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADggGOSHzRgAAAAABJRU5ErkJggg=="}},
       {"type": "text", "text": "Here is a screenshot too."}
     ]}
   ]
@@ -228,6 +236,143 @@ func TestComposeAnthropicThinkingSignatureIgnored(t *testing.T) {
 	if reasoning <= 0 {
 		t.Fatal("thinking text did not produce reasoning tokens")
 	}
+}
+
+func TestVisualTokensForSizeClaudeTiers(t *testing.T) {
+	cases := []struct {
+		name     string
+		width    int
+		height   int
+		standard int64
+		high     int64
+	}{
+		{"200-square", 200, 200, 64, 64},
+		{"1000-square", 1000, 1000, 1296, 1296},
+		{"1092-square", 1092, 1092, 1521, 1521},
+		{"hd", 1920, 1080, 1560, 2691},
+		{"3mp", 2000, 1500, 1564, 3888},
+		{"4k", 3840, 2160, 1560, 4784},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := visualTokensForSize(tc.width, tc.height, standardImageTier); got != tc.standard {
+				t.Errorf("standard tokens = %d, want %d", got, tc.standard)
+			}
+			if got := visualTokensForSize(tc.width, tc.height, highImageTier); got != tc.high {
+				t.Errorf("high tokens = %d, want %d", got, tc.high)
+			}
+		})
+	}
+}
+
+func TestComposeAnthropicImageUsesVisualTokensNotBase64(t *testing.T) {
+	pngBytes := testPNG(t, 200, 200)
+	body := fmt.Sprintf(`{
+	  "model": "claude-haiku-4.5",
+	  "tools": [{"name": "Read", "input_schema": {"type": "object"}}],
+	  "messages": [
+	    {"role": "assistant", "content": [{"type": "tool_use", "id": "tu_1", "name": "Read", "input": {"path": "shot.png"}}]},
+	    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": [
+	      {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": %q}}
+	    ]}]}
+	  ]
+	}`, base64.StdEncoding.EncodeToString(pngBytes))
+
+	comp, ok := Compose("anthropic-messages", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	var readToolResults int64
+	for _, src := range comp.Sources {
+		if src.Key != "tool_results" {
+			continue
+		}
+		for _, child := range src.Children {
+			if child.Key == "read" {
+				readToolResults = child.Tokens
+			}
+		}
+	}
+	if readToolResults != 64 {
+		t.Fatalf("read tool result tokens = %d, want 64 visual tokens", readToolResults)
+	}
+}
+
+func TestOpenAIPatchCountExamples(t *testing.T) {
+	if got := openAIPatchCount(1024, 1024, 1536); got != 1024 {
+		t.Fatalf("1024 square patches = %d, want 1024", got)
+	}
+	if got := openAIPatchCount(1800, 2400, 1536); got != 1452 {
+		t.Fatalf("1800x2400 patches = %d, want 1452", got)
+	}
+}
+
+func TestComposeOpenAIPatchImageUsesVisualTokensNotBase64(t *testing.T) {
+	body := fmt.Sprintf(`{
+	  "model": "gpt-5-mini",
+	  "messages": [
+	    {"role": "user", "content": [
+	      {"type": "input_text", "text": "what is this?"},
+	      {"type": "image_url", "image_url": {"url": %q, "detail": "high"}}
+	    ]}
+	  ]
+	}`, testPNGDataURL(t, 1024, 1024))
+
+	comp, ok := Compose("openai-chat", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	var attachments int64
+	for _, src := range comp.Sources {
+		if src.Key == "attachments" {
+			attachments = src.Tokens
+		}
+	}
+	// 1024 patches * gpt-5-mini's 1.62 multiplier, rounded up.
+	if attachments != 1659 {
+		t.Fatalf("attachment tokens = %d, want 1659", attachments)
+	}
+}
+
+func TestComposeOpenAITileImageDetail(t *testing.T) {
+	dataURL := testPNGDataURL(t, 1024, 1024)
+	highBody := fmt.Sprintf(`{"model":"gpt-4o","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":%q,"detail":"high"}}]}]}`, dataURL)
+	lowBody := fmt.Sprintf(`{"model":"gpt-4o","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":%q,"detail":"low"}}]}]}`, dataURL)
+
+	high, ok := Compose("openai-chat", []byte(highBody), 0)
+	if !ok {
+		t.Fatal("high ok=false")
+	}
+	low, ok := Compose("openai-chat", []byte(lowBody), 0)
+	if !ok {
+		t.Fatal("low ok=false")
+	}
+	if high.Total != 765 {
+		t.Fatalf("high total = %d, want 765", high.Total)
+	}
+	if low.Total != 85 {
+		t.Fatalf("low total = %d, want 85", low.Total)
+	}
+}
+
+func testPNGDataURL(t *testing.T, width, height int) string {
+	t.Helper()
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(testPNG(t, width, height))
+}
+
+func testPNG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	var pngBuf bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: 200, G: 40, B: 30, A: 255})
+		}
+	}
+	if err := png.Encode(&pngBuf, img); err != nil {
+		t.Fatal(err)
+	}
+	return pngBuf.Bytes()
 }
 
 func TestComposeOpenAIResponsesSources(t *testing.T) {

@@ -453,30 +453,65 @@ function ContextBlockDrilldown({ selection, blocks }: { selection: ContextSelect
     );
   }
 
-  const matches = blocks.filter(
-    (block) => block.source === selection.source && (!selection.producer || block.producer === selection.producer),
-  );
+  const matches = blocks
+    .filter((block) => block.source === selection.source && (!selection.producer || block.producer === selection.producer))
+    .sort((a, b) => b.tokens - a.tokens);
+  const sliceTotal = matches.reduce((sum, block) => sum + block.tokens, 0);
+  const windowTotal = blocks.reduce((sum, block) => sum + block.tokens, 0);
   const title = selection.producer
     ? `${srcLabel(selection.source)} / ${prodLabel(selection.producer)}`
     : srcLabel(selection.source);
+  const blockPct = (tokens: number, total: number) => (total > 0 ? `${((tokens / total) * 100).toFixed(1)}%` : '—');
 
   return (
     <div className={styles.ctxBlockPanel}>
       <div className={styles.ctxBlockHead}>
         <span>{title}</span>
-        <span className="chip chip-mono">{matches.length}</span>
+        <span className={styles.ctxBlockHeadMeta}>
+          <span className="chip chip-mono">{matches.length}</span>
+          {sliceTotal > 0 ? <span className="chip chip-mono">{int(sliceTotal)} tokens</span> : null}
+        </span>
       </div>
       {matches.length > 0 ? (
-        <div className={styles.ctxBlockList}>
-          {matches.slice(0, 24).map((block) => (
-            <button key={block.id} type="button" className={styles.ctxBlockItem} onClick={() => jumpToPromptBlock(block.id)}>
-              <span className={styles.ctxBlockItemTop}>
-                <span className={styles.ctxBlockTitle}>{block.title}</span>
-                <span className={styles.ctxBlockDetail}>{block.detail}</span>
-              </span>
-              {block.snippet ? <span className={styles.ctxBlockSnippet}>{snippet(block.snippet)}</span> : null}
-            </button>
-          ))}
+        <div className={styles.ctxBlockTableScroll}>
+          <table className={`table ${styles.ctxBlockTable}`}>
+            <thead>
+              <tr>
+                <th>Block</th>
+                <th>Kind</th>
+                <th>Producer</th>
+                <th className="num">Tokens</th>
+                <th className="num">Slice %</th>
+                <th className="num">Window %</th>
+                <th>Snippet</th>
+              </tr>
+            </thead>
+            <tbody>
+              {matches.map((block) => (
+                <tr
+                  key={block.id}
+                  className={styles.clickRow}
+                  onClick={() => jumpToPromptBlock(block.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      jumpToPromptBlock(block.id);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <td className={styles.ctxBlockTitleCell} title={block.title}>{block.title}</td>
+                  <td>{block.detail}</td>
+                  <td>{block.producer ? prodLabel(block.producer) : '—'}</td>
+                  <td className="num">{int(block.tokens)}</td>
+                  <td className="num">{blockPct(block.tokens, sliceTotal)}</td>
+                  <td className="num">{blockPct(block.tokens, windowTotal)}</td>
+                  <td className={styles.ctxBlockSnippetCell} title={block.snippet}>{block.snippet ? snippet(block.snippet) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       ) : (
         <div className={styles.ctxBlockEmpty}>
@@ -702,6 +737,7 @@ function toolMeta(tool: ToolInfo): string {
 }
 
 interface PromptReconstruction {
+  model: string;
   system: string[];
   tools: ToolInfo[];
   messages: PromptMessage[];
@@ -721,6 +757,7 @@ interface PromptBlock {
   id: string;
   source: string;
   producer?: string;
+  tokens: number;
   title: string;
   detail: string;
   snippet: string;
@@ -735,8 +772,8 @@ type MessagePart =
   | { kind: 'text'; text: string }
   | { kind: 'tool_use'; id: string; name: string; input: unknown }
   | { kind: 'tool_result'; toolUseId: string; parts: MessagePart[] }
-  | { kind: 'image'; src: string; label: string }
-  | { kind: 'image_url'; url: string; label: string }
+  | { kind: 'image'; src: string; label: string; detail?: string; width?: number; height?: number; visualTokens?: number }
+  | { kind: 'image_url'; url: string; label: string; detail?: string; width?: number; height?: number; visualTokens?: number }
   | { kind: 'empty'; label: string }
   | { kind: 'raw'; label: string; raw: unknown };
 
@@ -759,6 +796,7 @@ function parsePromptReconstruction(traces: CallTrace[]): PromptReconstruction {
   }
 
   const prompt = {
+    model: typeof firstBody?.model === 'string' ? firstBody.model : '',
     system: systemBlocks(firstBody?.system ?? firstBody?.instructions),
     tools: toolInfos(firstBody?.tools),
     messages,
@@ -776,6 +814,7 @@ function promptBlocks(prompt: Omit<PromptReconstruction, 'blocks'>): PromptBlock
     out.push({
       id: systemBlockDomId(i),
       source: 'system',
+      tokens: estimateTokens(block),
       title: `System block ${i + 1}`,
       detail: 'System prompt',
       snippet: snippet(block),
@@ -783,10 +822,12 @@ function promptBlocks(prompt: Omit<PromptReconstruction, 'blocks'>): PromptBlock
   });
 
   prompt.tools.forEach((tool, i) => {
+    const text = toolBlockText(tool);
     out.push({
       id: toolBlockDomId(i),
       source: 'tool_schemas',
       producer: schemaProducer(tool.name),
+      tokens: estimateTokens(text),
       title: tool.name || `Tool schema ${i + 1}`,
       detail: 'Tool schema',
       snippet: tool.description || toolMeta(tool),
@@ -796,7 +837,7 @@ function promptBlocks(prompt: Omit<PromptReconstruction, 'blocks'>): PromptBlock
   const toolNames = toolUseNames(prompt.messages);
   prompt.messages.forEach((message, messageIndex) => {
     message.parts.forEach((part, partIndex) => {
-      collectPartBlocks(out, message.role, part, messageIndex, [partIndex], toolNames);
+      collectPartBlocks(out, message.role, part, messageIndex, [partIndex], toolNames, prompt.model);
     });
   });
 
@@ -810,38 +851,45 @@ function collectPartBlocks(
   messageIndex: number,
   path: number[],
   toolNames: Map<string, string>,
+  model: string,
 ) {
   const baseId = messagePartDomId(messageIndex, path);
   const baseDetail = `${role} message`;
   if (part.kind === 'tool_result') {
     const producer = toolProducer(toolNames.get(part.toolUseId) ?? '');
+    const text = part.parts.map(messagePartSnippetText).join('\n');
     out.push({
       id: part.toolUseId ? toolPartDomId('result', part.toolUseId) : baseId,
       source: 'tool_results',
       producer,
+      tokens: part.parts.reduce((sum, child) => sum + estimateMessagePartTokens(child, model), 0),
       title: part.toolUseId ? `Tool result ${part.toolUseId}` : 'Tool result',
       detail: baseDetail,
-      snippet: part.parts.map(messagePartCopyText).join('\n'),
+      snippet: text,
     });
     return;
   }
   if (part.kind === 'tool_use') {
+    const text = messagePartCopyText(part);
     out.push({
       id: part.id ? toolPartDomId('use', part.id) : baseId,
       source: 'actions',
+      tokens: estimateTokens(text),
       title: part.name || 'Tool use',
       detail: baseDetail,
-      snippet: messagePartCopyText(part),
+      snippet: text,
     });
     return;
   }
   if (part.kind === 'image' || part.kind === 'image_url') {
+    const text = messagePartSnippetText(part);
     out.push({
       id: baseId,
       source: 'attachments',
+      tokens: estimateMessagePartTokens(part, model),
       title: part.label,
       detail: baseDetail,
-      snippet: messagePartCopyText(part),
+      snippet: text,
     });
     return;
   }
@@ -851,6 +899,7 @@ function collectPartBlocks(
     out.push({
       id: baseId,
       source: 'reasoning',
+      tokens: estimateTokens(text),
       title: part.label,
       detail: baseDetail,
       snippet: text,
@@ -859,12 +908,14 @@ function collectPartBlocks(
   }
 
   const source = role === 'assistant' ? 'actions' : role === 'system' || role === 'developer' ? 'system' : 'user';
+  const text = messagePartCopyText(part);
   out.push({
     id: baseId,
     source,
+    tokens: estimateTokens(text),
     title: partTitle(part),
     detail: baseDetail,
-    snippet: messagePartCopyText(part),
+    snippet: text,
   });
 }
 
@@ -899,6 +950,262 @@ function reasoningPartText(part: Extract<MessagePart, { kind: 'raw' }>): string 
 
 function snippet(text: string): string {
   return text.replace(/\s+/g, ' ').trim().slice(0, 220);
+}
+
+function estimateMessagePartTokens(part: MessagePart, model: string): number {
+  if (part.kind === 'text') return estimateTokens(part.text);
+  if (part.kind === 'tool_use') return estimateTokens(messagePartCopyText(part));
+  if (part.kind === 'tool_result') return part.parts.reduce((sum, child) => sum + estimateMessagePartTokens(child, model), 0);
+  if (part.kind === 'image' || part.kind === 'image_url') {
+    if (part.width && part.height) return imageTokensForModel(part.width, part.height, model, part.detail);
+    if (part.visualTokens !== undefined) return part.visualTokens;
+    return unknownSizeImageTokensForModel(model);
+  }
+  if (part.kind === 'empty') return estimateTokens(part.label);
+  return estimateTokens(messagePartCopyText(part));
+}
+
+function estimateTokens(text: string): number {
+  const normalized = text.trim();
+  if (!normalized) return 0;
+  return Math.max(1, Math.round(normalized.length / 4));
+}
+
+interface ImageMeta {
+  width?: number;
+  height?: number;
+  visualTokens?: number;
+}
+
+interface ImageTier {
+  maxLongEdge: number;
+  maxTokens: number;
+}
+
+const STANDARD_IMAGE_TIER: ImageTier = { maxLongEdge: 1568, maxTokens: 1568 };
+const HIGH_IMAGE_TIER: ImageTier = { maxLongEdge: 2576, maxTokens: 4784 };
+
+function imageMeta(src: string): ImageMeta {
+  const bytes = dataUrlBytes(src);
+  if (!bytes) return {};
+  const size = imageSize(bytes);
+  if (!size) return {};
+  return {
+    width: size.width,
+    height: size.height,
+    visualTokens: visualTokensForSize(size.width, size.height, STANDARD_IMAGE_TIER),
+  };
+}
+
+function imageTokensForModel(width: number, height: number, model: string, detail?: string): number {
+  const patch = openAIPatchSpec(model);
+  if (patch) return Math.ceil(openAIPatchCount(width, height, patch.patchBudget) * patch.multiplier);
+  const tile = openAITileSpec(model);
+  if (tile) return openAITileTokens(width, height, tile, detail);
+  return visualTokensForSize(width, height, claudeImageTier(model));
+}
+
+function unknownSizeImageTokensForModel(model: string): number {
+  const tile = openAITileSpec(model);
+  if (tile) return tile.base;
+  if (openAIPatchSpec(model)) return 0;
+  return 0;
+}
+
+interface OpenAIPatchSpec {
+  patchBudget: number;
+  multiplier: number;
+}
+
+function openAIPatchSpec(model: string): OpenAIPatchSpec | null {
+  const name = model.toLowerCase();
+  if (name.includes('gpt-5.4-mini') || name.includes('gpt-5-mini') || name.includes('gpt-4.1-mini')) {
+    return { patchBudget: 1536, multiplier: 1.62 };
+  }
+  if (name.includes('gpt-5.4-nano') || name.includes('gpt-5-nano') || name.includes('gpt-4.1-nano')) {
+    return { patchBudget: 1536, multiplier: 2.46 };
+  }
+  if (name === 'o4-mini' || name.includes('o4-mini-')) return { patchBudget: 1536, multiplier: 1.72 };
+  return null;
+}
+
+function openAIPatchCount(width: number, height: number, patchBudget: number): number {
+  if (width <= 0 || height <= 0) return 0;
+  let w = width;
+  let h = height;
+  const long = Math.max(w, h);
+  if (long > 2048) {
+    const scale = 2048 / long;
+    w *= scale;
+    h *= scale;
+  }
+  let patches = patch32Count(w, h);
+  if (patches <= patchBudget) return patches;
+
+  const shrink = Math.sqrt((32 * 32 * patchBudget) / (w * h));
+  const adjusted = shrink * Math.min(
+    Math.floor((w * shrink) / 32) / ((w * shrink) / 32),
+    Math.floor((h * shrink) / 32) / ((h * shrink) / 32),
+  );
+  if (!Number.isFinite(adjusted) || adjusted <= 0) return patchBudget;
+  patches = patch32Count(Math.floor(w * adjusted), Math.floor(h * adjusted));
+  return Math.min(patches, patchBudget);
+}
+
+function patch32Count(width: number, height: number): number {
+  if (width <= 0 || height <= 0) return 0;
+  return Math.ceil(width / 32) * Math.ceil(height / 32);
+}
+
+interface OpenAITileSpec {
+  base: number;
+  tile: number;
+}
+
+function openAITileSpec(model: string): OpenAITileSpec | null {
+  const name = model.toLowerCase();
+  if (name === 'gpt-5' || name === 'gpt-5-chat-latest') return { base: 70, tile: 140 };
+  if (name.includes('gpt-4o-mini')) return { base: 2833, tile: 5667 };
+  if (name.includes('gpt-4o') || name.includes('gpt-4.1') || name.includes('gpt-4.5')) return { base: 85, tile: 170 };
+  if (name === 'o1' || name.includes('o1-') || name === 'o1-pro' || name.includes('o1-pro-') || name === 'o3' || name.includes('o3-')) {
+    return { base: 75, tile: 150 };
+  }
+  if (name.includes('computer-use-preview')) return { base: 65, tile: 129 };
+  return null;
+}
+
+function openAITileTokens(width: number, height: number, spec: OpenAITileSpec, detail?: string): number {
+  if (detail?.toLowerCase() === 'low') return spec.base;
+  if (width <= 0 || height <= 0) return spec.base;
+  let w = width;
+  let h = height;
+  const long = Math.max(w, h);
+  if (long > 2048) {
+    const scale = 2048 / long;
+    w *= scale;
+    h *= scale;
+  }
+  const short = Math.min(w, h);
+  if (short > 0 && short !== 768) {
+    const scale = 768 / short;
+    w *= scale;
+    h *= scale;
+  }
+  return spec.base + Math.ceil(w / 512) * Math.ceil(h / 512) * spec.tile;
+}
+
+function dataUrlBytes(src: string): Uint8Array | null {
+  const match = /^data:[^;,]+;base64,(.*)$/s.exec(src);
+  if (!match) return null;
+  try {
+    const binary = atob(match[1]);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+function imageSize(bytes: Uint8Array): { width: number; height: number } | null {
+  if (
+    bytes.length >= 24 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    return { width: readU32BE(bytes, 16), height: readU32BE(bytes, 20) };
+  }
+  if (bytes.length >= 10 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+    return { width: readU16LE(bytes, 6), height: readU16LE(bytes, 8) };
+  }
+  if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    return jpegSize(bytes);
+  }
+  return null;
+}
+
+function jpegSize(bytes: Uint8Array): { width: number; height: number } | null {
+  let i = 2;
+  while (i + 8 < bytes.length) {
+    if (bytes[i] !== 0xff) {
+      i += 1;
+      continue;
+    }
+    while (i < bytes.length && bytes[i] === 0xff) i += 1;
+    const marker = bytes[i];
+    i += 1;
+    if (marker === 0xd9 || marker === 0xda) return null;
+    if (i + 1 >= bytes.length) return null;
+    const length = readU16BE(bytes, i);
+    if (length < 2 || i + length > bytes.length) return null;
+    if (
+      (marker >= 0xc0 && marker <= 0xc3) ||
+      (marker >= 0xc5 && marker <= 0xc7) ||
+      (marker >= 0xc9 && marker <= 0xcb) ||
+      (marker >= 0xcd && marker <= 0xcf)
+    ) {
+      return { height: readU16BE(bytes, i + 3), width: readU16BE(bytes, i + 5) };
+    }
+    i += length;
+  }
+  return null;
+}
+
+function readU16BE(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset] << 8) | bytes[offset + 1];
+}
+
+function readU16LE(bytes: Uint8Array, offset: number): number {
+  return bytes[offset] | (bytes[offset + 1] << 8);
+}
+
+function readU32BE(bytes: Uint8Array, offset: number): number {
+  return ((bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0;
+}
+
+function claudeImageTier(model: string): ImageTier {
+  const name = model.toLowerCase();
+  const highModels = ['fable-5', 'fable 5', 'mythos-5', 'mythos 5', 'opus-4.8', 'opus 4.8', 'opus-4.7', 'opus 4.7', 'sonnet-5', 'sonnet 5'];
+  return highModels.some((high) => name.includes(high)) ? HIGH_IMAGE_TIER : STANDARD_IMAGE_TIER;
+}
+
+function visualTokensForSize(width: number, height: number, tier: ImageTier): number {
+  if (width <= 0 || height <= 0) return 0;
+  let w = width;
+  let h = height;
+  const long = Math.max(w, h);
+  if (long > tier.maxLongEdge) {
+    const scale = tier.maxLongEdge / long;
+    w *= scale;
+    h *= scale;
+  }
+  if (visualPatchCount(w, h) <= tier.maxTokens) return visualPatchCount(w, h);
+
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 64; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (visualPatchCount(w * mid, h * mid) <= tier.maxTokens) lo = mid;
+    else hi = mid;
+  }
+  return visualPatchCount(w * lo, h * lo);
+}
+
+function visualPatchCount(width: number, height: number): number {
+  if (width <= 0 || height <= 0) return 0;
+  return Math.ceil(width / 28) * Math.ceil(height / 28);
+}
+
+function toolBlockText(tool: ToolInfo): string {
+  return [
+    tool.type,
+    tool.name,
+    tool.description,
+    prettyJson(tool.schema),
+    ...tool.tools.map(toolBlockText),
+  ].filter(Boolean).join('\n');
 }
 
 function promptMessages(body: Record<string, unknown>): PromptMessage[] {
@@ -977,6 +1284,10 @@ function messagePart(raw: unknown): MessagePart | MessagePart[] {
     const image = imagePart(raw);
     if (image) return image;
   }
+  if (type === 'image_url') {
+    const image = imageURLPart(raw);
+    if (image) return image;
+  }
   if (type === 'input_image') {
     const image = inputImagePart(raw);
     if (image) return image;
@@ -1026,21 +1337,45 @@ function imagePart(record: Record<string, unknown>): MessagePart | null {
   const source = isRecord(record.source) ? record.source : null;
   if (!source) return null;
   if (typeof source.url === 'string') {
-    return { kind: 'image_url', url: source.url, label: 'Image' };
+    return { kind: 'image_url', url: source.url, label: 'Image', detail: stringField(source.detail), ...imageMeta(source.url) };
   }
   if (source.type === 'base64' && typeof source.data === 'string') {
     const mediaType = typeof source.media_type === 'string' ? source.media_type : 'image/jpeg';
-    return { kind: 'image', src: `data:${mediaType};base64,${source.data}`, label: mediaType };
+    const src = `data:${mediaType};base64,${source.data}`;
+    return { kind: 'image', src, label: mediaType, ...imageMeta(src) };
+  }
+  return null;
+}
+
+function imageURLPart(record: Record<string, unknown>): MessagePart | null {
+  const imageURL = record.image_url;
+  if (typeof imageURL === 'string') {
+    return { kind: 'image_url', url: imageURL, label: 'Image', detail: stringField(record.detail), ...imageMeta(imageURL) };
+  }
+  if (isRecord(imageURL) && typeof imageURL.url === 'string') {
+    return {
+      kind: 'image_url',
+      url: imageURL.url,
+      label: 'Image',
+      detail: stringField(record.detail) || stringField(imageURL.detail),
+      ...imageMeta(imageURL.url),
+    };
   }
   return null;
 }
 
 function inputImagePart(record: Record<string, unknown>): MessagePart | null {
   if (typeof record.image_url === 'string') {
-    return { kind: 'image_url', url: record.image_url, label: 'Image' };
+    return { kind: 'image_url', url: record.image_url, label: 'Image', detail: stringField(record.detail), ...imageMeta(record.image_url) };
   }
   if (isRecord(record.image_url) && typeof record.image_url.url === 'string') {
-    return { kind: 'image_url', url: record.image_url.url, label: 'Image' };
+    return {
+      kind: 'image_url',
+      url: record.image_url.url,
+      label: 'Image',
+      detail: stringField(record.detail) || stringField(record.image_url.detail),
+      ...imageMeta(record.image_url.url),
+    };
   }
   return null;
 }
@@ -1050,6 +1385,10 @@ function textField(record: Record<string, unknown>): string | null {
   if (typeof record.output_text === 'string') return record.output_text;
   if (typeof record.input_text === 'string') return record.input_text;
   return null;
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
 function parseJsonMaybe(value: unknown): unknown {
@@ -1145,6 +1484,19 @@ function messagePartCopyText(part: MessagePart): string {
   if (part.kind === 'image_url') return `Image: ${part.label}\n${part.url}`;
   if (part.kind === 'empty') return part.label;
   return `${part.label}\n${prettyJson(part.raw)}`;
+}
+
+function messagePartSnippetText(part: MessagePart): string {
+  if (part.kind === 'image' || part.kind === 'image_url') {
+    const dims = part.width && part.height ? `${part.width}x${part.height}` : 'unknown size';
+    const detail = part.detail ? `, ${part.detail}` : '';
+    return `Image: ${part.label} (${dims}${detail})`;
+  }
+  if (part.kind === 'tool_result') {
+    const id = part.toolUseId ? ` ${part.toolUseId}` : '';
+    return [`Tool Result${id}`, ...part.parts.map(messagePartSnippetText)].join('\n');
+  }
+  return messagePartCopyText(part);
 }
 
 function isSingleLineText(text: string): boolean {

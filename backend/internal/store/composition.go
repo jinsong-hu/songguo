@@ -56,12 +56,12 @@ func (s *Store) GetComposition(callID int64) (compose.Composition, error) {
 }
 
 // AggComposition is the aggregated context decomposition over a window. Tokens
-// are locally counted (o200k_base) per block and summed — deliberately NOT
-// anchored to the vendor's official input total, so proportions stay stable for
-// an unchanged prompt. It therefore covers only the requests we could decompose
-// (chat calls with a parseable body); it does not reconcile to the Overview
-// Tokens KPI. Requests counts those decomposed calls; AvgTotal is their mean
-// self-counted window size.
+// are locally estimated per block (text tokens plus visual-token weights where
+// available) and summed — deliberately NOT anchored to the vendor's official
+// input total, so proportions stay stable for an unchanged prompt. It therefore
+// covers only the requests we could decompose (chat calls with a parseable body);
+// it does not reconcile to the Overview Tokens KPI. Requests counts those
+// decomposed calls; AvgTotal is their mean self-counted window size.
 type AggComposition struct {
 	Sources  []compose.Source
 	Requests int
