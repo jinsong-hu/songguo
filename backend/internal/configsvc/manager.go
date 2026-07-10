@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/songguo/songguo/internal/catalog"
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/store"
 	"github.com/songguo/songguo/internal/wire"
@@ -71,6 +72,10 @@ func (m *Manager) build() (*config.Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configsvc: list providers: %w", err)
 	}
+	cat, err := catalog.Load()
+	if err != nil {
+		return nil, fmt.Errorf("configsvc: load catalog: %w", err)
+	}
 	cfg := config.Config{}
 	for _, pvd := range providers {
 		if !pvd.Enabled {
@@ -81,7 +86,7 @@ func (m *Manager) build() (*config.Snapshot, error) {
 				"provider", pvd.Name, "has_key", pvd.APIKey != "", "models", len(pvd.Models))
 			continue
 		}
-		cfg.Vendors = append(cfg.Vendors, vendorsFromProvider(pvd, m.logger)...)
+		cfg.Vendors = append(cfg.Vendors, vendorsFromProvider(pvd, cat, m.logger)...)
 	}
 
 	return config.Build(cfg)
@@ -96,28 +101,24 @@ func (m *Manager) build() (*config.Snapshot, error) {
 // stable for single-host providers); additional groups get an "-<adapter>"
 // suffix. Every group carries the provider id as its credential id, so an
 // X-Songguo-Provider pin resolves across the split.
-func vendorsFromProvider(pvd store.Provider, logger *slog.Logger) []config.Vendor {
+func vendorsFromProvider(pvd store.Provider, cat catalog.Catalog, logger *slog.Logger) []config.Vendor {
 	models := make([]string, 0, len(pvd.Models))
 	prices := make(map[string]config.Price, len(pvd.Models))
 	for _, m := range pvd.Models {
 		models = append(models, m.Model)
-		unit := m.Unit
-		if unit == "" {
-			unit = "per_1m_tokens"
-		}
-		p := config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: unit}
+		p := effectivePrice(pvd.CatalogID, m, cat)
 		prices[m.Model] = p
 
 		// Price-completeness warnings (non-fatal): both cases silently meter calls
 		// as $0, which looks identical to "free" in the ledger. Warn, don't block —
 		// a half-priced provider must still route.
 		switch {
-		case !config.KnownPriceUnits[unit]:
+		case !config.KnownPriceUnits[p.Unit]:
 			logger.Warn("price unit not recognized; calls for this model will meter as $0",
-				"provider", pvd.Name, "model", m.Model, "unit", unit)
+				"provider", pvd.Name, "model", m.Model, "unit", p.Unit)
 		case config.PriceMetersZero(p):
 			logger.Warn("price is zero; calls for this model will meter as $0",
-				"provider", pvd.Name, "model", m.Model, "unit", unit)
+				"provider", pvd.Name, "model", m.Model, "unit", p.Unit)
 		}
 	}
 
@@ -187,6 +188,36 @@ func vendorsFromProvider(pvd store.Provider, logger *slog.Logger) []config.Vendo
 		})
 	}
 	return vendors
+}
+
+func effectivePrice(catalogID string, m store.ProviderModel, cat catalog.Catalog) config.Price {
+	if !m.PriceOverride {
+		if p, ok := catalogModelPrice(cat, catalogID, m.Model); ok {
+			return p
+		}
+	}
+	unit := m.Unit
+	if unit == "" {
+		unit = "per_1m_tokens"
+	}
+	return config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: unit}
+}
+
+func catalogModelPrice(cat catalog.Catalog, catalogID, model string) (config.Price, bool) {
+	if catalogID == "" {
+		return config.Price{}, false
+	}
+	for _, v := range cat.Vendors {
+		if v.ID != catalogID {
+			continue
+		}
+		m, ok := v.Models[model]
+		if !ok {
+			return config.Price{}, false
+		}
+		return config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: m.Unit}, true
+	}
+	return config.Price{}, false
 }
 
 // originOf returns the scheme://host of a (possibly {model}-templated) endpoint

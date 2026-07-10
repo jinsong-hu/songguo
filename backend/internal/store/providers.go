@@ -52,6 +52,10 @@ type ProviderModel struct {
 	Output      float64
 	CachedInput float64
 	Unit        string
+	// PriceOverride means Input/Output/CachedInput/Unit are an explicit admin
+	// override. When false, catalog-backed providers can resolve pricing from
+	// the current catalog while this row only declares the served model.
+	PriceOverride bool
 }
 
 // NewProvider describes a provider to create. APIKey carries the plaintext key.
@@ -120,7 +124,7 @@ func (s *Store) ListProviders() ([]Provider, error) {
 		return nil, nil
 	}
 
-	modelRows, err := s.db.Query(`SELECT provider_id, model, input, output, cached_input, unit FROM provider_models ORDER BY model`)
+	modelRows, err := s.db.Query(`SELECT provider_id, model, input, output, cached_input, unit, price_override FROM provider_models ORDER BY model`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list models: %w", err)
 	}
@@ -130,9 +134,11 @@ func (s *Store) ListProviders() ([]Provider, error) {
 			m   ProviderModel
 			pid string
 		)
-		if err := modelRows.Scan(&pid, &m.Model, &m.Input, &m.Output, &m.CachedInput, &m.Unit); err != nil {
+		var priceOverride int64
+		if err := modelRows.Scan(&pid, &m.Model, &m.Input, &m.Output, &m.CachedInput, &m.Unit, &priceOverride); err != nil {
 			return nil, fmt.Errorf("store: scan model: %w", err)
 		}
+		m.PriceOverride = priceOverride != 0
 		if i, ok := index[pid]; ok {
 			pvds[i].Models = append(pvds[i].Models, m)
 		}
@@ -177,16 +183,18 @@ func (s *Store) GetProvider(id string) (Provider, error) {
 		return Provider{}, fmt.Errorf("store: get provider: %w", err)
 	}
 
-	modelRows, err := s.db.Query(`SELECT model, input, output, cached_input, unit FROM provider_models WHERE provider_id = ? ORDER BY model`, id)
+	modelRows, err := s.db.Query(`SELECT model, input, output, cached_input, unit, price_override FROM provider_models WHERE provider_id = ? ORDER BY model`, id)
 	if err != nil {
 		return Provider{}, fmt.Errorf("store: get models: %w", err)
 	}
 	defer modelRows.Close()
 	for modelRows.Next() {
 		var m ProviderModel
-		if err := modelRows.Scan(&m.Model, &m.Input, &m.Output, &m.CachedInput, &m.Unit); err != nil {
+		var priceOverride int64
+		if err := modelRows.Scan(&m.Model, &m.Input, &m.Output, &m.CachedInput, &m.Unit, &priceOverride); err != nil {
 			return Provider{}, fmt.Errorf("store: scan model: %w", err)
 		}
+		m.PriceOverride = priceOverride != 0
 		pvd.Models = append(pvd.Models, m)
 	}
 	if err := modelRows.Err(); err != nil {
@@ -403,8 +411,8 @@ func insertModels(tx *sql.Tx, providerID string, models []ProviderModel) error {
 		if unit == "" {
 			unit = "per_1m_tokens"
 		}
-		if _, err := tx.Exec(`INSERT OR REPLACE INTO provider_models (provider_id, model, input, output, cached_input, unit) VALUES (?, ?, ?, ?, ?, ?)`,
-			providerID, m.Model, m.Input, m.Output, m.CachedInput, unit); err != nil {
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO provider_models (provider_id, model, input, output, cached_input, unit, price_override) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			providerID, m.Model, m.Input, m.Output, m.CachedInput, unit, boolToInt(m.PriceOverride)); err != nil {
 			return fmt.Errorf("store: insert model: %w", err)
 		}
 	}

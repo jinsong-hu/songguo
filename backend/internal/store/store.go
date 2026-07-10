@@ -224,7 +224,9 @@ func (s *Store) migrate() error {
 			model       TEXT NOT NULL,
 			input       REAL NOT NULL DEFAULT 0,
 			output      REAL NOT NULL DEFAULT 0,
+			cached_input REAL NOT NULL DEFAULT 0,
 			unit        TEXT NOT NULL DEFAULT 'per_1m_tokens',
+			price_override INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (provider_id, model)
 		)`,
 		// Per-provider wire allowlist: which wire-protocol entries (path pattern +
@@ -283,6 +285,7 @@ func (s *Store) migrate() error {
 		{"providers", "quirks", "TEXT NOT NULL DEFAULT '{}'"},
 		{"providers", "api_key", "TEXT NOT NULL DEFAULT ''"},
 		{"provider_models", "cached_input", "REAL NOT NULL DEFAULT 0"},
+		{"provider_models", "price_override", "INTEGER NOT NULL DEFAULT 0"},
 		// key_full stores the plaintext key so the dashboard can display and copy
 		// it after creation. Empty for rows created before this column existed.
 		{"users", "key_full", "TEXT NOT NULL DEFAULT ''"},

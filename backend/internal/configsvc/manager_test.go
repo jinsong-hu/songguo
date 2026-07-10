@@ -133,6 +133,47 @@ func TestManagerWarnsOnUnpriceableModels(t *testing.T) {
 	}
 }
 
+func TestManagerUsesCatalogPriceUnlessOverridden(t *testing.T) {
+	st := openTestStore(t)
+
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name:      "openai",
+		Vendor:    "OpenAI",
+		CatalogID: "openai",
+		Enabled:   true,
+		APIKey:    "sk-a",
+		Models: []store.ProviderModel{
+			// Stale copied price: because PriceOverride is false, the catalog
+			// value for gpt-5.6-luna should be used instead.
+			{Model: "gpt-5.6-luna", Input: 99, Output: 99, Unit: "per_1m_tokens"},
+			// Explicit override: the stored value should be preserved.
+			{Model: "gpt-5.6-sol", Input: 7, Output: 8, Unit: "per_1m_tokens", PriceOverride: true},
+		},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://api.openai.com/v1/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	luna, ok := m.Current().PriceFor("openai", "gpt-5.6-luna")
+	if !ok {
+		t.Fatal("missing catalog-tracked price")
+	}
+	if luna.Input != 1 || luna.Output != 6 || luna.CachedInput != 0.1 {
+		t.Fatalf("gpt-5.6-luna price = %+v, want catalog price", luna)
+	}
+	sol, ok := m.Current().PriceFor("openai", "gpt-5.6-sol")
+	if !ok {
+		t.Fatal("missing override price")
+	}
+	if sol.Input != 7 || sol.Output != 8 {
+		t.Fatalf("gpt-5.6-sol price = %+v, want explicit override", sol)
+	}
+}
+
 // A provider whose endpoints span two (origin, adapter) groups (e.g. DeepSeek's
 // OpenAI and Anthropic surfaces, same host but different auth) expands into two
 // routing vendors sharing one key: the primary group keeps the provider name,

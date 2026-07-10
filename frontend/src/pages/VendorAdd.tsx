@@ -410,6 +410,7 @@ export interface CatalogPrice {
   output: number;
   cached_input: number;
   unit: string;
+  price_override?: boolean;
 }
 
 // Flatten every catalog vendor's price list into one model-id → price index.
@@ -472,6 +473,7 @@ function customPrice(id: string, priceIndex: Record<string, CatalogPrice>): Prov
     output: p?.output ?? 0,
     cached_input: p?.cached_input ?? 0,
     unit: p?.unit ?? 'per_1m_tokens',
+    price_override: true,
   };
 }
 

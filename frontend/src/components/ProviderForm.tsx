@@ -165,12 +165,33 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
   const [priceMap, setPriceMap] = useState<Record<string, CatalogPrice>>(() => {
     const m: Record<string, CatalogPrice> = {};
     for (const pm of editing.models) {
-      m[pm.model] = { input: pm.input, output: pm.output, cached_input: pm.cached_input, unit: pm.unit };
+      if (pm.price_override || !editing.catalog_id) {
+        m[pm.model] = {
+          input: pm.input,
+          output: pm.output,
+          cached_input: pm.cached_input,
+          unit: pm.unit,
+          price_override: true,
+        };
+      }
     }
     return m;
   });
+  const savedPriceMap = useMemo(() => {
+    const m: Record<string, CatalogPrice> = {};
+    for (const pm of editing.models) {
+      m[pm.model] = {
+        input: pm.input,
+        output: pm.output,
+        cached_input: pm.cached_input,
+        unit: pm.unit,
+        price_override: pm.price_override,
+      };
+    }
+    return m;
+  }, [editing.models]);
   const setPrice = (id: string, patch: Partial<CatalogPrice>) =>
-    setPriceMap((p) => ({ ...p, [id]: { ...priceFor(id), ...patch } }));
+    setPriceMap((p) => ({ ...p, [id]: { ...priceFor(id), ...patch, price_override: true } }));
 
   // Price used for a model: an explicit override wins, else the catalog/borrowed
   // price, else zero.
@@ -185,7 +206,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
         unit: fromVendor.unit,
       };
     const borrowed = priceIndex[id];
-    return borrowed ?? { input: 0, output: 0, cached_input: 0, unit: 'per_1m_tokens' };
+    return borrowed ?? savedPriceMap[id] ?? { input: 0, output: 0, cached_input: 0, unit: 'per_1m_tokens' };
   };
 
   // --- Routing / behaviour knobs ---
@@ -281,7 +302,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
     const { endpoints, models } = buildProvider(
       vendor,
       wireModels,
-      (id) => ({ model: id, ...priceFor(id) }),
+      (id) => ({ model: id, ...priceFor(id), price_override: isCustom ? true : priceFor(id).price_override }),
       base,
       enabledUtility(),
     );

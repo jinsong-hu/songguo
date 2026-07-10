@@ -467,6 +467,8 @@ export interface ProviderModel {
   /** Rate for cache-hit input tokens; 0 = no discount (full input rate). */
   cached_input: number;
   unit: string;
+  /** True when this row intentionally overrides catalog pricing. */
+  price_override?: boolean;
 }
 
 /** One wire bound to its full upstream URL + adapter (auth scheme); 1:1 with the wire. */

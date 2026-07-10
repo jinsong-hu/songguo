@@ -15,7 +15,7 @@ func TestProviderCRUDRoundTrip(t *testing.T) {
 		Enabled:  true,
 		APIKey:   "sk-aaa",
 		Models: []ProviderModel{
-			{Model: "gpt-4o", Input: 2.5, Output: 10, Unit: "per_1m_tokens"},
+			{Model: "gpt-4o", Input: 2.5, Output: 10, Unit: "per_1m_tokens", PriceOverride: true},
 			{Model: "gpt-4o-mini", Input: 0.15, Output: 0.6, Unit: "per_1m_tokens"},
 		},
 		Endpoints: []ProviderEndpoint{
@@ -35,6 +35,9 @@ func TestProviderCRUDRoundTrip(t *testing.T) {
 	if len(pvd.Models) != 2 {
 		t.Fatalf("models = %d, want 2", len(pvd.Models))
 	}
+	if !pvd.Models[0].PriceOverride {
+		t.Fatalf("price override flag was not persisted: %+v", pvd.Models)
+	}
 	if len(pvd.Endpoints) != 2 {
 		t.Fatalf("endpoints = %d, want 2", len(pvd.Endpoints))
 	}
@@ -53,7 +56,7 @@ func TestProviderCRUDRoundTrip(t *testing.T) {
 	updated, err := s.UpdateProvider(pvd.ID, ProviderUpdate{
 		Name:      &newName,
 		Enabled:   &disabled,
-		Models:    []ProviderModel{{Model: "gpt-4o", Input: 3, Output: 12, Unit: "per_1m_tokens"}},
+		Models:    []ProviderModel{{Model: "gpt-4o", Input: 3, Output: 12, Unit: "per_1m_tokens", PriceOverride: true}},
 		Endpoints: []ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://api.openai.com/v1/chat/completions", Adapter: "openai-compatible"}},
 	})
 	if err != nil {
@@ -65,7 +68,7 @@ func TestProviderCRUDRoundTrip(t *testing.T) {
 	if updated.Enabled {
 		t.Error("expected disabled")
 	}
-	if len(updated.Models) != 1 || updated.Models[0].Input != 3 {
+	if len(updated.Models) != 1 || updated.Models[0].Input != 3 || !updated.Models[0].PriceOverride {
 		t.Errorf("models not replaced: %+v", updated.Models)
 	}
 	if len(updated.Endpoints) != 1 || updated.Endpoints[0].Wire != "openai/chat" {

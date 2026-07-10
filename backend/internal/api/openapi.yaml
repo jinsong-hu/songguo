@@ -971,6 +971,7 @@ components:
         output: { type: number }
         cached_input: { type: number }
         unit: { type: string, description: "e.g. per_1m_tokens." }
+        price_override: { type: boolean, description: "When false, catalog-backed providers use the current catalog price for this model." }
     VendorStats:
       type: object
       properties:
