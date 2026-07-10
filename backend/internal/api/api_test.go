@@ -412,7 +412,7 @@ func TestCallAndSessionContextIncludeComposition(t *testing.T) {
 
 	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
 
-	rec := do(h, "GET", "/api/calls/"+strconv.FormatInt(id2, 10), "secret", nil)
+	rec := do(h, "GET", "/api/calls/"+id2, "secret", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("call detail: code = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -429,7 +429,7 @@ func TestCallAndSessionContextIncludeComposition(t *testing.T) {
 	var ctx sessionContextView
 	decodeBody(t, rec, &ctx)
 	if len(ctx.Turns) != 2 || ctx.Turns[1].CallID != id2 {
-		t.Fatalf("turns = %+v, want latest call id %d", ctx.Turns, id2)
+		t.Fatalf("turns = %+v, want latest call id %q", ctx.Turns, id2)
 	}
 	if ctx.Distribution.Requests != 2 || ctx.Distribution.AvgTotal != 150 {
 		t.Fatalf("distribution requests/avg = %d/%v, want 2/150", ctx.Distribution.Requests, ctx.Distribution.AvgTotal)

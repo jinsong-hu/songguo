@@ -32,7 +32,7 @@ func TestAppendCallRoundTripsAttribution(t *testing.T) {
 
 func TestGetCallNotFound(t *testing.T) {
 	s := openTestStore(t)
-	if _, err := s.GetCall(999); err != ErrNotFound {
+	if _, err := s.GetCall("999"); err != ErrNotFound {
 		t.Errorf("GetCall(missing) err = %v, want ErrNotFound", err)
 	}
 }

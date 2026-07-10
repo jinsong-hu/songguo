@@ -116,7 +116,7 @@ func TestCallTraceDisplaysGzipText(t *testing.T) {
 	}
 	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
 
-	rec := do(h, "GET", "/api/calls/"+strconv.FormatInt(id, 10)+"/trace", "secret", nil)
+	rec := do(h, "GET", "/api/calls/"+id+"/trace", "secret", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("trace: code = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -160,7 +160,7 @@ func TestCallTraceDisplaysZstdText(t *testing.T) {
 	}
 	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
 
-	rec := do(h, "GET", "/api/calls/"+strconv.FormatInt(id, 10)+"/trace", "secret", nil)
+	rec := do(h, "GET", "/api/calls/"+id+"/trace", "secret", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("trace: code = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -201,7 +201,7 @@ func TestCallTraceDisplaysBrotliText(t *testing.T) {
 	}
 	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
 
-	rec := do(h, "GET", "/api/calls/"+strconv.FormatInt(id, 10)+"/trace", "secret", nil)
+	rec := do(h, "GET", "/api/calls/"+id+"/trace", "secret", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("trace: code = %d, body = %s", rec.Code, rec.Body.String())
 	}

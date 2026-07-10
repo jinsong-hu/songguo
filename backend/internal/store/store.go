@@ -657,7 +657,7 @@ func (s *Store) migrateCallsToUUID() error {
 	// Preserve every current column except the retired `attempt`; map id → TEXT
 	// and splice in ts_end (NULL for historical rows). Column list is discovered
 	// so post-v1 additions (wire, input_tokens, session_id, …) carry over.
-	cols, err := s.columnNames("calls")
+	cols, err := columnNames(s.db, "calls")
 	if err != nil {
 		return err
 	}
@@ -807,12 +807,23 @@ func rebuildChildCallID(tx *sql.Tx, s *Store, table, createBody string) error {
 	if _, err := tx.Exec(fmt.Sprintf(`CREATE TABLE %s (%s)`, tmp, createBody)); err != nil {
 		return fmt.Errorf("store: create %s: %w", tmp, err)
 	}
-	cols, err := s.columnNames(table)
+	cols, err := columnNames(tx, table)
 	if err != nil {
 		return err
 	}
+	targetCols, err := columnNames(tx, tmp)
+	if err != nil {
+		return err
+	}
+	targetSet := make(map[string]bool, len(targetCols))
+	for _, c := range targetCols {
+		targetSet[c] = true
+	}
 	var names, exprs []string
 	for _, c := range cols {
+		if !targetSet[c] {
+			continue
+		}
 		names = append(names, c)
 		if c == "call_id" {
 			exprs = append(exprs, `CAST(call_id AS TEXT)`)
@@ -860,9 +871,12 @@ func (s *Store) columnType(table, col string) (string, error) {
 	return "", rows.Err()
 }
 
-// columnNames returns the column names of a table in declared order.
-func (s *Store) columnNames(table string) ([]string, error) {
-	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+// columnNames returns the column names of a table in declared order. queryer is
+// either the store DB or an active migration transaction.
+func columnNames(queryer interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}, table string) ([]string, error) {
+	rows, err := queryer.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
 		return nil, fmt.Errorf("store: table_info %s: %w", table, err)
 	}

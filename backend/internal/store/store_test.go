@@ -57,6 +57,92 @@ func TestMigrationsIdempotent(t *testing.T) {
 	}
 }
 
+func TestMigrationDropsRetiredPayloadColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-payloads.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql open: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE calls (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts            INTEGER NOT NULL,
+			user_id       TEXT NOT NULL DEFAULT '',
+			model         TEXT NOT NULL DEFAULT '',
+			modality      TEXT NOT NULL DEFAULT 'unknown',
+			vendor        TEXT NOT NULL DEFAULT '',
+			credential_id TEXT NOT NULL DEFAULT '',
+			status        INTEGER NOT NULL DEFAULT 0,
+			err           TEXT NOT NULL DEFAULT '',
+			usage         TEXT NOT NULL DEFAULT '{}',
+			cost          REAL NOT NULL DEFAULT 0,
+			latency_ms    INTEGER NOT NULL DEFAULT 0,
+			stream        INTEGER NOT NULL DEFAULT 0,
+			tags          TEXT NOT NULL DEFAULT '{}'
+		);
+		CREATE TABLE payloads (
+			call_id           INTEGER PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE,
+			req_headers       TEXT NOT NULL DEFAULT '{}',
+			req_body          BLOB,
+			req_content_type  TEXT NOT NULL DEFAULT '',
+			req_truncated     INTEGER NOT NULL DEFAULT 0,
+			resp_headers      TEXT NOT NULL DEFAULT '{}',
+			resp_body         BLOB,
+			resp_content_type TEXT NOT NULL DEFAULT '',
+			resp_truncated    INTEGER NOT NULL DEFAULT 0,
+			created_at        INTEGER NOT NULL
+		);
+		INSERT INTO calls (id, ts, model, status) VALUES (7, 100, 'legacy-model', 200);
+		INSERT INTO payloads (
+			call_id, req_headers, req_body, req_content_type, req_truncated,
+			resp_headers, resp_body, resp_content_type, resp_truncated, created_at
+		) VALUES (
+			7, '{"x-request":"kept"}', x'72657175657374', 'application/json', 1,
+			'{"x-response":"kept"}', x'726573706f6e7365', 'application/json', 1, 100
+		);
+	`); err != nil {
+		t.Fatalf("seed legacy schema: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy DB: %v", err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("migrate legacy DB: %v", err)
+	}
+
+	if typ, err := s.columnType("calls", "id"); err != nil || typ != "TEXT" {
+		t.Fatalf("calls.id type = %q, err = %v; want TEXT", typ, err)
+	}
+	if typ, err := s.columnType("raw", "call_id"); err != nil || typ != "TEXT" {
+		t.Fatalf("raw.call_id type = %q, err = %v; want TEXT", typ, err)
+	}
+	if typ, err := s.columnType("raw", "req_truncated"); err != nil || typ != "" {
+		t.Fatalf("raw.req_truncated type = %q, err = %v; want column removed", typ, err)
+	}
+	var callID, reqHeaders, respHeaders string
+	var reqBody, respBody []byte
+	if err := s.db.QueryRow(`SELECT call_id, req_headers, req_body, resp_headers, resp_body FROM raw`).
+		Scan(&callID, &reqHeaders, &reqBody, &respHeaders, &respBody); err != nil {
+		t.Fatalf("read migrated raw row: %v", err)
+	}
+	if callID != "7" || reqHeaders != `{"x-request":"kept"}` || string(reqBody) != "request" ||
+		respHeaders != `{"x-response":"kept"}` || string(respBody) != "response" {
+		t.Fatalf("migrated raw row = (%q, %q, %q, %q, %q)",
+			callID, reqHeaders, reqBody, respHeaders, respBody)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close migrated DB: %v", err)
+	}
+
+	s, err = Open(path)
+	if err != nil {
+		t.Fatalf("second Open (idempotent migrate): %v", err)
+	}
+	defer s.Close()
+}
+
 func TestMigrationBackfillsNullUserCapture(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy-null-capture.db")
 	db, err := sql.Open("sqlite", path)
