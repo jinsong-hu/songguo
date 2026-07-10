@@ -1,31 +1,30 @@
 .donutWrap {
   display: grid;
-  gap: 18px 26px;
+  gap: 18px 42px;
   align-items: center;
-  width: min(100%, 980px);
+  width: 100%;
 }
 
 .modeOneRight {
-  grid-template-columns: 240px minmax(320px, 500px);
+  grid-template-columns: minmax(0, 1fr) 240px minmax(320px, 1fr);
   grid-template-areas:
-    "main right"
-    "legend legend";
+    ". main right"
+    "legend legend legend";
 }
 
 .modeOneLeft {
-  grid-template-columns: minmax(320px, 500px) 240px;
+  grid-template-columns: minmax(320px, 1fr) 240px minmax(0, 1fr);
   grid-template-areas:
-    "left main"
-    "legend legend";
+    "left main ."
+    "legend legend legend";
 }
 
 .modeTwo,
 .modeFour {
-  grid-template-columns: minmax(260px, 340px) 240px minmax(260px, 340px);
+  grid-template-columns: minmax(260px, 1fr) 240px minmax(260px, 1fr);
   grid-template-areas:
     "left main right"
     "legend legend legend";
-  column-gap: 42px;
 }
 
 .chartCluster {
@@ -82,10 +81,8 @@
 
 .breakoutColumn {
   min-height: 240px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-around;
-  gap: 14px;
+  display: grid;
+  grid-auto-rows: 1fr;
 }
 
 .leftBreakouts {
@@ -104,27 +101,20 @@
 }
 
 .breakoutRight {
-  grid-template-columns: 68px minmax(0, 1fr);
+  grid-template-columns: 96px minmax(0, 1fr);
 }
 
 .breakoutLeft {
-  grid-template-columns: minmax(0, 1fr) 68px;
+  grid-template-columns: minmax(0, 1fr) 96px;
 }
 
 .miniChart {
-  width: 68px;
-  height: 68px;
-}
-
-.breakoutRight .miniChart {
-  border-left: 3px solid;
-  padding-left: 4px;
+  width: 96px;
+  height: 96px;
 }
 
 .breakoutLeft .miniChart {
   grid-column: 2;
-  border-right: 3px solid;
-  padding-right: 4px;
 }
 
 .breakoutText {
@@ -272,18 +262,17 @@
 
   .breakoutColumn {
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
   }
 
   .breakoutLeft {
-    grid-template-columns: 68px minmax(0, 1fr);
+    grid-template-columns: 96px minmax(0, 1fr);
   }
 
   .breakoutLeft .miniChart {
     grid-column: 1;
-    border-right: none;
-    border-left: 3px solid;
-    padding-right: 0;
-    padding-left: 4px;
   }
 
   .breakoutLeft .breakoutText {

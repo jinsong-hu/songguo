@@ -63,17 +63,14 @@ export interface ContextSelection {
 
 const MAIN_SIZE = 240;
 const MAIN_CENTER = MAIN_SIZE / 2;
-const MAIN_OUTER_R = 90;
+const MAIN_OUTER_R = MAIN_CENTER * 0.78;
 const CONNECTOR_W = 54;
 const BREAKOUT_LIMIT = 4;
 
 type LayoutMode = 'one' | 'two' | 'four';
 
 function sideRows(n: number): number[] {
-  if (n <= 1) return [MAIN_CENTER];
-  const top = 70;
-  const bottom = MAIN_SIZE - 70;
-  return Array.from({ length: n }, (_, i) => top + ((bottom - top) * i) / (n - 1));
+  return Array.from({ length: n }, (_, i) => (MAIN_SIZE * (i + 0.5)) / n);
 }
 
 function chooseBreakouts(sources: SourceSlice[], total: number): { mode: LayoutMode; breakouts: SourceSlice[] } {
@@ -104,6 +101,24 @@ function sectorMidAngles(sources: SourceSlice[], total: number): Map<string, num
 function naturalSide(s: SourceSlice, angles: Map<string, number>): 'left' | 'right' {
   const angle = ((angles.get(s.key) ?? 0) * Math.PI) / 180;
   return Math.cos(angle) >= 0 ? 'right' : 'left';
+}
+
+function connectorPath(
+  source: SourceSlice,
+  side: 'left' | 'right',
+  targetY: number,
+  angles: Map<string, number>,
+): string {
+  const angle = ((angles.get(source.key) ?? 0) * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const startX = MAIN_CENTER + cos * MAIN_OUTER_R;
+  const startY = MAIN_CENTER - sin * MAIN_OUTER_R;
+  const radialX = MAIN_CENTER + cos * (MAIN_OUTER_R + 22);
+  const radialY = MAIN_CENTER - sin * (MAIN_OUTER_R + 22);
+  const endX = side === 'left' ? -CONNECTOR_W : MAIN_SIZE + CONNECTOR_W;
+  const approachX = endX + (side === 'left' ? 22 : -22);
+  return `M ${startX} ${startY} C ${radialX} ${radialY}, ${approachX} ${targetY}, ${endX} ${targetY}`;
 }
 
 function pushBalanced(cols: { left: SourceSlice[]; right: SourceSlice[] }, side: 'left' | 'right', s: SourceSlice) {
@@ -188,7 +203,7 @@ export function ContextSunburst({
     const childTotal = children.reduce((a, c) => a + c.tokens, 0) || 1;
     return (
       <div key={s.key} className={`${styles.breakout} ${side === 'left' ? styles.breakoutLeft : styles.breakoutRight}`}>
-        <div className={styles.miniChart} style={{ borderColor: srcColor(s.key) }}>
+        <div className={styles.miniChart}>
           <ChartContainer config={{}} className={CHART_CLS}>
             <PieChart>
               <ChartTooltip content={<ChartTooltipContent nameKey="name" />} />
@@ -285,7 +300,7 @@ export function ContextSunburst({
           </ChartContainer>
           <div className={styles.sunCenter}>
             <div className={styles.sunCenterVal}>{compact(centerValue ?? data.avg_total)}</div>
-            <div className={styles.sunCenterLbl}>{centerLabel}</div>
+            {centerLabel ? <div className={styles.sunCenterLbl}>{centerLabel}</div> : null}
           </div>
         </div>
         {breakouts.length > 0 ? (
@@ -295,9 +310,10 @@ export function ContextSunburst({
               return (
                 <path
                   key={s.key}
-                  d={`M ${MAIN_CENTER - MAIN_OUTER_R - 4} ${y} C ${MAIN_CENTER - MAIN_OUTER_R - 24} ${y}, ${-CONNECTOR_W + 20} ${y}, ${-CONNECTOR_W} ${y}`}
+                  d={connectorPath(s, 'left', y, angles)}
                   stroke={srcColor(s.key)}
                   strokeWidth="1.5"
+                  strokeLinecap="round"
                   fill="none"
                   opacity="0.72"
                 />
@@ -308,9 +324,10 @@ export function ContextSunburst({
               return (
                 <path
                   key={s.key}
-                  d={`M ${MAIN_CENTER + MAIN_OUTER_R + 4} ${y} C ${MAIN_CENTER + MAIN_OUTER_R + 24} ${y}, ${MAIN_SIZE + CONNECTOR_W - 20} ${y}, ${MAIN_SIZE + CONNECTOR_W} ${y}`}
+                  d={connectorPath(s, 'right', y, angles)}
                   stroke={srcColor(s.key)}
                   strokeWidth="1.5"
+                  strokeLinecap="round"
                   fill="none"
                   opacity="0.72"
                 />

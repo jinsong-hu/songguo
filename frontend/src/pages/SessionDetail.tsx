@@ -158,7 +158,7 @@ export function SessionDetailPage() {
                   }
                 />
               </div>
-              <ContextSunburst data={distribution} centerValue={distributionTotal} centerLabel="total windows" active={ctxSelection} onSelect={setCtxSelection} />
+              <ContextSunburst data={distribution} centerValue={distributionTotal} centerLabel="" active={ctxSelection} onSelect={setCtxSelection} />
               <ContextBlockDrilldown selection={ctxSelection} blocks={distribution.blocks ?? []} promptBlocks={prompt?.blocks ?? []} sources={distribution.sources} />
             </div>
           )}
