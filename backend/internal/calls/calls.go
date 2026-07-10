@@ -100,7 +100,7 @@ func ParseClientInfo(ua string) ClientInfo {
 		switch strings.ToLower(product) {
 		case "claude-cli", "claude-code":
 			return ClientInfo{Name: "claude-code", Version: version}
-		case "codex", "codex-cli", "codex-tui":
+		case "codex", "codex-cli", "codex-tui", "codex_cli_rs":
 			return ClientInfo{Name: "codex-openai", Version: version}
 		}
 	}

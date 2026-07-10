@@ -1771,10 +1771,13 @@ vendors:
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Originator", "codex-tui")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Originator", "codex_cli_rs")
 	req.Header.Set("Session-Id", "codex-session-42")
 	req.Header.Set("Thread-Id", "codex-thread-99")
 	req.Header.Set("X-Codex-Turn-Metadata", `{"session_id":"codex-session-42","thread_id":"codex-thread-99","turn_id":"turn-1"}`)
+	req.Header.Set("X-Codex-Window-Id", "codex-session-42:0")
+	req.Header.Set("User-Agent", "codex_cli_rs/0.137.0 (Debian 13.0.0; x86_64) unknown")
 	resp, err := env.client.Do(req)
 	if err != nil {
 		t.Fatalf("client.Do: %v", err)
@@ -1794,6 +1797,10 @@ vendors:
 	}
 	if entries[0].SessionID != "codex-session-42" {
 		t.Errorf("SessionID = %q, want codex-session-42", entries[0].SessionID)
+	}
+	if entries[0].ClientName != "codex-openai" || entries[0].ClientVersion != "0.137.0" {
+		t.Errorf("client = %q/%q, want codex-openai/0.137.0",
+			entries[0].ClientName, entries[0].ClientVersion)
 	}
 	if entries[0].AgentID != "" || entries[0].ParentAgentID != "" {
 		t.Errorf("Codex agent attribution = %q/%q, want empty/empty",
@@ -1846,6 +1853,12 @@ func TestExtractClientInfo(t *testing.T) {
 			ua:          "codex-tui/0.142.5",
 			wantName:    "codex-openai",
 			wantVersion: "0.142.5",
+		},
+		{
+			name:        "codex rust cli",
+			ua:          "codex_cli_rs/0.137.0 (Debian 13.0.0; x86_64) unknown",
+			wantName:    "codex-openai",
+			wantVersion: "0.137.0",
 		},
 		{
 			name: "unknown",
