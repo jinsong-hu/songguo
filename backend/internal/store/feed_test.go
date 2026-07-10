@@ -55,6 +55,9 @@ func TestFeedGroupsSessions(t *testing.T) {
 			t.Fatalf("AppendCall[%d]: %v", i, err)
 		}
 	}
+	if _, err := s.db.Exec(`UPDATE sessions SET title = ? WHERE id = ?`, "Recent activity titles", "sess"); err != nil {
+		t.Fatalf("set session title: %v", err)
+	}
 
 	rows, total, err := s.Feed(CallFilter{})
 	if err != nil {
@@ -83,6 +86,9 @@ func TestFeedGroupsSessions(t *testing.T) {
 	sess := rows[1]
 	if sess.Kind != "session" || sess.SessionID != "sess" {
 		t.Fatalf("rows[1] = %+v, want session sess", sess)
+	}
+	if sess.Title != "Recent activity titles" {
+		t.Errorf("session title = %q, want Recent activity titles", sess.Title)
 	}
 	if sess.Calls != 3 {
 		t.Errorf("session calls = %d, want 3", sess.Calls)

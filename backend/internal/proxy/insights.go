@@ -21,10 +21,15 @@ import (
 // incident.
 
 type insightsFork struct {
-	entries chan calls.Entry
+	entries chan sessionInsight
 	store   *store.Store
 	logger  *slog.Logger
 	wg      sync.WaitGroup
+}
+
+type sessionInsight struct {
+	entry calls.Entry
+	title string
 }
 
 const (
@@ -45,7 +50,7 @@ func newInsightsFork(st *store.Store, logger *slog.Logger, workers, queue int) *
 	if queue <= 0 {
 		queue = defaultInsightsQueue
 	}
-	f := &insightsFork{entries: make(chan calls.Entry, queue), store: st, logger: logger}
+	f := &insightsFork{entries: make(chan sessionInsight, queue), store: st, logger: logger}
 	f.wg.Add(workers)
 	for i := 0; i < workers; i++ {
 		go f.worker()
@@ -55,32 +60,33 @@ func newInsightsFork(st *store.Store, logger *slog.Logger, workers, queue int) *
 
 func (f *insightsFork) worker() {
 	defer f.wg.Done()
-	for e := range f.entries {
-		f.process(e)
+	for insight := range f.entries {
+		f.process(insight)
 	}
 }
 
 // submit hands a finalized call to the fork without ever blocking the caller. A
 // full queue means insights is backed up; the update is dropped (and logged)
 // rather than slowing the gateway.
-func (f *insightsFork) submit(e calls.Entry) {
+func (f *insightsFork) submit(e calls.Entry, title string) {
 	if f == nil {
 		return
 	}
 	select {
-	case f.entries <- e:
+	case f.entries <- sessionInsight{entry: e, title: title}:
 	default:
 		f.logger.Warn("insights queue full; dropping session update", "call_id", e.ID, "session_id", e.SessionID)
 	}
 }
 
-func (f *insightsFork) process(e calls.Entry) {
+func (f *insightsFork) process(insight sessionInsight) {
+	e := insight.entry
 	// Session-less traffic has no rollup; UpsertSessionCall no-ops on an empty
 	// session id, but skip the call entirely to avoid the round trip.
 	if e.SessionID == "" {
 		return
 	}
-	if err := f.store.UpsertSessionCall(e); err != nil {
+	if err := f.store.UpsertSessionCall(e, insight.title); err != nil {
 		f.logger.Error("session upsert failed", "err", err, "call_id", e.ID, "session_id", e.SessionID)
 	}
 }

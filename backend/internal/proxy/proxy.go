@@ -60,6 +60,7 @@ import (
 	"github.com/songguo/songguo/internal/parse"
 	"github.com/songguo/songguo/internal/pricing"
 	"github.com/songguo/songguo/internal/router"
+	"github.com/songguo/songguo/internal/sessiontitle"
 	"github.com/songguo/songguo/internal/store"
 	"github.com/songguo/songguo/internal/wire"
 )
@@ -130,8 +131,8 @@ func NewHandler(d Deps) http.Handler {
 
 // insights hands a finalized call to the async insights fork (fire and forget).
 // It never blocks or fails the forward; see docs/arch-insights.md.
-func (h *handler) insights(e calls.Entry) {
-	h.insight.submit(e)
+func (h *handler) insights(e calls.Entry, title string) {
+	h.insight.submit(e, title)
 }
 
 // defaultHTTPClient returns a client tuned for proxying, including long-lived
@@ -442,8 +443,14 @@ func (h *handler) denyCapture(w http.ResponseWriter, r *http.Request, body []byt
 		}
 	}
 
+	title := ""
+	if capture && err == nil && e.SessionID != "" {
+		reqBody := bodyForMeter(body, r.Header.Get("Content-Encoding"), h.logger)
+		title = capturedSessionTitle(r.Header, e.Wire, reqBody, respBytes)
+	}
+
 	// Hand the finalized denial to insights (async fork — fire and forget).
-	h.insights(e)
+	h.insights(e, title)
 }
 
 // resolve builds the route with a single rule: match the wire by path suffix,
@@ -830,9 +837,14 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		return
 	}
 	id := callID
+	title := ""
+	if capture && entry.SessionID != "" {
+		reqForTitle := bodyForMeter(reqBody, r.Header.Get("Content-Encoding"), h.logger)
+		title = capturedSessionTitle(r.Header, wireName, reqForTitle, parseRespBody)
+	}
 	// Hand the finalized call to insights (async fork — fire and forget; never
 	// blocks or fails the forward). See docs/arch-insights.md.
-	h.insights(entry)
+	h.insights(entry, title)
 
 	// Context-window composition: read-only sniff of the already-buffered request
 	// body to decompose the input context across sources (system, tool schemas,
@@ -1042,7 +1054,17 @@ func (h *handler) append(e calls.Entry) {
 		h.logger.Error("call finalize failed", "err", err, "vendor", e.Vendor, "model", e.Model)
 		return
 	}
-	h.insights(e)
+	h.insights(e, "")
+}
+
+func capturedSessionTitle(headers http.Header, wireName string, reqBody, respBody []byte) string {
+	if isCodexRequest(headers) {
+		return sessiontitle.FromCodex(reqBody)
+	}
+	if wireName == "anthropic/messages" {
+		return sessiontitle.FromClaude(reqBody, respBody)
+	}
+	return ""
 }
 
 // --- helpers ---

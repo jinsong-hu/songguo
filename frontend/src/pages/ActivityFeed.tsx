@@ -149,9 +149,16 @@ function FeedRowView({ row, onOpen }: { row: FeedRow; onOpen: () => void }) {
       </td>
       <td>
         {isSession ? (
-          <span className="mono" style={{ fontSize: 11.5 }}>
-            {shortId(row.session_id ?? '')}
-          </span>
+          <div className={styles.activitySession}>
+            <span className={styles.activitySessionTitle} title={row.title || row.session_id}>
+              {row.title || shortId(row.session_id ?? '')}
+            </span>
+            {row.title ? (
+              <span className={`mono ${styles.activitySessionId}`}>
+                {shortId(row.session_id ?? '')}
+              </span>
+            ) : null}
+          </div>
         ) : row.wire ? (
           <span className="mono" style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
             {row.wire}

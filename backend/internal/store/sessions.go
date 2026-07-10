@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -18,7 +19,7 @@ import (
 // after the current last_ts — advances last_status (which drives the inferred
 // outcome). Ordering by last_ts, not arrival, keeps the outcome correct even if
 // the insights fork processes two of a session's calls out of order.
-func (s *Store) UpsertSessionCall(e calls.Entry) error {
+func (s *Store) UpsertSessionCall(e calls.Entry, title string) error {
 	if e.SessionID == "" {
 		return nil // session-less traffic lives only in calls
 	}
@@ -43,9 +44,13 @@ func (s *Store) UpsertSessionCall(e calls.Entry) error {
 
 	if _, err := s.db.Exec(
 		`INSERT INTO sessions
-		   (id, first_ts, last_ts, turns, error_count, input_tokens, output_tokens, cost, last_status, has_subagents)
-		 VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+		   (id, title, first_ts, last_ts, turns, error_count, input_tokens, output_tokens, cost, last_status, has_subagents)
+		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
+		   title         = CASE
+		                     WHEN sessions.title = '' AND excluded.title != '' THEN excluded.title
+		                     ELSE sessions.title
+		                   END,
 		   first_ts      = MIN(first_ts, excluded.first_ts),
 		   last_ts       = MAX(last_ts, excluded.last_ts),
 		   turns         = turns + 1,
@@ -57,7 +62,7 @@ func (s *Store) UpsertSessionCall(e calls.Entry) error {
 		   -- seen so far, so out-of-order processing can't regress it.
 		   last_status   = CASE WHEN excluded.last_ts >= last_ts THEN excluded.last_status ELSE last_status END,
 		   has_subagents = MAX(has_subagents, excluded.has_subagents)`,
-		e.SessionID, tsMs, tsMs, isErr, e.InputTokens, e.OutputTokens, e.Cost, e.Status, hasSub,
+		e.SessionID, title, tsMs, tsMs, isErr, e.InputTokens, e.OutputTokens, e.Cost, e.Status, hasSub,
 	); err != nil {
 		return fmt.Errorf("store: upsert session call: %w", err)
 	}
@@ -67,6 +72,7 @@ func (s *Store) UpsertSessionCall(e calls.Entry) error {
 // SessionRow is one materialized session rollup.
 type SessionRow struct {
 	ID           string
+	Title        string
 	FirstTS      time.Time
 	LastTS       time.Time
 	Turns        int
@@ -76,6 +82,19 @@ type SessionRow struct {
 	Cost         float64
 	LastStatus   int
 	HasSubagents bool
+}
+
+// SessionTitle returns the durable title for a materialized session.
+func (s *Store) SessionTitle(id string) (string, error) {
+	var title string
+	err := s.db.QueryRow(`SELECT title FROM sessions WHERE id = ?`, id).Scan(&title)
+	if err == sql.ErrNoRows {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: session title: %w", err)
+	}
+	return title, nil
 }
 
 // Outcome classifies the session from its last-seen call status, mirroring the

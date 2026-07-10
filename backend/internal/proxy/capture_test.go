@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/songguo/songguo/internal/store"
 )
@@ -128,6 +129,62 @@ func TestCaptureOffStoresNothing(t *testing.T) {
 	callID := callIDForVendor(t, st, "vendorA")
 	if _, err := st.GetPayload(callID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected no payload when capture off, got err %v", err)
+	}
+}
+
+func TestCodexSessionTitleRequiresCapture(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		capture bool
+		want    string
+	}{
+		{name: "captured", capture: true, want: "Add persistent session titles to the recent activity"},
+		{name: "not captured", capture: false, want: ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			up := &mockUpstream{}
+			mock := httptest.NewServer(up.handler())
+			defer mock.Close()
+
+			st := openStore(t)
+			_, key := mustUser(t, st, store.NewUser{Name: "t", Capture: tt.capture})
+			env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL)), st)
+
+			body := `{"model":"gpt-4o","messages":[{"role":"user","content":"Add persistent session titles to the recent activity table today"}]}`
+			req, err := http.NewRequest(http.MethodPost, env.server.URL+"/v1/chat/completions", strings.NewReader(body))
+			if err != nil {
+				t.Fatalf("new request: %v", err)
+			}
+			req.Header.Set("Authorization", "Bearer "+key)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Originator", "codex-tui")
+			req.Header.Set("Session-Id", "codex-title-session")
+
+			resp, err := env.client.Do(req)
+			if err != nil {
+				t.Fatalf("client.Do: %v", err)
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want 200", resp.StatusCode)
+			}
+
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				got, err := st.SessionTitle("codex-title-session")
+				if err == nil && (got == tt.want || !tt.capture) {
+					if got != tt.want {
+						t.Fatalf("SessionTitle = %q, want %q", got, tt.want)
+					}
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("SessionTitle did not settle: got %q, err %v, want %q", got, err, tt.want)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		})
 	}
 }
 

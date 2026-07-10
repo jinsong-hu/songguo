@@ -817,6 +817,7 @@ components:
       properties:
         kind: { type: string, enum: [session, request] }
         session_id: { type: string }
+        title: { type: string, description: "Durable captured-session title; empty for standalone requests or untitled sessions." }
         request_id: { type: integer, format: int64 }
         calls: { type: integer }
         cost: { type: number }
@@ -879,6 +880,7 @@ components:
       type: object
       properties:
         session_id: { type: string }
+        title: { type: string }
         calls: { type: integer }
         cost: { type: number }
         input_tokens: { type: number }

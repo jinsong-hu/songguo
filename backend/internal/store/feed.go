@@ -16,6 +16,7 @@ import (
 type FeedRow struct {
 	Kind         string // "session" | "request"
 	SessionID    string // set when Kind == "session"
+	Title        string // durable captured-session title
 	RequestID    string // the call id (UUID) to link to when Kind == "request"
 	Calls        int    // number of calls in the group (1 for a request row)
 	Cost         float64
@@ -121,7 +122,62 @@ func (s *Store) Feed(f CallFilter) ([]FeedRow, int, error) {
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("store: feed: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, 0, fmt.Errorf("store: close feed rows: %w", err)
+	}
+	if err := s.attachFeedTitles(out); err != nil {
+		return nil, 0, err
+	}
 	return out, total, nil
+}
+
+func (s *Store) attachFeedTitles(feed []FeedRow) error {
+	ids := make([]string, 0, len(feed))
+	seen := map[string]struct{}{}
+	for _, row := range feed {
+		if row.Kind != "session" || row.SessionID == "" {
+			continue
+		}
+		if _, ok := seen[row.SessionID]; ok {
+			continue
+		}
+		seen[row.SessionID] = struct{}{}
+		ids = append(ids, row.SessionID)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	args := make([]any, len(ids))
+	placeholders := make([]string, len(ids))
+	for i, id := range ids {
+		args[i] = id
+		placeholders[i] = "?"
+	}
+	rows, err := s.db.Query(
+		`SELECT id, title FROM sessions WHERE id IN (`+strings.Join(placeholders, ",")+`)`,
+		args...,
+	)
+	if err != nil {
+		return fmt.Errorf("store: feed titles: %w", err)
+	}
+	defer rows.Close()
+
+	titles := make(map[string]string, len(ids))
+	for rows.Next() {
+		var id, title string
+		if err := rows.Scan(&id, &title); err != nil {
+			return fmt.Errorf("store: scan feed title: %w", err)
+		}
+		titles[id] = title
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store: feed titles: %w", err)
+	}
+	for i := range feed {
+		feed[i].Title = titles[feed[i].SessionID]
+	}
+	return nil
 }
 
 func scanFeedRow(rows *sql.Rows) (FeedRow, error) {

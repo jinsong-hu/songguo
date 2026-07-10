@@ -191,6 +191,8 @@ export interface FeedRow {
   kind: 'session' | 'request';
   /** Set for session rows — captured coding-agent session id to link to. */
   session_id?: string;
+  /** Durable title derived from captured session traffic. */
+  title?: string;
   /** Set for request rows — the call id (UUID) to link to. */
   request_id?: string;
   calls: number;

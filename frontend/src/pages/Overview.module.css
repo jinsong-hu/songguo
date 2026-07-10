@@ -226,6 +226,28 @@
   cursor: pointer;
 }
 
+.activitySession {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  max-width: 320px;
+}
+
+.activitySessionTitle {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activitySessionId {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .callRowOpen {
   background: var(--surface-2);
 }

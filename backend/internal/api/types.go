@@ -276,6 +276,7 @@ type callsView struct {
 type feedRowView struct {
 	Kind         string   `json:"kind"` // "session" | "request"
 	SessionID    string   `json:"session_id,omitempty"`
+	Title        string   `json:"title,omitempty"`
 	RequestID    string   `json:"request_id,omitempty"`
 	Calls        int      `json:"calls"`
 	Cost         float64  `json:"cost"`
@@ -312,6 +313,7 @@ func newFeedRowView(r store.FeedRow) feedRowView {
 	return feedRowView{
 		Kind:         r.Kind,
 		SessionID:    r.SessionID,
+		Title:        r.Title,
 		RequestID:    r.RequestID,
 		Calls:        r.Calls,
 		Cost:         r.Cost,

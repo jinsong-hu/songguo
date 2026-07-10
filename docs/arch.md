@@ -59,7 +59,7 @@ they differ by **grain** and by **who owns them**:
 |-------|-------|-------|-------|-----------|
 | **`raw`** | per-call | gateway | full raw request + response bodies and headers, capture-gated | **7 days** |
 | **`calls`** | per-call | gateway | the call-level **stats** — timestamps, status, err, model/vendor/wire, normalized tokens, cost, latency, session id | **90 days** |
-| **`sessions`** | per-session | insights | a **materialized rollup** of a coding-agent session — turns, tokens, duration, inferred outcome | **90 days** |
+| **`sessions`** | per-session | insights | a **materialized rollup** of a coding-agent session — captured title, turns, tokens, duration, inferred outcome | **90 days** |
 
 Read this as three concentric lifetimes:
 

@@ -118,7 +118,7 @@ func (s *Store) AppendCall(e calls.Entry) (string, error) {
 	// store stays self-consistent without the proxy's async insights fork. The
 	// live gateway path does NOT use AppendCall (it splits the two phases and
 	// forks the session update off the hot path), so this never double-counts.
-	if err := s.UpsertSessionCall(e); err != nil {
+	if err := s.UpsertSessionCall(e, ""); err != nil {
 		return "", err
 	}
 	return e.ID, nil
