@@ -165,7 +165,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
   const [priceMap, setPriceMap] = useState<Record<string, CatalogPrice>>(() => {
     const m: Record<string, CatalogPrice> = {};
     for (const pm of editing.models) {
-      if (pm.price_override || !editing.catalog_id) {
+      if (pm.price_override) {
         m[pm.model] = {
           input: pm.input,
           output: pm.output,
@@ -302,7 +302,10 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
     const { endpoints, models } = buildProvider(
       vendor,
       wireModels,
-      (id) => ({ model: id, ...priceFor(id), price_override: isCustom ? true : priceFor(id).price_override }),
+      (id) => {
+        const price = priceFor(id);
+        return { model: id, ...price, price_override: price.price_override };
+      },
       base,
       enabledUtility(),
     );

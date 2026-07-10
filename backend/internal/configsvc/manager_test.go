@@ -174,6 +174,35 @@ func TestManagerUsesCatalogPriceUnlessOverridden(t *testing.T) {
 	}
 }
 
+func TestManagerBorrowsCatalogPriceForUnlinkedProvider(t *testing.T) {
+	st := openTestStore(t)
+
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name:    "sub2api",
+		Vendor:  "Custom",
+		Enabled: true,
+		APIKey:  "sk-a",
+		Models: []store.ProviderModel{
+			{Model: "claude-haiku-4-5-20251001", Input: 0, Output: 0, Unit: "per_1m_tokens"},
+		},
+		Endpoints: []store.ProviderEndpoint{{Wire: "anthropic/messages", Endpoint: "https://api.example.com/v1/messages", Adapter: "anthropic-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	p, ok := m.Current().PriceFor("sub2api", "claude-haiku-4-5-20251001")
+	if !ok {
+		t.Fatal("missing borrowed price")
+	}
+	if p.Input != 1 || p.Output != 5 {
+		t.Fatalf("borrowed price = %+v, want catalog price", p)
+	}
+}
+
 // A provider whose endpoints span two (origin, adapter) groups (e.g. DeepSeek's
 // OpenAI and Anthropic surfaces, same host but different auth) expands into two
 // routing vendors sharing one key: the primary group keeps the provider name,

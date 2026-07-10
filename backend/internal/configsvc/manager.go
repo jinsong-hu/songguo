@@ -195,6 +195,9 @@ func effectivePrice(catalogID string, m store.ProviderModel, cat catalog.Catalog
 		if p, ok := catalogModelPrice(cat, catalogID, m.Model); ok {
 			return p
 		}
+		if p, ok := catalogAnyModelPrice(cat, m.Model); ok {
+			return p
+		}
 	}
 	unit := m.Unit
 	if unit == "" {
@@ -214,6 +217,17 @@ func catalogModelPrice(cat catalog.Catalog, catalogID, model string) (config.Pri
 		m, ok := v.Models[model]
 		if !ok {
 			return config.Price{}, false
+		}
+		return config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: m.Unit}, true
+	}
+	return config.Price{}, false
+}
+
+func catalogAnyModelPrice(cat catalog.Catalog, model string) (config.Price, bool) {
+	for _, v := range cat.Vendors {
+		m, ok := v.Models[model]
+		if !ok {
+			continue
 		}
 		return config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: m.Unit}, true
 	}
