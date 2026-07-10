@@ -5,20 +5,37 @@
       "name": "OpenAI",
       "homepage": "https://openai.com",
       "models": {
+        "gpt-5.6-luna": { "input": 1.0, "output": 6.0, "cached_input": 0.1, "unit": "per_1m_tokens", "context": 1050000, "modalities": ["text", "image"] },
+        "gpt-5.6-sol": { "input": 5.0, "output": 30.0, "cached_input": 0.5, "unit": "per_1m_tokens", "context": 1050000, "modalities": ["text", "image"] },
+        "gpt-5.6-terra": { "input": 2.5, "output": 15.0, "cached_input": 0.25, "unit": "per_1m_tokens", "context": 1050000, "modalities": ["text", "image"] },
         "gpt-5.5": { "input": 5.0, "output": 30.0, "cached_input": 0.5, "unit": "per_1m_tokens", "context": 1050000, "modalities": ["text", "image"] },
         "gpt-5.4": { "input": 2.5, "output": 15.0, "cached_input": 0.25, "unit": "per_1m_tokens", "context": 1050000, "modalities": ["text", "image"] },
         "gpt-5.4-mini": { "input": 0.75, "output": 4.5, "cached_input": 0.075, "unit": "per_1m_tokens", "context": 400000, "modalities": ["text", "image"] },
         "gpt-5.4-nano": { "input": 0.2, "output": 1.25, "cached_input": 0.02, "unit": "per_1m_tokens", "context": 400000, "modalities": ["text"] },
         "gpt-5-mini": { "input": 0.25, "output": 2.0, "cached_input": 0.025, "unit": "per_1m_tokens", "context": 400000, "modalities": ["text", "image"] },
+        "gpt-image-2": { "input": 5.0, "output": 30.0, "cached_input": 1.25, "unit": "per_1m_tokens", "modalities": ["text", "image"] },
         "text-embedding-3-small": { "input": 0.02, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] },
         "text-embedding-3-large": { "input": 0.13, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] }
       },
       "endpoints": [
-        { "wire": "openai/chat", "endpoint": "https://api.openai.com/v1/chat/completions", "adapter": "openai-compatible", "docs": "https://platform.openai.com/docs/api-reference/chat", "models": ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5-mini"] },
-        { "wire": "openai/responses", "endpoint": "https://api.openai.com/v1/responses", "adapter": "openai-compatible", "docs": "https://platform.openai.com/docs/api-reference/responses", "note": "OpenAI's newer stateful API for agents — the successor to Chat Completions, with built-in tools (web search, file search, computer use).", "models": ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5-mini"] },
+        { "wire": "openai/chat", "endpoint": "https://api.openai.com/v1/chat/completions", "adapter": "openai-compatible", "docs": "https://platform.openai.com/docs/api-reference/chat", "models": ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5-mini"] },
+        { "wire": "openai/responses", "endpoint": "https://api.openai.com/v1/responses", "adapter": "openai-compatible", "docs": "https://platform.openai.com/docs/api-reference/responses", "note": "OpenAI's newer stateful API for agents — the successor to Chat Completions, with built-in tools (web search, file search, computer use).", "models": ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5-mini"] },
         { "wire": "openai/embeddings", "endpoint": "https://api.openai.com/v1/embeddings", "adapter": "openai-compatible", "docs": "https://platform.openai.com/docs/api-reference/embeddings", "models": ["text-embedding-3-small", "text-embedding-3-large"] },
+        { "wire": "openai/images", "endpoint": "https://api.openai.com/v1/images/generations", "adapter": "openai-compatible", "docs": "https://platform.openai.com/docs/api-reference/images", "note": "gpt-image-2 has separate text-input and image-input rates; this catalog stores the text-input rate as input and the image-token generation rate as output.", "models": ["gpt-image-2"] },
         { "wire": "openai/completions", "endpoint": "https://api.openai.com/v1/completions", "adapter": "openai-compatible" },
         { "wire": "openai/models", "endpoint": "https://api.openai.com/v1", "adapter": "openai-compatible" }
+      ]
+    },
+    {
+      "id": "xai",
+      "name": "xAI",
+      "homepage": "https://x.ai",
+      "models": {
+        "grok-4.5": { "input": 3.0, "output": 15.0, "cached_input": 0.75, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] }
+      },
+      "endpoints": [
+        { "wire": "openai/chat", "endpoint": "https://api.x.ai/v1/chat/completions", "adapter": "openai-compatible", "docs": "https://docs.x.ai/docs/api-reference#chat-completions", "note": "OpenAI-compatible API; context caching is billed at the cached_input rate when reported by the upstream.", "models": ["grok-4.5"] },
+        { "wire": "openai/models", "endpoint": "https://api.x.ai/v1", "adapter": "openai-compatible" }
       ]
     },
     {
@@ -29,10 +46,11 @@
         "claude-fable-5": { "input": 10.0, "output": 50.0, "cached_input": 1.0, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text", "image"] },
         "claude-opus-4-8": { "input": 5.0, "output": 25.0, "cached_input": 0.5, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text", "image"] },
         "claude-sonnet-4-6": { "input": 3.0, "output": 15.0, "cached_input": 0.3, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text", "image"] },
+        "claude-haiku-4-5-20251001": { "input": 1.0, "output": 5.0, "cached_input": 0.1, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text", "image"] },
         "claude-haiku-4-5": { "input": 1.0, "output": 5.0, "cached_input": 0.1, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text", "image"] }
       },
       "endpoints": [
-        { "wire": "anthropic/messages", "endpoint": "https://api.anthropic.com/v1/messages", "adapter": "anthropic-compatible", "docs": "https://docs.anthropic.com/en/api/messages", "note": "Authenticates with x-api-key + anthropic-version. Point the Anthropic SDK's base_url at http://<songguo>; it appends /v1/messages.", "models": ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"] },
+        { "wire": "anthropic/messages", "endpoint": "https://api.anthropic.com/v1/messages", "adapter": "anthropic-compatible", "docs": "https://docs.anthropic.com/en/api/messages", "note": "Authenticates with x-api-key + anthropic-version. Point the Anthropic SDK's base_url at http://<songguo>; it appends /v1/messages.", "models": ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-haiku-4-5"] },
         { "wire": "anthropic/count_tokens", "endpoint": "https://api.anthropic.com/v1/messages/count_tokens", "adapter": "anthropic-compatible", "docs": "https://docs.anthropic.com/en/api/messages-count-tokens", "note": "Free token-counting endpoint (used by Claude Code). Same request shape as Messages; billed as zero-cost." }
       ]
     },
@@ -88,7 +106,7 @@
         "doubao-seedance-1.5-pro": { "input": 1.0, "output": 0.0, "unit": "per_call", "modalities": ["text", "image"] },
         "doubao-seedream-5.0-lite": { "input": 1.0, "output": 0.0, "unit": "per_call", "modalities": ["text", "image"] },
         "seed-tts-2.0": { "input": 0.0000417, "output": 0.0, "unit": "per_char", "modalities": ["text"] },
-        "doubao-seed-asr-2.0": { "input": 0.000135, "output": 0.0, "unit": "per_second", "modalities": ["audio"] }
+        "doubao-seed-asr-2.0": { "input": 0.0000327, "output": 0.0, "unit": "per_second", "modalities": ["audio"] }
       },
       "endpoints": [
         { "wire": "anthropic/messages", "endpoint": "https://ark.cn-beijing.volces.com/api/plan/v1/messages", "adapter": "anthropic-compatible", "docs": "https://www.volcengine.com/docs/82379/1302010", "note": "Ark Agent Plan (智能体套餐) — a flat subscription billed by deduction coefficient (抵扣系数), not per token; the per-token prices here are the origin vendors' list prices, for cost-comparison reference only. Anthropic wire (for Claude Code and Anthropic SDKs).", "models": ["doubao-seed-2.0-code", "doubao-seed-2.0-pro", "doubao-seed-2.0-lite", "doubao-seed-2.0-mini", "minimax-m3", "deepseek-v4-flash", "deepseek-v4-pro", "glm-5.2", "kimi-k2.6"] },
@@ -111,7 +129,7 @@
       "models": {
         "seed-tts-2.0": { "input": 0.0000417, "output": 0.0, "unit": "per_char", "modalities": ["text"] },
         "seed-icl-2.0": { "input": 0.0000417, "output": 0.0, "unit": "per_char", "modalities": ["text"] },
-        "doubao-seed-asr-2.0": { "input": 0.000135, "output": 0.0, "unit": "per_second", "modalities": ["audio"] }
+        "doubao-seed-asr-2.0": { "input": 0.0000327, "output": 0.0, "unit": "per_second", "modalities": ["audio"] }
       },
       "endpoints": [
         { "wire": "volc/tts-unidirectional", "endpoint": "https://openspeech.bytedance.com/api/v3/tts/unidirectional", "adapter": "volc-speech", "docs": "https://www.volcengine.com/docs/6561/2528925", "note": "豆包语音 synthesis, HTTP unidirectional. Full upstream path; auth swaps to X-Api-Key; X-Api-Resource-Id picks the model, billed per character (¥3/万字符 ÷ 7.2; set X-Control-Require-Usage-Tokens-Return to report usage).", "models": ["seed-tts-2.0", "seed-icl-2.0"] },
