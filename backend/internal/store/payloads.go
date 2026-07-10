@@ -22,6 +22,17 @@ type Payload struct {
 	CreatedAt       time.Time
 }
 
+// SessionRequest is the request-side capture for one call in a session. It is
+// intentionally narrower than Payload so session prompt reconstruction never
+// reads the usually much larger response BLOBs from SQLite.
+type SessionRequest struct {
+	CallID         string
+	Wire           string
+	ReqHeaders     map[string]string
+	ReqBody        []byte
+	ReqContentType string
+}
+
 // SavePayload upserts the raw body row for a call (INSERT OR REPLACE, keyed by
 // call_id). It is safe to call concurrently: all work goes through the shared
 // *sql.DB which serializes writes.
@@ -125,6 +136,48 @@ func (s *Store) HasPayloads(callIDs []string) (map[string]bool, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: has payloads: %w", err)
+	}
+	return out, nil
+}
+
+// SessionRequests returns captured request bodies among a session's latest
+// 1000 calls, ordered oldest-first to match QueryCalls on the detail endpoint.
+// Calls without a raw row are absent, which is expected after raw retention
+// has pruned captures while the longer-lived session summary still exists.
+func (s *Store) SessionRequests(sessionID string) ([]SessionRequest, error) {
+	rows, err := s.db.Query(
+		`SELECT c.id, c.wire, r.req_headers, r.req_body, r.req_content_type
+		   FROM (
+		         SELECT id, wire, ts
+		           FROM calls
+		          WHERE session_id = ?
+		          ORDER BY ts DESC, id DESC
+		          LIMIT ?
+		        ) c
+		   JOIN raw r ON r.call_id = c.id
+		  ORDER BY c.ts ASC, c.id ASC`, sessionID, maxCallsLimit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: session requests: %w", err)
+	}
+	defer rows.Close()
+
+	var out []SessionRequest
+	for rows.Next() {
+		var (
+			r          SessionRequest
+			reqHeaders string
+		)
+		if err := rows.Scan(&r.CallID, &r.Wire, &reqHeaders, &r.ReqBody, &r.ReqContentType); err != nil {
+			return nil, fmt.Errorf("store: scan session request: %w", err)
+		}
+		if err := json.Unmarshal([]byte(reqHeaders), &r.ReqHeaders); err != nil {
+			return nil, fmt.Errorf("store: decode session request headers: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: session request rows: %w", err)
 	}
 	return out, nil
 }

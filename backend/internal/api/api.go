@@ -121,6 +121,7 @@ var adminRoutes = []adminRoute{
 	// Literal path — Go's mux prefers it over the {id} wildcard below.
 	{"GET", "/api/sessions/overview", (*api).handleSessionsOverview, false},
 	{"GET", "/api/sessions/{id}", (*api).handleSession, false},
+	{"GET", "/api/sessions/{id}/messages", (*api).handleSessionMessages, false},
 	{"GET", "/api/sessions/{id}/context", (*api).handleSessionContext, false},
 	{"GET", "/api/users", (*api).handleListUsers, false},
 	{"GET", "/api/users/{id}", (*api).handleGetUser, false},

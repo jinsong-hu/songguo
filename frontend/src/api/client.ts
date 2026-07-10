@@ -20,6 +20,7 @@ import type {
   Service,
   SessionContext,
   SessionDetail,
+  SessionMessages,
   SessionStats,
   Settings,
   User,
@@ -176,6 +177,10 @@ export const api = {
 
   /** Fetch one session's rollups, agent tree, and calls. 404 if absent. */
   session: (id: string) => request<SessionDetail>(`/sessions/${encodeURIComponent(id)}`),
+
+  /** Fetch compact prompt material reconstructed from captured session requests. */
+  sessionMessages: (id: string) =>
+    request<SessionMessages>(`/sessions/${encodeURIComponent(id)}/messages`),
 
   /** Aggregated context-window composition over a range (Overview sunburst). */
   contextComposition: (since: number, until: number) =>

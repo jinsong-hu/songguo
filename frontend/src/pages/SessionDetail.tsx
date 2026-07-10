@@ -5,7 +5,7 @@ import { Area, AreaChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from 'rec
 import { svg as claudeCodeSvg } from 'thesvg/claude-code';
 import { svg as codexOpenAISvg } from 'thesvg/codex-openai';
 import { api } from '../api/client';
-import type { CallEntry, CallTrace, ContextBlock, SourceSlice } from '../api/types';
+import type { CallEntry, ContextBlock, SessionMessages, SourceSlice } from '../api/types';
 import { ContextSunburst, srcColor, srcLabel, type ContextSelection } from '../components/ContextSunburst';
 import { InfoHint } from '../components/InfoHint';
 import { CopyButton } from '../components/CopyButton';
@@ -81,17 +81,10 @@ export function SessionDetailPage() {
   const sessionClient = useMemo(() => dominantClient(data?.entries ?? []), [data]);
   const mainPromptEntries = useMemo(() => data?.entries.filter(isMainPromptEntry) ?? [], [data]);
   const sessionTitle = data?.title || ctx.data?.title || '';
-  const traceKey = useMemo(() => mainPromptEntries.map((entry) => entry.id).join(','), [mainPromptEntries]);
-  const promptTraces = useFetch<CallTrace[]>(
-    () => Promise.all(mainPromptEntries.map((entry) => api.trace(entry.id))),
-    [traceKey],
-    {
-      enabled: mainPromptEntries.length > 0,
-    },
-  );
+  const sessionMessages = useFetch(() => api.sessionMessages(id), [id], { enabled: id !== '' });
   const prompt = useMemo(
-    () => (promptTraces.data ? parsePromptReconstruction(promptTraces.data) : null),
-    [promptTraces.data],
+    () => (sessionMessages.data ? parsePromptReconstruction(sessionMessages.data) : null),
+    [sessionMessages.data],
   );
   const [ctxSelection, setCtxSelection] = useState<ContextSelection | null>(null);
 
@@ -221,9 +214,9 @@ export function SessionDetailPage() {
           {mainPromptEntries.length > 0 ? (
             <PromptReconstructionCard
               prompt={prompt}
-              loading={promptTraces.initialLoading || !prompt}
-              error={promptTraces.error}
-              onRetry={promptTraces.refetch}
+              loading={sessionMessages.initialLoading || !prompt}
+              error={sessionMessages.error}
+              onRetry={sessionMessages.refetch}
             />
           ) : null}
 
@@ -783,26 +776,20 @@ function isMainPromptEntry(entry: CallEntry): boolean {
   return entry.has_trace && entry.wire !== 'anthropic/count_tokens';
 }
 
-function parsePromptReconstruction(traces: CallTrace[]): PromptReconstruction {
-  const firstBody = parseJsonObject(traces[0]?.request.body ?? '');
+function parsePromptReconstruction(source: SessionMessages): PromptReconstruction {
   let system: string[] = [];
-  let tools: ToolInfo[] = [];
-  let messages: PromptMessage[] = [];
-
-  for (let i = 0; i < traces.length; i += 1) {
-    const body = parseJsonObject(traces[i].request.body);
-    if (!body) continue;
-    system = mergeUnique(system, systemBlocks(body.system ?? body.instructions), (block) =>
+  for (const value of source.system) {
+    system = mergeUnique(system, systemBlocks(value), (block) =>
       compositionBlockHash('system', '', 'System prompt', block),
     );
-    tools = mergeUnique(tools, toolInfos(body.tools), (tool) =>
-      compositionBlockHash('tool_schemas', schemaProducer(tool.name), tool.name || 'Tool schema', tool.hashText),
-    );
-    messages = mergePromptMessages(messages, promptMessages(body));
   }
+  const tools = mergeUnique([] as ToolInfo[], toolInfos(source.tools), (tool) =>
+    compositionBlockHash('tool_schemas', schemaProducer(tool.name), tool.name || 'Tool schema', tool.hashText),
+  );
+  const messages = source.messages.map(promptMessage).filter((message) => message.parts.length > 0);
 
   const prompt = {
-    model: typeof firstBody?.model === 'string' ? firstBody.model : '',
+    model: source.model,
     system,
     tools,
     messages,
@@ -1267,13 +1254,6 @@ function toolBlockText(tool: ToolInfo): string {
   ].filter(Boolean).join('\n');
 }
 
-function promptMessages(body: Record<string, unknown>): PromptMessage[] {
-  const source = Array.isArray(body.messages) ? body.messages : body.input;
-  if (typeof source === 'string') return [{ role: 'user', parts: [{ kind: 'text', text: source }] }];
-  if (!Array.isArray(source)) return [];
-  return source.map(promptMessage).filter((message) => message.parts.length > 0);
-}
-
 function promptMessage(raw: unknown): PromptMessage {
   if (typeof raw === 'string') return { role: 'user', parts: [{ kind: 'text', text: raw }] };
   if (!isRecord(raw)) return { role: 'unknown', parts: [{ kind: 'raw', label: 'value', raw: stripCacheControl(raw) }] };
@@ -1461,28 +1441,6 @@ function parseJsonMaybe(value: unknown): unknown {
   } catch {
     return value;
   }
-}
-
-function mergePromptMessages(existing: PromptMessage[], next: PromptMessage[]): PromptMessage[] {
-  if (next.length === 0) return existing;
-  let overlap = Math.min(existing.length, next.length);
-  while (overlap > 0) {
-    const existingStart = existing.length - overlap;
-    let matches = true;
-    for (let i = 0; i < overlap; i += 1) {
-      if (!sameMessage(existing[existingStart + i], next[i])) {
-        matches = false;
-        break;
-      }
-    }
-    if (matches) break;
-    overlap -= 1;
-  }
-  return existing.concat(next.slice(overlap));
-}
-
-function sameMessage(a: PromptMessage, b: PromptMessage): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function systemBlockDomId(index: number): string {
@@ -1764,15 +1722,6 @@ function enumValues(value: unknown): string[] {
 function schemaPropertyCount(schema: unknown): number {
   if (!isRecord(schema) || !isRecord(schema.properties)) return 0;
   return Object.keys(schema.properties).length;
-}
-
-function parseJsonObject(raw: string): Record<string, unknown> | null {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
 }
 
 function prettyJson(value: unknown): string {

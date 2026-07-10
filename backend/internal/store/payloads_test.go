@@ -120,3 +120,58 @@ func TestHasPayloads(t *testing.T) {
 		t.Errorf("HasPayloads(nil) = %v, want empty map", empty)
 	}
 }
+
+func TestSessionRequests(t *testing.T) {
+	s := openTestStore(t)
+	base := time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC)
+	id1, err := s.AppendCall(calls.Entry{
+		TS: base, SessionID: "sess", Wire: "openai/responses", Status: 200,
+	})
+	if err != nil {
+		t.Fatalf("AppendCall 1: %v", err)
+	}
+	id2, err := s.AppendCall(calls.Entry{
+		TS: base.Add(time.Minute), SessionID: "sess", Wire: "anthropic/messages", Status: 200,
+	})
+	if err != nil {
+		t.Fatalf("AppendCall 2: %v", err)
+	}
+	other, err := s.AppendCall(calls.Entry{
+		TS: base.Add(2 * time.Minute), SessionID: "other", Wire: "openai/chat", Status: 200,
+	})
+	if err != nil {
+		t.Fatalf("AppendCall other: %v", err)
+	}
+
+	for _, payload := range []Payload{
+		{CallID: id2, ReqHeaders: map[string]string{"Content-Encoding": "gzip"}, ReqBody: []byte("second"), ReqContentType: "application/json", RespBody: []byte("large response")},
+		{CallID: id1, ReqHeaders: map[string]string{"X-Test": "first"}, ReqBody: []byte("first"), ReqContentType: "application/json", RespBody: []byte("large response")},
+		{CallID: other, ReqBody: []byte("other")},
+	} {
+		if err := s.SavePayload(payload); err != nil {
+			t.Fatalf("SavePayload(%s): %v", payload.CallID, err)
+		}
+	}
+
+	got, err := s.SessionRequests("sess")
+	if err != nil {
+		t.Fatalf("SessionRequests: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("SessionRequests len = %d, want 2", len(got))
+	}
+	if got[0].CallID != id1 || string(got[0].ReqBody) != "first" || got[0].ReqHeaders["X-Test"] != "first" {
+		t.Errorf("first request = %+v, want call %q", got[0], id1)
+	}
+	if got[1].CallID != id2 || got[1].Wire != "anthropic/messages" || got[1].ReqHeaders["Content-Encoding"] != "gzip" {
+		t.Errorf("second request = %+v, want call %q", got[1], id2)
+	}
+
+	empty, err := s.SessionRequests("missing")
+	if err != nil {
+		t.Fatalf("SessionRequests(missing): %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("SessionRequests(missing) = %+v, want empty", empty)
+	}
+}

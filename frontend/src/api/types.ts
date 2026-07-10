@@ -251,6 +251,18 @@ export interface SessionDetail {
   entries: CallEntry[];
 }
 
+/** GET /api/sessions/{id}/messages: compact, de-duplicated prompt material. */
+export interface SessionMessages {
+  session_id: string;
+  model: string;
+  /** Unique request-level system/instructions values in first-seen order. */
+  system: unknown[];
+  /** Unique raw tool definitions in first-seen order. */
+  tools: unknown[];
+  /** Raw message/input items after cumulative-history overlap removal. */
+  messages: unknown[];
+}
+
 // --- Context distribution (where the context window goes) ---
 
 /** A producer sub-slice of a source bucket (e.g. Read under tool results). */
