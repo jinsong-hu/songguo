@@ -89,6 +89,8 @@ export function OverviewPage() {
   const byVendor = useFetch(() => api.breakdown('vendor', since, until), [since, until], opts);
   const byUser = useFetch(() => api.breakdown('user', since, until), [since, until], opts);
   const byModality = useFetch(() => api.breakdown('modality', since, until), [since, until], opts);
+  // Resolve user-id series keys to display names for the by-user Usage view.
+  const usersList = useFetch(() => api.users(), [], opts);
   const composition = useFetch(() => api.contextComposition(since, until), [since, until], opts);
   const errs = useFetch(() => api.errors(since, until), [since, until], opts);
 
@@ -143,13 +145,19 @@ export function OverviewPage() {
     }
     return { tokenModels: modelKeys, tokenPoints: tokRows, costPoints: costRows };
   }, [tokenSeries.data, range.bucket]);
+  // Map a series key to its display label: user ids resolve to names in the
+  // by-user view (falling back to the id); other dimensions show the key as-is.
+  const seriesLabel = useMemo(() => {
+    const names = new Map((usersList.data ?? []).map((u) => [u.id, u.name]));
+    return (key: string) => (usageDim === 'user' ? names.get(key) ?? key : key);
+  }, [usersList.data, usageDim]);
   const tokenConfig = useMemo<ChartConfig>(() => {
     const c: ChartConfig = {};
     tokenModels.forEach((m) => {
-      c[m] = { label: m };
+      c[m] = { label: seriesLabel(m) };
     });
     return c;
-  }, [tokenModels]);
+  }, [tokenModels, seriesLabel]);
   // Distinct, brand-anchored color per series key for the current dimension.
   const seriesColors = useMemo(
     () => assignSeriesColors(tokenModels, usageDim),
@@ -304,7 +312,7 @@ export function OverviewPage() {
                             className={styles.costTipDot}
                             style={{ background: (item?.color as string) ?? 'var(--text-muted)' }}
                           />
-                          <span className={styles.costTipName}>{name}</span>
+                          <span className={styles.costTipName}>{seriesLabel(String(name))}</span>
                           <span className={styles.costTipVal}>{money(Number(value))}</span>
                         </div>
                       )}
