@@ -42,8 +42,8 @@ func (s *Store) CreateCall(e calls.Entry) error {
 	}
 	if _, err := s.db.Exec(
 		`INSERT INTO calls
-		 (id, ts, ts_end, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, ttft_ms, generation_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens, session_id, agent_id, parent_agent_id, client_name, client_version, client_os, client_os_version)
-		 VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, '', '{}', 0, 0, 0, 0, ?, ?, '', '', 0, 0, 0, ?, ?, ?, ?, ?, ?, ?)`,
+		 (id, ts, ts_end, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, ttft_ms, generation_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, thinking_tokens, session_id, agent_id, parent_agent_id, client_name, client_version, client_os, client_os_version)
+		 VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, '', '{}', 0, 0, 0, 0, ?, ?, '', '', 0, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ID, ts.UnixMilli(), e.UserID, e.Model, string(modality), e.Vendor, e.CredentialID,
 		calls.StatusPending, boolToInt(e.Stream), tagsJSON, e.SessionID, e.AgentID, e.ParentAgentID,
 		e.ClientName, e.ClientVersion, e.ClientOS, e.ClientOSVersion,
@@ -80,12 +80,14 @@ func (s *Store) FinalizeCall(e calls.Entry) error {
 		   ts_end = ?, model = ?, modality = ?, vendor = ?, credential_id = ?,
 		   status = ?, err = ?, usage = ?, cost = ?, latency_ms = ?, ttft_ms = ?,
 		   generation_ms = ?, stream = ?,
-		   wire = ?, confidence = ?, input_tokens = ?, output_tokens = ?, cached_tokens = ?,
+		   wire = ?, confidence = ?, input_tokens = ?, output_tokens = ?,
+		   cache_read_input_tokens = ?, cache_creation_input_tokens = ?, thinking_tokens = ?,
 		   tool_calls = ?, tool_tokens = ?
 		 WHERE id = ?`,
 		tsEnd.UnixMilli(), e.Model, string(modality), e.Vendor, e.CredentialID,
 		e.Status, e.Err, usageJSON, e.Cost, e.LatencyMS, e.TTFTMS, e.GenerationMS, boolToInt(e.Stream),
-		e.Wire, string(e.Confidence), e.InputTokens, e.OutputTokens, e.CachedTokens,
+		e.Wire, string(e.Confidence), e.InputTokens, e.OutputTokens,
+		e.CachedTokens, e.CacheCreationTokens, e.ThinkingTokens,
 		e.ToolCalls, e.ToolTokens,
 		e.ID,
 	); err != nil {
@@ -180,7 +182,7 @@ func (f CallFilter) where() (string, []any) {
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
-const callsSelect = `SELECT id, ts, ts_end, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, ttft_ms, generation_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens, session_id, agent_id, parent_agent_id, client_name, client_version, client_os, client_os_version, tool_calls, tool_tokens FROM calls`
+const callsSelect = `SELECT id, ts, ts_end, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, ttft_ms, generation_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, thinking_tokens, session_id, agent_id, parent_agent_id, client_name, client_version, client_os, client_os_version, tool_calls, tool_tokens FROM calls`
 
 // QueryCalls returns matching entries ordered by ts DESC. Limit defaults to
 // 100 and is capped at 1000.
@@ -354,6 +356,7 @@ func scanEntry(rows *sql.Rows) (calls.Entry, error) {
 		&e.ID, &tsMillis, &tsEndMillis, &e.UserID, &e.Model, &modality, &e.Vendor, &e.CredentialID,
 		&e.Status, &e.Err, &usageJSON, &e.Cost, &e.LatencyMS, &e.TTFTMS, &e.GenerationMS, &stream, &tagsJSON,
 		&e.Wire, &confidence, &e.InputTokens, &e.OutputTokens, &e.CachedTokens,
+		&e.CacheCreationTokens, &e.ThinkingTokens,
 		&e.SessionID, &e.AgentID, &e.ParentAgentID, &e.ClientName, &e.ClientVersion,
 		&e.ClientOS, &e.ClientOSVersion,
 		&e.ToolCalls, &e.ToolTokens,

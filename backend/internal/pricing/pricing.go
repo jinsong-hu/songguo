@@ -19,9 +19,12 @@ import (
 // a guess. Local token counts (internal/compose) are for insights granularity
 // and trends, and are kept out of this function on purpose.
 //
-// Cached input tokens (a subset of InputTokens) are billed at the CachedInput
-// rate when one is configured; a non-positive CachedInput means no discount
-// and the full Input rate applies.
+// The three input-side fields are disjoint: InputTokens (fresh) and
+// CacheCreationTokens are billed at the full Input rate, CachedInputTokens
+// (cache reads) at the CachedInput rate when one is configured (a non-positive
+// CachedInput means no discount and the full Input rate applies). Cache
+// creation's 1.25x write premium is deliberately ignored. ThinkingTokens are a
+// subset of OutputTokens and are not priced separately.
 func Cost(p config.Price, n wire.Normalized) float64 {
 	switch p.Unit {
 	case "per_1m_tokens":
@@ -47,15 +50,16 @@ func Cost(p config.Price, n wire.Normalized) float64 {
 	}
 }
 
-// tokenCost prices token usage at the unit-less scale (per single token).
+// tokenCost prices token usage at the unit-less scale (per single token). The
+// input-side fields are disjoint (fresh + cache-read + cache-write = total
+// input), so no clamping is needed: fresh input and cache creation bill at the
+// full Input rate, cache reads at the cached rate.
 func tokenCost(p config.Price, n wire.Normalized) float64 {
-	cached := n.CachedInputTokens
-	if cached > n.InputTokens {
-		cached = n.InputTokens
-	}
 	cachedRate := p.CachedInput
 	if cachedRate <= 0 {
 		cachedRate = p.Input
 	}
-	return (n.InputTokens-cached)*p.Input + cached*cachedRate + n.OutputTokens*p.Output
+	return (n.InputTokens+n.CacheCreationTokens)*p.Input +
+		n.CachedInputTokens*cachedRate +
+		n.OutputTokens*p.Output
 }

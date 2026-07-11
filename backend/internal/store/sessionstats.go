@@ -78,7 +78,7 @@ func (s *Store) SessionStats(since, until *time.Time) (SessionStats, error) {
 	}
 
 	rows, err := s.db.Query(
-		`SELECT first_ts, last_ts, turns, input_tokens, output_tokens, last_status, has_subagents
+		`SELECT first_ts, last_ts, turns, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, last_status, has_subagents
 		   FROM sessions`+clause, args...,
 	)
 	if err != nil {
@@ -97,14 +97,17 @@ func (s *Store) SessionStats(since, until *time.Time) (SessionStats, error) {
 	var aggs []agg
 	for rows.Next() {
 		var (
-			a             agg
-			inTok, outTok float64
-			hasSub        int
+			a                              agg
+			inTok, outTok                  float64
+			cacheReadTok, cacheCreationTok float64
+			hasSub                         int
 		)
-		if err := rows.Scan(&a.firstMs, &a.lastMs, &a.turns, &inTok, &outTok, &a.lastStatus, &hasSub); err != nil {
+		if err := rows.Scan(&a.firstMs, &a.lastMs, &a.turns, &inTok, &outTok, &cacheReadTok, &cacheCreationTok, &a.lastStatus, &hasSub); err != nil {
 			return SessionStats{}, fmt.Errorf("store: scan session stats: %w", err)
 		}
-		a.tokens = inTok + outTok
+		// Total tokens = the disjoint input parts + output (thinking is a subset of
+		// output and is not added on top).
+		a.tokens = inTok + cacheReadTok + cacheCreationTok + outTok
 		a.hasSubagent = hasSub != 0
 		aggs = append(aggs, a)
 	}

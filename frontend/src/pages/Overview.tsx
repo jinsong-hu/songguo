@@ -97,11 +97,17 @@ export function OverviewPage() {
       cost: p.cost,
       input_tokens: p.input_tokens,
       output_tokens: p.output_tokens,
+      cache_read_input_tokens: p.cache_read_input_tokens,
+      cache_creation_input_tokens: p.cache_creation_input_tokens,
       avg_latency_ms: p.avg_latency_ms,
       avg_ttft_ms: p.avg_ttft_ms,
       avg_output_tokens_per_second: p.avg_output_tokens_per_second,
       success: p.requests > 0 ? ((p.requests - p.errors) / p.requests) * 100 : null,
-      cache_hit: p.input_tokens > 0 ? (p.cached_tokens / p.input_tokens) * 100 : null,
+      // Cache hit rate = cache reads / total input (fresh + cache read + cache write).
+      cache_hit: (() => {
+        const totalInput = p.input_tokens + p.cache_read_input_tokens + p.cache_creation_input_tokens;
+        return totalInput > 0 ? (p.cache_read_input_tokens / totalInput) * 100 : null;
+      })(),
     }));
   }, [series.data, range.bucket]);
   const seriesEmpty = points.length === 0;
@@ -388,6 +394,8 @@ export function OverviewPage() {
             <ChartContainer
               config={{
                 input_tokens: { label: 'Input', color: 'var(--chart-1)' },
+                cache_read_input_tokens: { label: 'Cache read', color: 'var(--chart-3)' },
+                cache_creation_input_tokens: { label: 'Cache write', color: 'var(--chart-4)' },
                 output_tokens: { label: 'Output', color: 'var(--chart-2)' },
               }}
               className={CHART_CLS}
@@ -398,6 +406,8 @@ export function OverviewPage() {
                 <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={(v: number) => compact(v)} />
                 <ChartTooltip content={<ChartTooltipContent />} />
                 <Area dataKey="input_tokens" stackId="t" type="monotone" stroke="var(--color-input_tokens)" fill="var(--color-input_tokens)" fillOpacity={0.18} strokeWidth={2} />
+                <Area dataKey="cache_read_input_tokens" stackId="t" type="monotone" stroke="var(--color-cache_read_input_tokens)" fill="var(--color-cache_read_input_tokens)" fillOpacity={0.18} strokeWidth={2} />
+                <Area dataKey="cache_creation_input_tokens" stackId="t" type="monotone" stroke="var(--color-cache_creation_input_tokens)" fill="var(--color-cache_creation_input_tokens)" fillOpacity={0.18} strokeWidth={2} />
                 <Area dataKey="output_tokens" stackId="t" type="monotone" stroke="var(--color-output_tokens)" fill="var(--color-output_tokens)" fillOpacity={0.18} strokeWidth={2} />
               </AreaChart>
             </ChartContainer>
@@ -421,6 +431,8 @@ export function OverviewPage() {
             <ChartContainer
               config={{
                 input_tokens: { label: 'Input', color: 'var(--chart-1)' },
+                cache_read_input_tokens: { label: 'Cache read', color: 'var(--chart-3)' },
+                cache_creation_input_tokens: { label: 'Cache write', color: 'var(--chart-4)' },
                 output_tokens: { label: 'Output', color: 'var(--chart-2)' },
               }}
               className={CHART_CLS}
@@ -430,6 +442,8 @@ export function OverviewPage() {
                 <YAxis type="category" dataKey="key" width={104} tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
                 <ChartTooltip content={<ChartTooltipContent />} />
                 <Bar dataKey="input_tokens" stackId="t" fill="var(--color-input_tokens)" radius={[3, 0, 0, 3]} />
+                <Bar dataKey="cache_read_input_tokens" stackId="t" fill="var(--color-cache_read_input_tokens)" />
+                <Bar dataKey="cache_creation_input_tokens" stackId="t" fill="var(--color-cache_creation_input_tokens)" />
                 <Bar dataKey="output_tokens" stackId="t" fill="var(--color-output_tokens)" radius={[0, 3, 3, 0]} />
               </BarChart>
             </ChartContainer>
@@ -703,7 +717,7 @@ function BreakdownTable({
                 <td className="num">{int(r.requests)}</td>
                 <td className="num">{percent(success)}</td>
                 <td className="num">{ms(r.avg_latency_ms)}</td>
-                <td className="num">{int(r.input_tokens + r.output_tokens)}</td>
+                <td className="num">{int(r.input_tokens + r.cache_read_input_tokens + r.cache_creation_input_tokens + r.output_tokens)}</td>
                 <td className="num">{money(r.cost)}</td>
               </tr>
             );

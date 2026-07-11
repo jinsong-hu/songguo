@@ -296,5 +296,6 @@ func (s wsMeterSink) Write(p []byte) (int, error) {
 // normNonZero reports whether any billable quantity was extracted.
 func normNonZero(n wire.Normalized) bool {
 	return n.InputTokens > 0 || n.OutputTokens > 0 || n.CachedInputTokens > 0 ||
+		n.CacheCreationTokens > 0 || n.ThinkingTokens > 0 ||
 		n.Calls > 0 || n.Images > 0 || n.Seconds > 0 || n.Chars > 0
 }

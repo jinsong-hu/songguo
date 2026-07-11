@@ -20,11 +20,15 @@ type FeedRow struct {
 	RequestID    string // the call id (UUID) to link to when Kind == "request"
 	Calls        int    // number of calls in the group (1 for a request row)
 	Cost         float64
-	InputTokens  float64
-	OutputTokens float64
-	ToolCalls    int     // tool calls issued across the group's turns
-	ToolTokens   float64 // local o200k estimate of tool-result tokens (see compose.ToolTurn)
-	FirstTS      time.Time
+	// Disjoint input-side token parts (InputTokens is fresh/uncached) plus output;
+	// a total is input + cache_read + cache_creation + output.
+	InputTokens         float64
+	OutputTokens        float64
+	CachedTokens        float64 // cache_read_input_tokens
+	CacheCreationTokens float64
+	ToolCalls           int     // tool calls issued across the group's turns
+	ToolTokens          float64 // local o200k estimate of tool-result tokens (see compose.ToolTurn)
+	FirstTS             time.Time
 	LastTS       time.Time // ordering key + "last activity" display
 	DurationMS   int64     // max(request start + latency) - first request start
 	ErrorCount   int       // calls with status 0 or >= 400
@@ -86,6 +90,8 @@ func (s *Store) Feed(f CallFilter) ([]FeedRow, int, error) {
 		COALESCE(SUM(cost), 0) AS cost,
 		COALESCE(SUM(input_tokens), 0) AS input_tokens,
 		COALESCE(SUM(output_tokens), 0) AS output_tokens,
+		COALESCE(SUM(cache_read_input_tokens), 0) AS cache_read_input_tokens,
+		COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation_input_tokens,
 		COALESCE(SUM(tool_calls), 0) AS tool_calls,
 		COALESCE(SUM(tool_tokens), 0) AS tool_tokens,
 		MIN(ts) AS first_ts,
@@ -200,7 +206,8 @@ func scanFeedRow(rows *sql.Rows) (FeedRow, error) {
 	)
 	if err := rows.Scan(
 		&gkey, &isSession, &r.SessionID, &r.RequestID, &r.Calls,
-		&r.Cost, &r.InputTokens, &r.OutputTokens, &r.ToolCalls, &r.ToolTokens, &firstMs, &lastMs, &r.DurationMS, &r.ErrorCount,
+		&r.Cost, &r.InputTokens, &r.OutputTokens, &r.CachedTokens, &r.CacheCreationTokens,
+		&r.ToolCalls, &r.ToolTokens, &firstMs, &lastMs, &r.DurationMS, &r.ErrorCount,
 		&modelsAll, &models, &vendors,
 		&r.Model, &r.Vendor, &r.Wire, &confidence, &modality, &r.Status, &r.LatencyMS, &stream,
 	); err != nil {

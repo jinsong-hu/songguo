@@ -89,7 +89,16 @@ export function RequestDetailPage() {
             </Field>
             <Field label="Stream">{data.stream ? 'yes' : 'no'}</Field>
             <Field label="Input tokens">{int(data.input_tokens)}</Field>
+            {data.cache_read_input_tokens > 0 && (
+              <Field label="Cache read">{int(data.cache_read_input_tokens)}</Field>
+            )}
+            {data.cache_creation_input_tokens > 0 && (
+              <Field label="Cache creation">{int(data.cache_creation_input_tokens)}</Field>
+            )}
             <Field label="Output tokens">{int(data.output_tokens)}</Field>
+            {data.thinking_tokens > 0 && (
+              <Field label="Thinking tokens">{int(data.thinking_tokens)}</Field>
+            )}
             <Field label="User">{data.user_id || '—'}</Field>
             {data.agent_id && <Field label="Agent" mono>{data.agent_id}</Field>}
             {data.parent_agent_id && <Field label="Parent agent" mono>{data.parent_agent_id}</Field>}

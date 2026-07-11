@@ -123,7 +123,12 @@ export function SessionDetailPage() {
             {sessionClient ? <ClientTile client={sessionClient} /> : null}
             <Kpi
               label="Tokens"
-              value={int(data.input_tokens + data.output_tokens)}
+              value={int(
+                data.input_tokens +
+                  data.cache_read_input_tokens +
+                  data.cache_creation_input_tokens +
+                  data.output_tokens,
+              )}
               footLabel="Cost"
               footValue={money(data.cost)}
             />
@@ -249,7 +254,7 @@ export function SessionDetailPage() {
                         </td>
                         <td className="mono">{e.wire || '—'}</td>
                         <td className="mono">{e.model || '—'}</td>
-                        <td className="num">{int(e.input_tokens + e.output_tokens)}</td>
+                        <td className="num">{int(e.input_tokens + e.cache_read_input_tokens + e.cache_creation_input_tokens + e.output_tokens)}</td>
                         <td className="num">{money(e.cost)}</td>
                         <td className="num">{duration(e.latency_ms / 1000)}</td>
                         <td>

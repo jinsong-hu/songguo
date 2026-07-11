@@ -468,9 +468,11 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 	// insights (internal/compose), not billing.
 	cost := 0.0
 	var confidence calls.Confidence
+	var norm wire.Normalized
 	if meter != nil {
 		ext := meter.finish()
 		confidence = ext.Confidence
+		norm = ext.Norm
 		if len(ext.Raw) > 0 {
 			usage["usage"] = ext.Raw
 		}
@@ -506,16 +508,21 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 		CredentialID:  t.Credential.ID,
 		Wire:          wireNameOf(rw),
 		Confidence:    confidence,
-		Status:        http.StatusSwitchingProtocols,
-		Usage:         usage,
-		Cost:          cost,
-		LatencyMS:     handshake.Milliseconds(),
-		Stream:        true,
-		ClientName:    client.Name,
-		ClientVersion: client.Version,
+		Status:              http.StatusSwitchingProtocols,
+		Usage:               usage,
+		InputTokens:         norm.InputTokens,
+		OutputTokens:        norm.OutputTokens,
+		CachedTokens:        norm.CachedInputTokens,
+		CacheCreationTokens: norm.CacheCreationTokens,
+		ThinkingTokens:      norm.ThinkingTokens,
+		Cost:                cost,
+		LatencyMS:           handshake.Milliseconds(),
+		Stream:              true,
+		ClientName:          client.Name,
+		ClientVersion:       client.Version,
 		// Caller OS, read-only from headers (X-Stainless-Os, else codex UA comment).
-		ClientOS:        client.OS,
-		ClientOSVersion: client.OSVersion,
+		ClientOS:            client.OS,
+		ClientOSVersion:     client.OSVersion,
 	})
 }
 

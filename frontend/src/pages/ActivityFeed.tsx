@@ -139,7 +139,8 @@ function shortId(id: string): string {
 
 function FeedRowView({ row, onOpen }: { row: FeedRow; onOpen: () => void }) {
   const isSession = row.kind === 'session';
-  const tokens = row.input_tokens + row.output_tokens;
+  const tokens =
+    row.input_tokens + row.cache_read_input_tokens + row.cache_creation_input_tokens + row.output_tokens;
   const model = isSession ? row.major_model || row.model || row.models[0] : row.model;
 
   return (

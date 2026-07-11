@@ -17,10 +17,21 @@ import (
 // Normalized is the canonical usage view fed to pricing. Wires translate
 // vendor-specific usage fields into it; raw fields are preserved separately
 // for logging.
+//
+// The three input-side token fields are DISJOINT and sum to the total input:
+// InputTokens is the fresh (uncached) input only, CachedInputTokens is the
+// cache-read portion, CacheCreationTokens is the cache-write portion. Anthropic
+// is the reference shape (it reports these disjointly); OpenAI-style vendors
+// report a cache-inclusive prompt total, so their normalizers subtract the
+// cached portion back out to keep InputTokens fresh-only. ThinkingTokens is a
+// SUBSET of OutputTokens (reasoning/thinking), surfaced for observability and
+// never added on top of the output total.
 type Normalized struct {
-	InputTokens       float64
-	OutputTokens      float64
-	CachedInputTokens float64 // subset of InputTokens billed at the cached rate
+	InputTokens         float64 // fresh (uncached) input tokens
+	OutputTokens        float64 // total output tokens (includes ThinkingTokens)
+	CachedInputTokens   float64 // cache-read input tokens (disjoint from InputTokens)
+	CacheCreationTokens float64 // cache-write input tokens (disjoint from InputTokens)
+	ThinkingTokens      float64 // reasoning/thinking tokens (subset of OutputTokens)
 
 	// Non-token quantities for media/tool wires (priced via per_call,
 	// per_image, per_second, per_char units).
@@ -131,6 +142,15 @@ func normalizePath(path string) string {
 		p = p[:i]
 	}
 	return strings.TrimRight(p, "/")
+}
+
+// maxZero clamps a value at zero, guarding the fresh-input subtraction against
+// vendors that report a cached count larger than the prompt total.
+func maxZero(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	return v
 }
 
 // num coerces a JSON-decoded numeric value to float64.

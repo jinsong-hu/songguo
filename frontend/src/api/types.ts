@@ -12,10 +12,15 @@ export interface LatencyMS {
 }
 
 export interface TokenTotals {
+  /** Fresh (uncached) input tokens. input, cached, and cache_creation are disjoint. */
   input: number;
   output: number;
-  /** Subset of input billed at the cached rate. */
+  /** Cache-read input tokens (disjoint from input). */
   cached: number;
+  /** Cache-write input tokens (disjoint from input). */
+  cache_creation: number;
+  /** Reasoning/thinking tokens (subset of output). */
+  thinking: number;
 }
 
 export interface Overview {
@@ -71,9 +76,15 @@ export interface SeriesPoint {
   cost: number;
   requests: number;
   errors: number;
+  /** Fresh (uncached) input tokens. */
   input_tokens: number;
   output_tokens: number;
-  cached_tokens: number;
+  /** Cache-read input tokens (disjoint from input_tokens). */
+  cache_read_input_tokens: number;
+  /** Cache-write input tokens (disjoint from input_tokens). */
+  cache_creation_input_tokens: number;
+  /** Reasoning/thinking tokens (subset of output_tokens). */
+  thinking_tokens: number;
   avg_latency_ms: number;
   avg_ttft_ms: number;
   avg_output_tokens_per_second: number;
@@ -105,7 +116,9 @@ export interface BreakdownRow {
   errors: number;
   input_tokens: number;
   output_tokens: number;
-  cached_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  thinking_tokens: number;
   cost: number;
   avg_latency_ms: number;
 }
@@ -145,9 +158,15 @@ export interface CallEntry {
   err: string;
   usage: Record<string, unknown>;
   cost: number;
+  /** Fresh (uncached) input tokens. */
   input_tokens: number;
   output_tokens: number;
-  cached_tokens: number;
+  /** Cache-read input tokens (disjoint from input_tokens). */
+  cache_read_input_tokens: number;
+  /** Cache-write input tokens (disjoint from input_tokens). */
+  cache_creation_input_tokens: number;
+  /** Reasoning/thinking tokens (subset of output_tokens). */
+  thinking_tokens: number;
   latency_ms: number;
   ttft_ms: number;
   generation_ms: number;
@@ -207,6 +226,8 @@ export interface FeedRow {
   cost: number;
   input_tokens: number;
   output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
   first_ts: string;
   last_ts: string;
   /** Duration from first request start to last request end, in milliseconds. */
@@ -241,6 +262,9 @@ export interface AgentNode {
   cost: number;
   input_tokens: number;
   output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  thinking_tokens: number;
   children: AgentNode[];
 }
 
@@ -250,8 +274,15 @@ export interface SessionDetail {
   title?: string;
   calls: number;
   cost: number;
+  /** Fresh (uncached) input tokens summed across the session's calls. */
   input_tokens: number;
   output_tokens: number;
+  /** Cache-read input tokens (disjoint from input_tokens). */
+  cache_read_input_tokens: number;
+  /** Cache-write input tokens (disjoint from input_tokens). */
+  cache_creation_input_tokens: number;
+  /** Reasoning/thinking tokens (subset of output_tokens). */
+  thinking_tokens: number;
   error_count: number;
   first_ts: string;
   last_ts: string;

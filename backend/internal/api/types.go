@@ -76,16 +76,18 @@ type entryView struct {
 	Status        int               `json:"status"`
 	Err           string            `json:"err"`
 	Usage         map[string]any    `json:"usage"`
-	Cost          float64           `json:"cost"`
-	InputTokens   float64           `json:"input_tokens"`
-	OutputTokens  float64           `json:"output_tokens"`
-	CachedTokens  float64           `json:"cached_tokens"`
-	ToolCalls     int               `json:"tool_calls"`
-	ToolTokens    float64           `json:"tool_tokens"`
-	LatencyMS     int64             `json:"latency_ms"`
-	TTFTMS        int64             `json:"ttft_ms"`
-	GenerationMS  int64             `json:"generation_ms"`
-	OutputTPS     float64           `json:"output_tokens_per_second"`
+	Cost                float64           `json:"cost"`
+	InputTokens         float64           `json:"input_tokens"`
+	OutputTokens        float64           `json:"output_tokens"`
+	CachedTokens        float64           `json:"cache_read_input_tokens"`
+	CacheCreationTokens float64           `json:"cache_creation_input_tokens"`
+	ThinkingTokens      float64           `json:"thinking_tokens"`
+	ToolCalls           int               `json:"tool_calls"`
+	ToolTokens          float64           `json:"tool_tokens"`
+	LatencyMS           int64             `json:"latency_ms"`
+	TTFTMS              int64             `json:"ttft_ms"`
+	GenerationMS        int64             `json:"generation_ms"`
+	OutputTPS           float64           `json:"output_tokens_per_second"`
 	Stream        bool              `json:"stream"`
 	Tags          map[string]string `json:"tags"`
 	ClientName    string            `json:"client_name"`
@@ -131,16 +133,18 @@ func newEntryView(e calls.Entry) entryView {
 		Status:        e.Status,
 		Err:           e.Err,
 		Usage:         usage,
-		Cost:          e.Cost,
-		InputTokens:   e.InputTokens,
-		OutputTokens:  e.OutputTokens,
-		CachedTokens:  e.CachedTokens,
-		ToolCalls:     e.ToolCalls,
-		ToolTokens:    e.ToolTokens,
-		LatencyMS:     e.LatencyMS,
-		TTFTMS:        e.TTFTMS,
-		GenerationMS:  e.GenerationMS,
-		OutputTPS:     outputTokensPerSecond(e.OutputTokens, e.GenerationMS),
+		Cost:                e.Cost,
+		InputTokens:         e.InputTokens,
+		OutputTokens:        e.OutputTokens,
+		CachedTokens:        e.CachedTokens,
+		CacheCreationTokens: e.CacheCreationTokens,
+		ThinkingTokens:      e.ThinkingTokens,
+		ToolCalls:           e.ToolCalls,
+		ToolTokens:          e.ToolTokens,
+		LatencyMS:           e.LatencyMS,
+		TTFTMS:              e.TTFTMS,
+		GenerationMS:        e.GenerationMS,
+		OutputTPS:           outputTokensPerSecond(e.OutputTokens, e.GenerationMS),
 		Stream:        e.Stream,
 		Tags:          tags,
 		ClientName:    e.ClientName,
@@ -174,11 +178,15 @@ type rateView struct {
 	P99 float64 `json:"p99"`
 }
 
-// tokenView holds summed normalized token counts over a window.
+// tokenView holds summed normalized token counts over a window. Input, Cached
+// (cache reads), and CacheCreation are disjoint input parts; Thinking is a subset
+// of Output.
 type tokenView struct {
-	Input  float64 `json:"input"`
-	Output float64 `json:"output"`
-	Cached float64 `json:"cached"`
+	Input         float64 `json:"input"`
+	Output        float64 `json:"output"`
+	Cached        float64 `json:"cached"`
+	CacheCreation float64 `json:"cache_creation"`
+	Thinking      float64 `json:"thinking"`
 }
 
 // overviewView is the GET /api/overview response.
@@ -229,16 +237,18 @@ type sessionStatsView struct {
 
 // seriesPoint is one bucket in the GET /api/usage/series response.
 type seriesPoint struct {
-	TS           string  `json:"ts"`
-	Cost         float64 `json:"cost"`
-	Requests     int     `json:"requests"`
-	Errors       int     `json:"errors"`
-	InputTokens  float64 `json:"input_tokens"`
-	OutputTokens float64 `json:"output_tokens"`
-	CachedTokens float64 `json:"cached_tokens"`
-	AvgLatencyMS float64 `json:"avg_latency_ms"`
-	AvgTTFTMS    float64 `json:"avg_ttft_ms"`
-	AvgOutputTPS float64 `json:"avg_output_tokens_per_second"`
+	TS                  string  `json:"ts"`
+	Cost                float64 `json:"cost"`
+	Requests            int     `json:"requests"`
+	Errors              int     `json:"errors"`
+	InputTokens         float64 `json:"input_tokens"`
+	OutputTokens        float64 `json:"output_tokens"`
+	CachedTokens        float64 `json:"cache_read_input_tokens"`
+	CacheCreationTokens float64 `json:"cache_creation_input_tokens"`
+	ThinkingTokens      float64 `json:"thinking_tokens"`
+	AvgLatencyMS        float64 `json:"avg_latency_ms"`
+	AvgTTFTMS           float64 `json:"avg_ttft_ms"`
+	AvgOutputTPS        float64 `json:"avg_output_tokens_per_second"`
 }
 
 func outputTokensPerSecond(tokens float64, generationMS int64) float64 {
@@ -274,14 +284,16 @@ type tokensByModelView struct {
 
 // breakdownRow is one group's aggregates in the GET /api/usage/breakdown response.
 type breakdownRow struct {
-	Key          string  `json:"key"`
-	Requests     int     `json:"requests"`
-	Errors       int     `json:"errors"`
-	InputTokens  float64 `json:"input_tokens"`
-	OutputTokens float64 `json:"output_tokens"`
-	CachedTokens float64 `json:"cached_tokens"`
-	Cost         float64 `json:"cost"`
-	AvgLatencyMS float64 `json:"avg_latency_ms"`
+	Key                 string  `json:"key"`
+	Requests            int     `json:"requests"`
+	Errors              int     `json:"errors"`
+	InputTokens         float64 `json:"input_tokens"`
+	OutputTokens        float64 `json:"output_tokens"`
+	CachedTokens        float64 `json:"cache_read_input_tokens"`
+	CacheCreationTokens float64 `json:"cache_creation_input_tokens"`
+	ThinkingTokens      float64 `json:"thinking_tokens"`
+	Cost                float64 `json:"cost"`
+	AvgLatencyMS        float64 `json:"avg_latency_ms"`
 }
 
 // breakdownView is the GET /api/usage/breakdown response.
@@ -315,15 +327,17 @@ type feedRowView struct {
 	SessionID    string   `json:"session_id,omitempty"`
 	Title        string   `json:"title,omitempty"`
 	RequestID    string   `json:"request_id,omitempty"`
-	Calls        int      `json:"calls"`
-	Cost         float64  `json:"cost"`
-	InputTokens  float64  `json:"input_tokens"`
-	OutputTokens float64  `json:"output_tokens"`
-	ToolCalls    int      `json:"tool_calls"`
-	ToolTokens   float64  `json:"tool_tokens"`
-	FirstTS      string   `json:"first_ts"`
-	LastTS       string   `json:"last_ts"`
-	DurationMS   int64    `json:"duration_ms"`
+	Calls               int      `json:"calls"`
+	Cost                float64  `json:"cost"`
+	InputTokens         float64  `json:"input_tokens"`
+	OutputTokens        float64  `json:"output_tokens"`
+	CachedTokens        float64  `json:"cache_read_input_tokens"`
+	CacheCreationTokens float64  `json:"cache_creation_input_tokens"`
+	ToolCalls           int      `json:"tool_calls"`
+	ToolTokens          float64  `json:"tool_tokens"`
+	FirstTS             string   `json:"first_ts"`
+	LastTS              string   `json:"last_ts"`
+	DurationMS          int64    `json:"duration_ms"`
 	ErrorCount   int      `json:"error_count"`
 	MajorModel   string   `json:"major_model,omitempty"`
 	Models       []string `json:"models"`
@@ -354,13 +368,15 @@ func newFeedRowView(r store.FeedRow) feedRowView {
 		SessionID:    r.SessionID,
 		Title:        r.Title,
 		RequestID:    r.RequestID,
-		Calls:        r.Calls,
-		Cost:         r.Cost,
-		InputTokens:  r.InputTokens,
-		OutputTokens: r.OutputTokens,
-		ToolCalls:    r.ToolCalls,
-		ToolTokens:   r.ToolTokens,
-		FirstTS:      r.FirstTS.UTC().Format(time.RFC3339),
+		Calls:               r.Calls,
+		Cost:                r.Cost,
+		InputTokens:         r.InputTokens,
+		OutputTokens:        r.OutputTokens,
+		CachedTokens:        r.CachedTokens,
+		CacheCreationTokens: r.CacheCreationTokens,
+		ToolCalls:           r.ToolCalls,
+		ToolTokens:          r.ToolTokens,
+		FirstTS:             r.FirstTS.UTC().Format(time.RFC3339),
 		LastTS:       r.LastTS.UTC().Format(time.RFC3339),
 		DurationMS:   r.DurationMS,
 		ErrorCount:   r.ErrorCount,
@@ -389,28 +405,34 @@ type feedView struct {
 // agentNodeView is one node in a session's main-loop→subagent tree. Rollups
 // cover the whole subtree (this agent plus its descendants).
 type agentNodeView struct {
-	AgentID      string          `json:"agent_id"`
-	Calls        int             `json:"calls"`
-	Cost         float64         `json:"cost"`
-	InputTokens  float64         `json:"input_tokens"`
-	OutputTokens float64         `json:"output_tokens"`
-	Children     []agentNodeView `json:"children"`
+	AgentID             string          `json:"agent_id"`
+	Calls               int             `json:"calls"`
+	Cost                float64         `json:"cost"`
+	InputTokens         float64         `json:"input_tokens"`
+	OutputTokens        float64         `json:"output_tokens"`
+	CachedTokens        float64         `json:"cache_read_input_tokens"`
+	CacheCreationTokens float64         `json:"cache_creation_input_tokens"`
+	ThinkingTokens      float64         `json:"thinking_tokens"`
+	Children            []agentNodeView `json:"children"`
 }
 
 // sessionView is the GET /api/sessions/{id} response: session-level rollups, the
 // agent tree, and the session's calls (oldest first).
 type sessionView struct {
-	SessionID    string          `json:"session_id"`
-	Title        string          `json:"title,omitempty"`
-	Calls        int             `json:"calls"`
-	Cost         float64         `json:"cost"`
-	InputTokens  float64         `json:"input_tokens"`
-	OutputTokens float64         `json:"output_tokens"`
-	ErrorCount   int             `json:"error_count"`
-	FirstTS      string          `json:"first_ts"`
-	LastTS       string          `json:"last_ts"`
-	Models       []string        `json:"models"`
-	Vendors      []string        `json:"vendors"`
+	SessionID           string          `json:"session_id"`
+	Title               string          `json:"title,omitempty"`
+	Calls               int             `json:"calls"`
+	Cost                float64         `json:"cost"`
+	InputTokens         float64         `json:"input_tokens"`
+	OutputTokens        float64         `json:"output_tokens"`
+	CachedTokens        float64         `json:"cache_read_input_tokens"`
+	CacheCreationTokens float64         `json:"cache_creation_input_tokens"`
+	ThinkingTokens      float64         `json:"thinking_tokens"`
+	ErrorCount          int             `json:"error_count"`
+	FirstTS             string          `json:"first_ts"`
+	LastTS              string          `json:"last_ts"`
+	Models              []string        `json:"models"`
+	Vendors             []string        `json:"vendors"`
 	Agents       []agentNodeView `json:"agents"`
 	Entries      []entryView     `json:"entries"`
 }

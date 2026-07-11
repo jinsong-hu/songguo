@@ -44,27 +44,32 @@ func (s *Store) UpsertSessionCall(e calls.Entry, title string) error {
 
 	if _, err := s.db.Exec(
 		`INSERT INTO sessions
-		   (id, title, first_ts, last_ts, turns, error_count, input_tokens, output_tokens, cost, tool_calls, tool_tokens, last_status, has_subagents)
-		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+		   (id, title, first_ts, last_ts, turns, error_count, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, thinking_tokens, cost, tool_calls, tool_tokens, last_status, has_subagents)
+		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   title         = CASE
 		                     WHEN sessions.title = '' AND excluded.title != '' THEN excluded.title
 		                     ELSE sessions.title
 		                   END,
-		   first_ts      = MIN(first_ts, excluded.first_ts),
-		   last_ts       = MAX(last_ts, excluded.last_ts),
-		   turns         = turns + 1,
-		   error_count   = error_count + excluded.error_count,
-		   input_tokens  = input_tokens + excluded.input_tokens,
-		   output_tokens = output_tokens + excluded.output_tokens,
-		   cost          = cost + excluded.cost,
-		   tool_calls    = tool_calls + excluded.tool_calls,
-		   tool_tokens   = tool_tokens + excluded.tool_tokens,
+		   first_ts                    = MIN(first_ts, excluded.first_ts),
+		   last_ts                     = MAX(last_ts, excluded.last_ts),
+		   turns                       = turns + 1,
+		   error_count                 = error_count + excluded.error_count,
+		   input_tokens                = input_tokens + excluded.input_tokens,
+		   output_tokens               = output_tokens + excluded.output_tokens,
+		   cache_read_input_tokens     = cache_read_input_tokens + excluded.cache_read_input_tokens,
+		   cache_creation_input_tokens = cache_creation_input_tokens + excluded.cache_creation_input_tokens,
+		   thinking_tokens             = thinking_tokens + excluded.thinking_tokens,
+		   cost                        = cost + excluded.cost,
+		   tool_calls                  = tool_calls + excluded.tool_calls,
+		   tool_tokens                 = tool_tokens + excluded.tool_tokens,
 		   -- Advance the outcome-bearing status only when this call is the newest
 		   -- seen so far, so out-of-order processing can't regress it.
 		   last_status   = CASE WHEN excluded.last_ts >= last_ts THEN excluded.last_status ELSE last_status END,
 		   has_subagents = MAX(has_subagents, excluded.has_subagents)`,
-		e.SessionID, title, tsMs, tsMs, isErr, e.InputTokens, e.OutputTokens, e.Cost, e.ToolCalls, e.ToolTokens, e.Status, hasSub,
+		e.SessionID, title, tsMs, tsMs, isErr, e.InputTokens, e.OutputTokens,
+		e.CachedTokens, e.CacheCreationTokens, e.ThinkingTokens, e.Cost,
+		e.ToolCalls, e.ToolTokens, e.Status, hasSub,
 	); err != nil {
 		return fmt.Errorf("store: upsert session call: %w", err)
 	}
@@ -73,17 +78,20 @@ func (s *Store) UpsertSessionCall(e calls.Entry, title string) error {
 
 // SessionRow is one materialized session rollup.
 type SessionRow struct {
-	ID           string
-	Title        string
-	FirstTS      time.Time
-	LastTS       time.Time
-	Turns        int
-	ErrorCount   int
-	InputTokens  float64
-	OutputTokens float64
-	Cost         float64
-	LastStatus   int
-	HasSubagents bool
+	ID                  string
+	Title               string
+	FirstTS             time.Time
+	LastTS              time.Time
+	Turns               int
+	ErrorCount          int
+	InputTokens         float64
+	OutputTokens        float64
+	CachedTokens        float64 // cache_read_input_tokens
+	CacheCreationTokens float64
+	ThinkingTokens      float64
+	Cost                float64
+	LastStatus          int
+	HasSubagents        bool
 }
 
 // SessionTitle returns the durable title for a materialized session.

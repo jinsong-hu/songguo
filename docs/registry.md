@@ -91,15 +91,39 @@ One row per wire. **Endpoint** = the native path the consumer calls; **bold** ma
 
 Volcengine speech is model-less: it's reached at its **native Volcengine path** (`/api/v3/...`) and the provider comes from `X-Songguo-Provider` (or the wire default). The suffix is what the wire matches. For `volc/asr`, send the same `X-Songguo-Provider` on both `submit` and `query` so the poll lands on the provider that issued the task.
 
-All wires normalize into one canonical view: `{ InputTokens, OutputTokens, CachedInputTokens, Calls, Images, Seconds, Chars }`. Raw vendor usage is logged verbatim alongside.
+All wires normalize into one canonical token view. Raw vendor usage is logged
+verbatim alongside. The token fields are **Anthropic-shaped and disjoint** — other
+vendors are mapped onto this shape best-effort:
+
+| field (DB column) | meaning |
+|---|---|
+| `input_tokens` | fresh (uncached) input tokens |
+| `cache_read_input_tokens` | cache-read input tokens |
+| `cache_creation_input_tokens` | cache-write input tokens |
+| `output_tokens` | total output tokens |
+| `thinking_tokens` | reasoning/thinking tokens |
+
+The three input-side fields are **disjoint** and sum to the total input
+(`input + cache_read + cache_creation`). `thinking_tokens` is a **subset of**
+`output_tokens` (never added on top of a total). Cost bills fresh input and cache
+creation at the input rate and cache reads at the cached rate — algebraically
+identical to the old folded math, so redefining `input_tokens` to fresh-only changed
+no invoice. The non-token counters `{ Calls, Images, Seconds, Chars }` are unchanged.
+
+**Cross-vendor mapping.** Anthropic reports the three input fields disjointly, so
+they map straight through. OpenAI-style vendors report a cache-*inclusive*
+`prompt_tokens`/`input_tokens`, so `input_tokens = prompt_tokens − cached` (clamped
+≥ 0) and they carry no cache-creation (→ 0). Reasoning tokens
+(`completion_tokens_details.reasoning_tokens` / `output_tokens_details.reasoning_tokens`)
+map to `thinking_tokens`, as does Anthropic's `output_tokens_details.thinking_tokens`.
 
 ## Metering
 
 Read-only by design: if a usage shape isn't recognized the call still succeeds with coarse/unknown metering — parsing never blocks traffic. Per-wire fields the meter sniffs:
 
-- **`openai/chat`, `openai/completions`, `openai/embeddings`** — top-level `usage`: `prompt_tokens`/`input_tokens` + `completion_tokens`/`output_tokens`. Cached input per quirk: default `prompt_tokens_details.cached_tokens`, DeepSeek `prompt_cache_hit_tokens`, MiniMax `cached_tokens`. Streaming usage rides the final SSE chunk (some vendors only when the client sets `stream_options.include_usage`); embeddings is input-only, no stream.
-- **`openai/responses`** — `usage.input_tokens` + `output_tokens` + `input_tokens_details.cached_tokens`; streaming usage rides the `response.completed` event under `response.usage`.
-- **`anthropic/messages`** — `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens` folded into `InputTokens` (cache-create's 1.25× premium ignored, by design); `cache_read` also recorded as `CachedInputTokens`. Streaming merges `message_start.message.usage` (input) with `message_delta.usage` (output).
+- **`openai/chat`, `openai/completions`, `openai/embeddings`** — top-level `usage`: `prompt_tokens`/`input_tokens` + `completion_tokens`/`output_tokens`. Cached input per quirk: default `prompt_tokens_details.cached_tokens`, DeepSeek `prompt_cache_hit_tokens`, MiniMax `cached_tokens`. `prompt_tokens` is cache-inclusive, so `input_tokens = prompt_tokens − cached` (fresh); no cache-creation (→ 0). `completion_tokens_details.reasoning_tokens` → `thinking_tokens`. Streaming usage rides the final SSE chunk (some vendors only when the client sets `stream_options.include_usage`); embeddings is input-only, no stream.
+- **`openai/responses`** — `usage.input_tokens` (cache-inclusive) + `output_tokens` + `input_tokens_details.cached_tokens`; `input_tokens = input_tokens − cached` (fresh), `output_tokens_details.reasoning_tokens` → `thinking_tokens`. Streaming usage rides the `response.completed` event under `response.usage`.
+- **`anthropic/messages`** — the reference shape: `input_tokens` (already fresh) + `cache_read_input_tokens` + `cache_creation_input_tokens` mapped straight through as three disjoint fields (cache-create's 1.25× premium ignored, by design); `output_tokens_details.thinking_tokens` → `thinking_tokens`. Streaming merges `message_start.message.usage` (input) with `message_delta.usage` (output).
 - **`volc/tts`** — `usage.text_words` → `Chars` (per-char); streamed as NDJSON, and only returned when the client sets `X-Control-Require-Usage-Tokens-Return`, else coarse/unknown.
 - **`volc/asr`** — `audio_info.duration` (ms) → `Seconds` (per-second); the `submit` ack has no `audio_info` (meters zero), the `query` poll bills.
 - **`anthropic/count_tokens`** — zero-cost: Anthropic bills token counting as free, so the call is logged (for observability) but never priced; the response (`{"input_tokens":N}`, no `usage` object) is not parsed.

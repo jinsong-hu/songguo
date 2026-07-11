@@ -864,19 +864,21 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		Wire:          wireName,
 		Confidence:    ext.Confidence,
 		Status:        resp.StatusCode,
-		Usage:         ext.Raw,
-		InputTokens:   ext.Norm.InputTokens,
-		OutputTokens:  ext.Norm.OutputTokens,
-		CachedTokens:  ext.Norm.CachedInputTokens,
-		ToolCalls:     toolCalls,
-		ToolTokens:    toolTokens,
-		Cost:          cost,
-		LatencyMS:     latency,
-		TTFTMS:        ttftMS,
-		GenerationMS:  generationMS,
-		Stream:        stream,
-		Tags:          tags,
-		SessionID:     attr.session,
+		Usage:               ext.Raw,
+		InputTokens:         ext.Norm.InputTokens,
+		OutputTokens:        ext.Norm.OutputTokens,
+		CachedTokens:        ext.Norm.CachedInputTokens,
+		CacheCreationTokens: ext.Norm.CacheCreationTokens,
+		ThinkingTokens:      ext.Norm.ThinkingTokens,
+		ToolCalls:           toolCalls,
+		ToolTokens:          toolTokens,
+		Cost:                cost,
+		LatencyMS:           latency,
+		TTFTMS:              ttftMS,
+		GenerationMS:        generationMS,
+		Stream:              stream,
+		Tags:                tags,
+		SessionID:           attr.session,
 		AgentID:       attr.agent,
 		ParentAgentID: attr.parentAgent,
 		// Client identity is authoritatively persisted at createCall (phase 1);
@@ -911,7 +913,11 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	// reading `model` or metering `usage`). It runs after the client response is
 	// already sent, so it adds no client latency, and is NOT gated by capture.
 	// Any failure is logged and never surfaced to the client.
-	if modality == calls.ModalityChat && rw.matched && ext.Norm.InputTokens > 0 {
+	// Gate on TOTAL input (fresh + cache read + cache write), not just fresh
+	// input: a heavily-cached agent turn can report input_tokens=0 with a large
+	// cache-read count, and it still has a context window worth decomposing.
+	totalInput := ext.Norm.InputTokens + ext.Norm.CachedInputTokens + ext.Norm.CacheCreationTokens
+	if modality == calls.ModalityChat && rw.matched && totalInput > 0 {
 		if comp, ok := compose.Compose(rw.wire.Name, reqBody,
 			int64(ext.Norm.CachedInputTokens)); ok {
 			if err := h.store.SaveComposition(id, comp); err != nil {

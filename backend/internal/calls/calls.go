@@ -60,15 +60,20 @@ type Entry struct {
 	Err          string         // error detail if any
 	Usage        map[string]any // raw extracted usage (tokens/images/seconds/...), JSON-encoded in DB
 	// Normalized cross-vendor token counts (persisted as typed columns so usage
-	// is queryable without parsing the per-vendor `Usage` JSON). CachedTokens is
-	// a subset of InputTokens billed at the cached rate.
-	InputTokens   float64
-	OutputTokens  float64
-	CachedTokens  float64
-	Cost          float64 // computed cost in USD (0 if unknown/free)
-	LatencyMS     int64   // full upstream request duration through response body completion
-	TTFTMS        int64   // upstream request start to first generated stream delta; 0 when unavailable
-	GenerationMS  int64   // first generated stream delta to stream completion; 0 when unavailable
+	// is queryable without parsing the per-vendor `Usage` JSON). The three
+	// input-side fields are DISJOINT and sum to total input: InputTokens is fresh
+	// (uncached) input, CachedTokens is cache reads (persisted as
+	// cache_read_input_tokens), CacheCreationTokens is cache writes. ThinkingTokens
+	// is a subset of OutputTokens (reasoning/thinking), never added to totals.
+	InputTokens         float64
+	OutputTokens        float64
+	CachedTokens        float64
+	CacheCreationTokens float64
+	ThinkingTokens      float64
+	Cost                float64 // computed cost in USD (0 if unknown/free)
+	LatencyMS           int64   // full upstream request duration through response body completion
+	TTFTMS              int64   // upstream request start to first generated stream delta; 0 when unavailable
+	GenerationMS        int64   // first generated stream delta to stream completion; 0 when unavailable
 	Stream        bool
 	// Tool-use metrics for the just-completed tool round-trip this call carries
 	// (see compose.ToolTurn): the number of tool calls the assistant issued that

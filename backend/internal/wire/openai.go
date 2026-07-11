@@ -65,6 +65,10 @@ func openAIExtract(body []byte, q Quirks) Extraction {
 }
 
 // openAINormalize maps a chat-completions usage object to the canonical view.
+// OpenAI's prompt_tokens is cache-INCLUSIVE (unlike Anthropic's fresh
+// input_tokens), so the cached portion is subtracted back out to keep the
+// canonical InputTokens fresh-only. OpenAI has no cache-creation concept
+// (implicit caching, no write charge), so CacheCreationTokens stays 0.
 func openAINormalize(usage map[string]any, q Quirks) Extraction {
 	if usage == nil {
 		return Extraction{Confidence: calls.ConfidenceUnknown}
@@ -89,8 +93,13 @@ func openAINormalize(usage map[string]any, q Quirks) Extraction {
 	}
 
 	return Extraction{
-		Raw:        usage,
-		Norm:       Normalized{InputTokens: in, OutputTokens: out, CachedInputTokens: cached},
+		Raw: usage,
+		Norm: Normalized{
+			InputTokens:       maxZero(in - cached),
+			OutputTokens:      out,
+			CachedInputTokens: cached,
+			ThinkingTokens:    numAt(usage, "completion_tokens_details", "reasoning_tokens"),
+		},
 		Confidence: calls.ConfidenceMeasured,
 	}
 }

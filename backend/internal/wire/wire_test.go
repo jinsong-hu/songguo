@@ -73,12 +73,13 @@ func TestResolveNoMatch(t *testing.T) {
 }
 
 func TestOpenAIExtract(t *testing.T) {
-	body := []byte(`{"id":"x","usage":{"prompt_tokens":100,"completion_tokens":20,"prompt_tokens_details":{"cached_tokens":40}}}`)
+	body := []byte(`{"id":"x","usage":{"prompt_tokens":100,"completion_tokens":20,"prompt_tokens_details":{"cached_tokens":40},"completion_tokens_details":{"reasoning_tokens":8}}}`)
 	got := openAIExtract(body, nil)
 	if got.Confidence != calls.ConfidenceMeasured {
 		t.Fatalf("confidence = %q", got.Confidence)
 	}
-	want := Normalized{InputTokens: 100, OutputTokens: 20, CachedInputTokens: 40}
+	// prompt_tokens is cache-inclusive → fresh input = 100 - 40 = 60; reasoning → thinking.
+	want := Normalized{InputTokens: 60, OutputTokens: 20, CachedInputTokens: 40, ThinkingTokens: 8}
 	if got.Norm != want {
 		t.Errorf("norm = %+v, want %+v", got.Norm, want)
 	}
@@ -90,7 +91,7 @@ func TestOpenAIExtract(t *testing.T) {
 func TestOpenAIExtractDeepSeekQuirk(t *testing.T) {
 	body := []byte(`{"usage":{"prompt_tokens":100,"completion_tokens":20,"prompt_cache_hit_tokens":60,"prompt_cache_miss_tokens":40}}`)
 	got := openAIExtract(body, Quirks{"cache_tokens": "deepseek"})
-	want := Normalized{InputTokens: 100, OutputTokens: 20, CachedInputTokens: 60}
+	want := Normalized{InputTokens: 40, OutputTokens: 20, CachedInputTokens: 60}
 	if got.Norm != want {
 		t.Errorf("norm = %+v, want %+v", got.Norm, want)
 	}
@@ -99,7 +100,7 @@ func TestOpenAIExtractDeepSeekQuirk(t *testing.T) {
 func TestOpenAIExtractMiniMaxQuirk(t *testing.T) {
 	body := []byte(`{"usage":{"prompt_tokens":50,"completion_tokens":5,"cached_tokens":30}}`)
 	got := openAIExtract(body, Quirks{"cache_tokens": "minimax"})
-	want := Normalized{InputTokens: 50, OutputTokens: 5, CachedInputTokens: 30}
+	want := Normalized{InputTokens: 20, OutputTokens: 5, CachedInputTokens: 30}
 	if got.Norm != want {
 		t.Errorf("norm = %+v, want %+v", got.Norm, want)
 	}
@@ -158,9 +159,10 @@ func TestOpenAIScannerNoUsage(t *testing.T) {
 }
 
 func TestAnthropicExtract(t *testing.T) {
-	body := []byte(`{"usage":{"input_tokens":10,"output_tokens":25,"cache_read_input_tokens":90,"cache_creation_input_tokens":5}}`)
+	body := []byte(`{"usage":{"input_tokens":10,"output_tokens":25,"cache_read_input_tokens":90,"cache_creation_input_tokens":5,"output_tokens_details":{"thinking_tokens":7}}}`)
 	got := anthropicExtract(body, nil)
-	want := Normalized{InputTokens: 105, OutputTokens: 25, CachedInputTokens: 90}
+	// Anthropic is the reference shape: the three input fields stay disjoint.
+	want := Normalized{InputTokens: 10, OutputTokens: 25, CachedInputTokens: 90, CacheCreationTokens: 5, ThinkingTokens: 7}
 	if got.Norm != want {
 		t.Errorf("norm = %+v, want %+v", got.Norm, want)
 	}
@@ -180,8 +182,9 @@ func TestAnthropicScannerMergesStartAndDelta(t *testing.T) {
 		"data: {\"type\":\"message_stop\"}\n\n"
 	s.Write([]byte(stream))
 	got := s.Result()
-	// input from message_start must survive the message_delta merge.
-	want := Normalized{InputTokens: 150, OutputTokens: 42, CachedInputTokens: 30}
+	// input from message_start must survive the message_delta merge; input stays
+	// fresh-only (120) and cache read (30) is its own disjoint field.
+	want := Normalized{InputTokens: 120, OutputTokens: 42, CachedInputTokens: 30}
 	if got.Norm != want {
 		t.Errorf("norm = %+v, want %+v", got.Norm, want)
 	}
@@ -196,7 +199,8 @@ func TestAnthropicScannerMergesStartAndDelta(t *testing.T) {
 func TestResponsesExtract(t *testing.T) {
 	body := []byte(`{"usage":{"input_tokens":200,"output_tokens":30,"input_tokens_details":{"cached_tokens":150}}}`)
 	got := responsesExtract(body, nil)
-	want := Normalized{InputTokens: 200, OutputTokens: 30, CachedInputTokens: 150}
+	// input_tokens is cache-inclusive → fresh input = 200 - 150 = 50.
+	want := Normalized{InputTokens: 50, OutputTokens: 30, CachedInputTokens: 150}
 	if got.Norm != want {
 		t.Errorf("norm = %+v, want %+v", got.Norm, want)
 	}
@@ -212,7 +216,7 @@ func TestResponsesScannerCompletedEvent(t *testing.T) {
 		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"usage\":{\"input_tokens\":77,\"output_tokens\":9,\"input_tokens_details\":{\"cached_tokens\":50}}}}\n\n"
 	s.Write([]byte(stream))
 	got := s.Result()
-	want := Normalized{InputTokens: 77, OutputTokens: 9, CachedInputTokens: 50}
+	want := Normalized{InputTokens: 27, OutputTokens: 9, CachedInputTokens: 50}
 	if got.Norm != want {
 		t.Errorf("norm = %+v, want %+v", got.Norm, want)
 	}

@@ -268,11 +268,17 @@ func (s *Store) migrate() error {
 		{"calls", "wire", "TEXT NOT NULL DEFAULT ''"},
 		{"calls", "confidence", "TEXT NOT NULL DEFAULT ''"},
 		// Normalized token counts (cross-vendor), persisted so token usage is
-		// queryable without parsing the heterogeneous raw `usage` JSON. Default 0;
-		// rows written before this column undercount until new traffic accrues.
+		// queryable without parsing the heterogeneous raw `usage` JSON. The three
+		// input-side fields are DISJOINT and sum to total input: input_tokens is
+		// fresh (uncached), cache_read_input_tokens is cache reads,
+		// cache_creation_input_tokens is cache writes. thinking_tokens is a subset of
+		// output_tokens. cache_read_input_tokens is (re)added below via the
+		// cached_tokens rename step so pre-change data is preserved. Default 0; rows
+		// written before these columns undercount until new traffic accrues.
 		{"calls", "input_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"calls", "output_tokens", "REAL NOT NULL DEFAULT 0"},
-		{"calls", "cached_tokens", "REAL NOT NULL DEFAULT 0"},
+		{"calls", "cache_creation_input_tokens", "REAL NOT NULL DEFAULT 0"},
+		{"calls", "thinking_tokens", "REAL NOT NULL DEFAULT 0"},
 		// Streaming performance timings. Zero means unavailable (legacy row,
 		// non-stream response, or a stream with no generated output delta).
 		{"calls", "ttft_ms", "INTEGER NOT NULL DEFAULT 0"},
@@ -301,6 +307,11 @@ func (s *Store) migrate() error {
 		{"sessions", "title", "TEXT NOT NULL DEFAULT ''"},
 		{"sessions", "tool_calls", "INTEGER NOT NULL DEFAULT 0"},
 		{"sessions", "tool_tokens", "REAL NOT NULL DEFAULT 0"},
+		// Session-level token rollups mirroring the disjoint calls columns; summed
+		// across the session's calls by UpsertSessionCall and the backfill/reseed.
+		{"sessions", "cache_read_input_tokens", "REAL NOT NULL DEFAULT 0"},
+		{"sessions", "cache_creation_input_tokens", "REAL NOT NULL DEFAULT 0"},
+		{"sessions", "thinking_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"providers", "allow_unmatched", "INTEGER NOT NULL DEFAULT 0"},
 		{"providers", "quirks", "TEXT NOT NULL DEFAULT '{}'"},
 		{"providers", "api_key", "TEXT NOT NULL DEFAULT ''"},
@@ -321,6 +332,56 @@ func (s *Store) migrate() error {
 	}
 	if _, err := s.db.Exec(`UPDATE users SET capture = 0 WHERE capture IS NULL`); err != nil {
 		return fmt.Errorf("store: backfill users.capture: %w", err)
+	}
+
+	// Canonical token model: rename the old folded cached_tokens column to
+	// cache_read_input_tokens and split the historical folded input_tokens into
+	// the disjoint shape. Pre-change rows stored input_tokens = fresh + cache_read
+	// + cache_create (a folded total) and cached_tokens = cache_read. The rename
+	// preserves the cache-read values; the backfill subtracts them back out of
+	// input_tokens so every historical row matches the new definition (fresh input
+	// only). cache_create was never stored separately, so it stays absorbed inside
+	// input_tokens — exactly how the folded billing already treated it, and how new
+	// OpenAI rows treat it too. Guarded on the old column name, so it runs once and
+	// is idempotent (re-running finds no cached_tokens and skips). tokensMigrated
+	// gates the one-time sessions re-seed below.
+	tokensMigrated := false
+	if has, err := s.hasColumn("calls", "cached_tokens"); err != nil {
+		return err
+	} else if has {
+		if _, err := s.db.Exec(`ALTER TABLE calls RENAME COLUMN cached_tokens TO cache_read_input_tokens`); err != nil {
+			return fmt.Errorf("store: rename calls.cached_tokens: %w", err)
+		}
+		if _, err := s.db.Exec(
+			`UPDATE calls SET input_tokens = MAX(0, input_tokens - cache_read_input_tokens)`,
+		); err != nil {
+			return fmt.Errorf("store: backfill calls.input_tokens: %w", err)
+		}
+		tokensMigrated = true
+	}
+	// Fresh databases (born without cached_tokens) and already-migrated ones need
+	// the renamed column created directly.
+	if err := s.addColumn("calls", "cache_read_input_tokens", "REAL NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+
+	// One-time re-seed of the sessions rollup after the calls backfill above made
+	// historical rows disjoint. Only a sessions table that predates this change can
+	// hold stale folded input_tokens (and zeros for the new columns), and that is
+	// exactly the case tokensMigrated captures. This is a migration-time seed like
+	// backfillSessions, NOT a runtime recompute, so the "never recompute sessions"
+	// invariant holds. Empty sessions tables update no rows here and are seeded by
+	// backfillSessions (Step 4) instead.
+	if tokensMigrated {
+		if _, err := s.db.Exec(`UPDATE sessions SET
+			input_tokens                = COALESCE((SELECT SUM(c.input_tokens)                FROM calls c WHERE c.session_id = sessions.id), 0),
+			output_tokens               = COALESCE((SELECT SUM(c.output_tokens)               FROM calls c WHERE c.session_id = sessions.id), 0),
+			cache_read_input_tokens     = COALESCE((SELECT SUM(c.cache_read_input_tokens)     FROM calls c WHERE c.session_id = sessions.id), 0),
+			cache_creation_input_tokens = COALESCE((SELECT SUM(c.cache_creation_input_tokens) FROM calls c WHERE c.session_id = sessions.id), 0),
+			thinking_tokens             = COALESCE((SELECT SUM(c.thinking_tokens)             FROM calls c WHERE c.session_id = sessions.id), 0)`,
+		); err != nil {
+			return fmt.Errorf("store: reseed sessions tokens: %w", err)
+		}
 	}
 
 	// Index the session id for the activity feed's session grouping. Created
@@ -409,7 +470,7 @@ func (s *Store) backfillSessions() error {
 	// last_status is the status of the newest call per session (max ts, tie-broken
 	// by id). A correlated subquery keeps this to one statement.
 	if _, err := s.db.Exec(`INSERT INTO sessions
-		(id, first_ts, last_ts, turns, error_count, input_tokens, output_tokens, cost, tool_calls, tool_tokens, last_status, has_subagents)
+		(id, first_ts, last_ts, turns, error_count, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, thinking_tokens, cost, tool_calls, tool_tokens, last_status, has_subagents)
 		SELECT
 			c.session_id,
 			MIN(c.ts),
@@ -418,6 +479,9 @@ func (s *Store) backfillSessions() error {
 			SUM(CASE WHEN c.status = 0 OR c.status >= 400 THEN 1 ELSE 0 END),
 			COALESCE(SUM(c.input_tokens), 0),
 			COALESCE(SUM(c.output_tokens), 0),
+			COALESCE(SUM(c.cache_read_input_tokens), 0),
+			COALESCE(SUM(c.cache_creation_input_tokens), 0),
+			COALESCE(SUM(c.thinking_tokens), 0),
 			COALESCE(SUM(c.cost), 0),
 			COALESCE(SUM(c.tool_calls), 0),
 			COALESCE(SUM(c.tool_tokens), 0),
@@ -750,6 +814,14 @@ func (s *Store) migrateCallsToUUID() error {
 	// new (no source column) and is left NULL. This intersection keeps the INSERT
 	// valid regardless of which post-v1 columns the old DB had. client_name/
 	// client_version are carried over when the upstream DB already has them.
+	//
+	// NOTE: this rebuild deliberately reproduces the PRE-canonical-token schema —
+	// it keeps the old `cached_tokens` column name (not cache_read_input_tokens)
+	// and omits cache_creation_input_tokens/thinking_tokens. It runs in Step 1,
+	// before the Step 3 token migration, so its job is to preserve the old table's
+	// cache-read data under the old name; the Step 3 rename+adds then carry this
+	// (legacy integer-id) database forward identically to every other pre-existing
+	// DB. Renaming here instead would drop cache-read data on the intersection copy.
 	newSet := map[string]bool{
 		"id": true, "ts": true, "user_id": true, "model": true, "modality": true,
 		"vendor": true, "credential_id": true, "status": true, "err": true,

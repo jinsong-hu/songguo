@@ -39,22 +39,22 @@ func anthropicExtract(body []byte, _ Quirks) Extraction {
 }
 
 // anthropicNormalize maps an Anthropic usage object to the canonical view.
-// Anthropic reports cache reads/creation OUTSIDE input_tokens, while pricing
-// treats CachedInputTokens as a subset of InputTokens — so cache fields are
-// folded into InputTokens here. Cache creation is billed at the full input
-// rate (its 1.25x premium is ignored as a deliberate simplification).
+// Anthropic is the reference shape: it reports input_tokens (fresh), cache reads,
+// and cache creation as three disjoint fields, mapped straight through. Cache
+// creation is billed at the full input rate (its 1.25x premium is ignored as a
+// deliberate simplification). Thinking tokens are a subset of output_tokens.
 func anthropicNormalize(usage map[string]any) Extraction {
 	if usage == nil {
 		return Extraction{Confidence: calls.ConfidenceUnknown}
 	}
-	cacheRead := numAt(usage, "cache_read_input_tokens")
-	cacheCreate := numAt(usage, "cache_creation_input_tokens")
 	return Extraction{
 		Raw: usage,
 		Norm: Normalized{
-			InputTokens:       numAt(usage, "input_tokens") + cacheRead + cacheCreate,
-			OutputTokens:      numAt(usage, "output_tokens"),
-			CachedInputTokens: cacheRead,
+			InputTokens:         numAt(usage, "input_tokens"),
+			OutputTokens:        numAt(usage, "output_tokens"),
+			CachedInputTokens:   numAt(usage, "cache_read_input_tokens"),
+			CacheCreationTokens: numAt(usage, "cache_creation_input_tokens"),
+			ThinkingTokens:      numAt(usage, "output_tokens_details", "thinking_tokens"),
 		},
 		Confidence: calls.ConfidenceMeasured,
 	}

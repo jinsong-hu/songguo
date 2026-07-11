@@ -203,7 +203,7 @@ func (a *api) overviewData(since, until time.Time) (overviewView, error) {
 		Range:           rangeView{Since: since.Unix(), Until: until.Unix()},
 		TotalSpend:      totalSpend,
 		SpendByModality: byMod,
-		Tokens:          tokenView{Input: tokens.Input, Output: tokens.Output, Cached: tokens.Cached},
+		Tokens:          tokenView{Input: tokens.Input, Output: tokens.Output, Cached: tokens.Cached, CacheCreation: tokens.CacheCreation, Thinking: tokens.Thinking},
 		Requests:        stats.Requests,
 		Errors:          stats.Errors,
 		ErrorRate:       errorRate,
@@ -303,16 +303,18 @@ func (a *api) usageSeriesData(since, until time.Time, bucketRaw string) (usageSe
 	views := make([]seriesPoint, 0, len(points))
 	for _, p := range points {
 		views = append(views, seriesPoint{
-			TS:           p.Bucket.UTC().Format(time.RFC3339),
-			Cost:         p.Cost,
-			Requests:     p.Requests,
-			Errors:       p.Errors,
-			InputTokens:  p.InputTokens,
-			OutputTokens: p.OutputTokens,
-			CachedTokens: p.CachedTokens,
-			AvgLatencyMS: p.AvgLatencyMS,
-			AvgTTFTMS:    p.AvgTTFTMS,
-			AvgOutputTPS: p.AvgOutputTokensSec,
+			TS:                  p.Bucket.UTC().Format(time.RFC3339),
+			Cost:                p.Cost,
+			Requests:            p.Requests,
+			Errors:              p.Errors,
+			InputTokens:         p.InputTokens,
+			OutputTokens:        p.OutputTokens,
+			CachedTokens:        p.CachedTokens,
+			CacheCreationTokens: p.CacheCreationTokens,
+			ThinkingTokens:      p.ThinkingTokens,
+			AvgLatencyMS:        p.AvgLatencyMS,
+			AvgTTFTMS:           p.AvgTTFTMS,
+			AvgOutputTPS:        p.AvgOutputTokensSec,
 		})
 	}
 
@@ -407,14 +409,16 @@ func (a *api) handleBreakdown(w http.ResponseWriter, r *http.Request) {
 	views := make([]breakdownRow, 0, len(rows))
 	for _, b := range rows {
 		views = append(views, breakdownRow{
-			Key:          b.Key,
-			Requests:     b.Requests,
-			Errors:       b.Errors,
-			InputTokens:  b.InputTokens,
-			OutputTokens: b.OutputTokens,
-			CachedTokens: b.CachedTokens,
-			Cost:         b.Cost,
-			AvgLatencyMS: b.AvgLatencyMS,
+			Key:                 b.Key,
+			Requests:            b.Requests,
+			Errors:              b.Errors,
+			InputTokens:         b.InputTokens,
+			OutputTokens:        b.OutputTokens,
+			CachedTokens:        b.CachedTokens,
+			CacheCreationTokens: b.CacheCreationTokens,
+			ThinkingTokens:      b.ThinkingTokens,
+			Cost:                b.Cost,
+			AvgLatencyMS:        b.AvgLatencyMS,
 		})
 	}
 	writeJSON(w, http.StatusOK, breakdownView{
@@ -644,18 +648,22 @@ func (a *api) sessionData(id string) (sessionView, error) {
 	}
 
 	var (
-		cost, in, out float64
-		errCount      int
-		modelsSet     = map[string]struct{}{}
-		vendorsSet    = map[string]struct{}{}
-		first         = entries[0].TS
-		last          = entries[0].TS
-		ids           = make([]string, 0, len(entries))
+		cost, in, out                float64
+		cacheRead, cacheCreate, think float64
+		errCount                     int
+		modelsSet                    = map[string]struct{}{}
+		vendorsSet                   = map[string]struct{}{}
+		first                        = entries[0].TS
+		last                         = entries[0].TS
+		ids                          = make([]string, 0, len(entries))
 	)
 	for _, e := range entries {
 		cost += e.Cost
 		in += e.InputTokens
 		out += e.OutputTokens
+		cacheRead += e.CachedTokens
+		cacheCreate += e.CacheCreationTokens
+		think += e.ThinkingTokens
 		if e.Status == 0 || e.Status >= 400 {
 			errCount++
 		}
@@ -686,18 +694,21 @@ func (a *api) sessionData(id string) (sessionView, error) {
 	}
 
 	return sessionView{
-		SessionID:    id,
-		Title:        a.sessionTitleFromEntries(id, entries),
-		Calls:        len(entries),
-		Cost:         cost,
-		InputTokens:  in,
-		OutputTokens: out,
-		ErrorCount:   errCount,
-		FirstTS:      first.UTC().Format(time.RFC3339),
-		LastTS:       last.UTC().Format(time.RFC3339),
-		Models:       sortedStringSet(modelsSet),
-		Vendors:      sortedStringSet(vendorsSet),
-		Agents:       buildAgentTree(entries),
+		SessionID:           id,
+		Title:               a.sessionTitleFromEntries(id, entries),
+		Calls:               len(entries),
+		Cost:                cost,
+		InputTokens:         in,
+		OutputTokens:        out,
+		CachedTokens:        cacheRead,
+		CacheCreationTokens: cacheCreate,
+		ThinkingTokens:      think,
+		ErrorCount:          errCount,
+		FirstTS:             first.UTC().Format(time.RFC3339),
+		LastTS:              last.UTC().Format(time.RFC3339),
+		Models:              sortedStringSet(modelsSet),
+		Vendors:             sortedStringSet(vendorsSet),
+		Agents:              buildAgentTree(entries),
 		Entries:      entViews,
 	}, nil
 }
@@ -1169,9 +1180,10 @@ func contextBlockKey(block compose.Block) string {
 // first-seen order.
 func buildAgentTree(entries []calls.Entry) []agentNodeView {
 	type agg struct {
-		calls         int
-		cost, in, out float64
-		parent        string
+		calls                         int
+		cost, in, out                 float64
+		cacheRead, cacheCreate, think float64
+		parent                        string
 	}
 	aggs := map[string]*agg{}
 	order := []string{}
@@ -1186,6 +1198,9 @@ func buildAgentTree(entries []calls.Entry) []agentNodeView {
 		a.cost += e.Cost
 		a.in += e.InputTokens
 		a.out += e.OutputTokens
+		a.cacheRead += e.CachedTokens
+		a.cacheCreate += e.CacheCreationTokens
+		a.think += e.ThinkingTokens
 	}
 
 	children := map[string][]string{}
@@ -1205,12 +1220,15 @@ func buildAgentTree(entries []calls.Entry) []agentNodeView {
 		visited[id] = true
 		a := aggs[id]
 		node := agentNodeView{
-			AgentID:      id,
-			Calls:        a.calls,
-			Cost:         a.cost,
-			InputTokens:  a.in,
-			OutputTokens: a.out,
-			Children:     []agentNodeView{},
+			AgentID:             id,
+			Calls:               a.calls,
+			Cost:                a.cost,
+			InputTokens:         a.in,
+			OutputTokens:        a.out,
+			CachedTokens:        a.cacheRead,
+			CacheCreationTokens: a.cacheCreate,
+			ThinkingTokens:      a.think,
+			Children:            []agentNodeView{},
 		}
 		for _, c := range children[id] {
 			if visited[c] {
@@ -1221,6 +1239,9 @@ func buildAgentTree(entries []calls.Entry) []agentNodeView {
 			node.Cost += ch.Cost
 			node.InputTokens += ch.InputTokens
 			node.OutputTokens += ch.OutputTokens
+			node.CachedTokens += ch.CachedTokens
+			node.CacheCreationTokens += ch.CacheCreationTokens
+			node.ThinkingTokens += ch.ThinkingTokens
 			node.Children = append(node.Children, ch)
 		}
 		return node

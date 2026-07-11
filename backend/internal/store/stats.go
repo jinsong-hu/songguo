@@ -234,24 +234,28 @@ func (s *Store) ModelStats(since, until *time.Time) (map[string]ModelStat, error
 	return out, nil
 }
 
-// TokenTotals holds summed normalized token counts over a window.
+// TokenTotals holds summed normalized token counts over a window. Input, Cached,
+// and CacheCreation are disjoint input-side parts; Thinking is a subset of Output.
 type TokenTotals struct {
-	Input  float64
-	Output float64
-	Cached float64
+	Input         float64
+	Output        float64
+	Cached        float64 // cache_read_input_tokens
+	CacheCreation float64
+	Thinking      float64
 }
 
-// TokenTotals sums normalized input/output/cached tokens over the optional
-// [since, until) window.
+// TokenTotals sums normalized tokens over the optional [since, until) window.
 func (s *Store) TokenTotals(since, until *time.Time) (TokenTotals, error) {
 	clause, args := windowClause(since, until)
 	var t TokenTotals
 	err := s.db.QueryRow(
 		`SELECT COALESCE(SUM(input_tokens), 0),
 		        COALESCE(SUM(output_tokens), 0),
-		        COALESCE(SUM(cached_tokens), 0)
+		        COALESCE(SUM(cache_read_input_tokens), 0),
+		        COALESCE(SUM(cache_creation_input_tokens), 0),
+		        COALESCE(SUM(thinking_tokens), 0)
 		   FROM calls`+clause, args...,
-	).Scan(&t.Input, &t.Output, &t.Cached)
+	).Scan(&t.Input, &t.Output, &t.Cached, &t.CacheCreation, &t.Thinking)
 	if err != nil {
 		return TokenTotals{}, fmt.Errorf("store: token totals: %w", err)
 	}
@@ -306,16 +310,20 @@ func breakdownColumn(d BreakdownDimension) (string, bool) {
 	}
 }
 
-// BreakdownRow is one group's aggregates in a Breakdown result.
+// BreakdownRow is one group's aggregates in a Breakdown result. CachedTokens
+// (cache reads), CacheCreationTokens, and InputTokens are disjoint input parts;
+// ThinkingTokens is a subset of OutputTokens.
 type BreakdownRow struct {
-	Key          string
-	Requests     int
-	Errors       int
-	InputTokens  float64
-	OutputTokens float64
-	CachedTokens float64
-	Cost         float64
-	AvgLatencyMS float64
+	Key                 string
+	Requests            int
+	Errors              int
+	InputTokens         float64
+	OutputTokens        float64
+	CachedTokens        float64
+	CacheCreationTokens float64
+	ThinkingTokens      float64
+	Cost                float64
+	AvgLatencyMS        float64
 }
 
 // Breakdown groups the call log by dimension over the optional [since, until)
@@ -334,7 +342,9 @@ func (s *Store) Breakdown(dimension BreakdownDimension, since, until *time.Time)
 		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END),
 		        COALESCE(SUM(input_tokens), 0),
 		        COALESCE(SUM(output_tokens), 0),
-		        COALESCE(SUM(cached_tokens), 0),
+		        COALESCE(SUM(cache_read_input_tokens), 0),
+		        COALESCE(SUM(cache_creation_input_tokens), 0),
+		        COALESCE(SUM(thinking_tokens), 0),
 		        COALESCE(SUM(cost), 0),
 		        COALESCE(AVG(latency_ms), 0)
 		   FROM calls`+clause+`
@@ -351,7 +361,8 @@ func (s *Store) Breakdown(dimension BreakdownDimension, since, until *time.Time)
 	for rows.Next() {
 		var r BreakdownRow
 		if err := rows.Scan(&r.Key, &r.Requests, &r.Errors,
-			&r.InputTokens, &r.OutputTokens, &r.CachedTokens, &r.Cost, &r.AvgLatencyMS); err != nil {
+			&r.InputTokens, &r.OutputTokens, &r.CachedTokens, &r.CacheCreationTokens,
+			&r.ThinkingTokens, &r.Cost, &r.AvgLatencyMS); err != nil {
 			return nil, fmt.Errorf("store: scan breakdown: %w", err)
 		}
 		out = append(out, r)
@@ -403,16 +414,18 @@ var ErrTooManyBuckets = errors.New("store: too many buckets")
 // Performance averages exclude rows where the corresponding streaming timing is
 // unavailable (stored as zero).
 type SeriesPoint struct {
-	Bucket             time.Time
-	Cost               float64
-	Requests           int
-	Errors             int
-	InputTokens        float64
-	OutputTokens       float64
-	CachedTokens       float64
-	AvgLatencyMS       float64
-	AvgTTFTMS          float64
-	AvgOutputTokensSec float64
+	Bucket              time.Time
+	Cost                float64
+	Requests            int
+	Errors              int
+	InputTokens         float64
+	OutputTokens        float64
+	CachedTokens        float64 // cache_read_input_tokens
+	CacheCreationTokens float64
+	ThinkingTokens      float64
+	AvgLatencyMS        float64
+	AvgTTFTMS           float64
+	AvgOutputTokensSec  float64
 }
 
 // UsageSeries returns cost/request/error totals grouped into fixed time buckets
@@ -453,7 +466,9 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END),
 		        COALESCE(SUM(input_tokens), 0),
 		        COALESCE(SUM(output_tokens), 0),
-		        COALESCE(SUM(cached_tokens), 0),
+		        COALESCE(SUM(cache_read_input_tokens), 0),
+		        COALESCE(SUM(cache_creation_input_tokens), 0),
+		        COALESCE(SUM(thinking_tokens), 0),
 		        COALESCE(AVG(latency_ms), 0),
 		        COALESCE(AVG(CASE WHEN ttft_ms > 0 THEN ttft_ms END), 0),
 		        COALESCE(AVG(CASE
@@ -477,6 +492,8 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 		inTokens     float64
 		outTokens    float64
 		cacheTok     float64
+		cacheCreate  float64
+		thinkingTok  float64
 		avgLat       float64
 		avgTTFT      float64
 		avgOutputTPS float64
@@ -488,7 +505,8 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 			a           agg
 		)
 		if err := rows.Scan(&bucketStart, &a.cost, &a.requests, &a.errors,
-			&a.inTokens, &a.outTokens, &a.cacheTok, &a.avgLat, &a.avgTTFT, &a.avgOutputTPS); err != nil {
+			&a.inTokens, &a.outTokens, &a.cacheTok, &a.cacheCreate, &a.thinkingTok,
+			&a.avgLat, &a.avgTTFT, &a.avgOutputTPS); err != nil {
 			return nil, fmt.Errorf("store: scan usage series: %w", err)
 		}
 		byBucket[bucketStart] = a
@@ -508,6 +526,8 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 			p.InputTokens = a.inTokens
 			p.OutputTokens = a.outTokens
 			p.CachedTokens = a.cacheTok
+			p.CacheCreationTokens = a.cacheCreate
+			p.ThinkingTokens = a.thinkingTok
 			p.AvgLatencyMS = a.avgLat
 			p.AvgTTFTMS = a.avgTTFT
 			p.AvgOutputTokensSec = a.avgOutputTPS
@@ -567,7 +587,7 @@ func (s *Store) TokensByModelSeries(since, until time.Time, bucket time.Duration
 	rows, err := s.db.Query(
 		`SELECT (ts / ?) * ? AS bucket_start,
 		        model,
-		        COALESCE(SUM(input_tokens + output_tokens), 0),
+		        COALESCE(SUM(input_tokens + cache_read_input_tokens + cache_creation_input_tokens + output_tokens), 0),
 		        COALESCE(SUM(cost), 0)
 		   FROM calls
 		  WHERE ts >= ? AND ts < ?

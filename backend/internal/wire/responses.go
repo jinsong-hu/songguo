@@ -23,16 +23,22 @@ func responsesExtract(body []byte, _ Quirks) Extraction {
 	return responsesNormalize(topLevelUsage(body))
 }
 
+// responsesNormalize maps a Responses-API usage object to the canonical view.
+// Like chat-completions, input_tokens here is cache-INCLUSIVE, so the cached
+// portion is subtracted to keep the canonical InputTokens fresh-only. Reasoning
+// tokens are a subset of output_tokens.
 func responsesNormalize(usage map[string]any) Extraction {
 	if usage == nil {
 		return Extraction{Confidence: calls.ConfidenceUnknown}
 	}
+	cached := numAt(usage, "input_tokens_details", "cached_tokens")
 	return Extraction{
 		Raw: usage,
 		Norm: Normalized{
-			InputTokens:       numAt(usage, "input_tokens"),
+			InputTokens:       maxZero(numAt(usage, "input_tokens") - cached),
 			OutputTokens:      numAt(usage, "output_tokens"),
-			CachedInputTokens: numAt(usage, "input_tokens_details", "cached_tokens"),
+			CachedInputTokens: cached,
+			ThinkingTokens:    numAt(usage, "output_tokens_details", "reasoning_tokens"),
 		},
 		Confidence: calls.ConfidenceMeasured,
 	}
