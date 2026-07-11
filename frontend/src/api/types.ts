@@ -27,6 +27,8 @@ export interface Overview {
   errors: number;
   error_rate: number;
   latency_ms: LatencyMS;
+  ttft_ms: LatencyMS;
+  output_tokens_per_second: LatencyMS;
   vendors_active: number;
   users_active: number;
   /** Distinct users with traffic in the window. */
@@ -73,6 +75,8 @@ export interface SeriesPoint {
   output_tokens: number;
   cached_tokens: number;
   avg_latency_ms: number;
+  avg_ttft_ms: number;
+  avg_output_tokens_per_second: number;
 }
 
 export interface UsageSeries {
@@ -84,6 +88,7 @@ export interface TokensByModelPoint {
   ts: string;
   cost: number;
   tokens: Record<string, number>;
+  costs: Record<string, number>;
 }
 
 export interface TokensByModelSeries {
@@ -144,6 +149,9 @@ export interface CallEntry {
   output_tokens: number;
   cached_tokens: number;
   latency_ms: number;
+  ttft_ms: number;
+  generation_ms: number;
+  output_tokens_per_second: number;
   stream: boolean;
   tags: Record<string, string>;
   /** Normalized caller client parsed from User-Agent, e.g. claude-code. */

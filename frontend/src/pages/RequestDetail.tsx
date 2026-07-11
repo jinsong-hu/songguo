@@ -80,6 +80,10 @@ export function RequestDetailPage() {
             </Field>
             <Field label="Cost">{money(data.cost)}</Field>
             <Field label="Latency">{ms(data.latency_ms)}</Field>
+            <Field label="TTFT">{data.ttft_ms > 0 ? ms(data.ttft_ms) : '—'}</Field>
+            <Field label="Output speed">
+              {data.output_tokens_per_second > 0 ? `${data.output_tokens_per_second.toFixed(1)} tok/s` : '—'}
+            </Field>
             <Field label="Confidence">
               <ConfidenceDot confidence={data.confidence} />
             </Field>

@@ -32,6 +32,7 @@ func TestOverviewStats(t *testing.T) {
 		if _, err := s.AppendCall(calls.Entry{
 			TS: base.Add(time.Duration(i) * time.Minute), UserID: "t", Model: "m",
 			Vendor: "v", Status: r.status, LatencyMS: r.latency,
+			TTFTMS: int64((i + 1) * 5), GenerationMS: 1000, OutputTokens: float64((i + 1) * 10),
 		}); err != nil {
 			t.Fatalf("AppendCall[%d]: %v", i, err)
 		}
@@ -60,6 +61,13 @@ func TestOverviewStats(t *testing.T) {
 	if st.P99 != 100 {
 		t.Errorf("P99 = %d, want 100", st.P99)
 	}
+	if st.TTFTP50 != 25 || st.TTFTP95 != 50 || st.TTFTP99 != 50 {
+		t.Errorf("TTFT percentiles = %d/%d/%d, want 25/50/50", st.TTFTP50, st.TTFTP95, st.TTFTP99)
+	}
+	if st.OutputTPSP50 != 50 || st.OutputTPSP95 != 100 || st.OutputTPSP99 != 100 {
+		t.Errorf("output TPS percentiles = %v/%v/%v, want 50/100/100",
+			st.OutputTPSP50, st.OutputTPSP95, st.OutputTPSP99)
+	}
 }
 
 func TestOverviewStatsEmpty(t *testing.T) {
@@ -68,7 +76,8 @@ func TestOverviewStatsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OverviewStats: %v", err)
 	}
-	if st.Requests != 0 || st.Errors != 0 || st.P50 != 0 || st.P95 != 0 || st.P99 != 0 {
+	if st.Requests != 0 || st.Errors != 0 || st.P50 != 0 || st.P95 != 0 || st.P99 != 0 ||
+		st.TTFTP50 != 0 || st.OutputTPSP50 != 0 {
 		t.Errorf("empty stats = %+v, want all zero", st)
 	}
 }

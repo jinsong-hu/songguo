@@ -35,6 +35,8 @@ type mockUpstream struct {
 	lastBody    []byte      // request body observed on the last request
 	lastHeaders http.Header // all headers observed on the last request
 	calls       int
+	firstDelay  time.Duration
+	chunkDelay  time.Duration
 }
 
 func (m *mockUpstream) handler() http.HandlerFunc {
@@ -81,6 +83,12 @@ func (m *mockUpstream) serveStream(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.WriteHeader(http.StatusOK)
 	fl, _ := w.(http.Flusher)
+	if fl != nil {
+		fl.Flush()
+	}
+	if m.firstDelay > 0 {
+		time.Sleep(m.firstDelay)
+	}
 	chunks := []string{
 		`data: {"id":"c","choices":[{"delta":{"content":"he"}}]}`,
 		`data: {"id":"c","choices":[{"delta":{"content":"llo"}}]}`,
@@ -91,6 +99,9 @@ func (m *mockUpstream) serveStream(w http.ResponseWriter) {
 		_, _ = io.WriteString(w, c+"\n\n")
 		if fl != nil {
 			fl.Flush()
+		}
+		if m.chunkDelay > 0 {
+			time.Sleep(m.chunkDelay)
 		}
 	}
 }
@@ -191,32 +202,38 @@ func (e *testEnv) callRows(t *testing.T) []callRow {
 	out := make([]callRow, len(entries))
 	for i, en := range entries {
 		out[i] = callRow{
-			Vendor:     en.Vendor,
-			Status:     en.Status,
-			Model:      en.Model,
-			Cost:       en.Cost,
-			Stream:     en.Stream,
-			Usage:      en.Usage,
-			Tags:       en.Tags,
-			Wire:       en.Wire,
-			Confidence: string(en.Confidence),
-			Err:        en.Err,
+			Vendor:       en.Vendor,
+			Status:       en.Status,
+			Model:        en.Model,
+			Cost:         en.Cost,
+			Stream:       en.Stream,
+			Usage:        en.Usage,
+			Tags:         en.Tags,
+			Wire:         en.Wire,
+			Confidence:   string(en.Confidence),
+			Err:          en.Err,
+			LatencyMS:    en.LatencyMS,
+			TTFTMS:       en.TTFTMS,
+			GenerationMS: en.GenerationMS,
 		}
 	}
 	return out
 }
 
 type callRow struct {
-	Vendor     string
-	Status     int
-	Model      string
-	Cost       float64
-	Stream     bool
-	Usage      map[string]any
-	Tags       map[string]string
-	Wire       string
-	Confidence string
-	Err        string
+	Vendor       string
+	Status       int
+	Model        string
+	Cost         float64
+	Stream       bool
+	Usage        map[string]any
+	Tags         map[string]string
+	Wire         string
+	Confidence   string
+	Err          string
+	LatencyMS    int64
+	TTFTMS       int64
+	GenerationMS int64
 }
 
 func storeFilterAll() store.CallFilter { return store.CallFilter{Limit: 1000} }
@@ -784,7 +801,7 @@ func TestNoVendor(t *testing.T) {
 // --- Test 10: streaming -> SSE bytes unchanged, call captures usage+cost ---
 
 func TestStreaming(t *testing.T) {
-	up := &mockUpstream{}
+	up := &mockUpstream{firstDelay: 20 * time.Millisecond, chunkDelay: 10 * time.Millisecond}
 	mock := httptest.NewServer(up.handler())
 	defer mock.Close()
 	yaml := fmt.Sprintf(`
@@ -842,6 +859,15 @@ vendors:
 	wantCost := 2.50*10/1e6 + 10.00*20/1e6
 	if !approxEqual(r.Cost, wantCost) {
 		t.Errorf("streamed cost = %v, want %v", r.Cost, wantCost)
+	}
+	if r.TTFTMS < 15 {
+		t.Errorf("TTFTMS = %d, want at least 15ms", r.TTFTMS)
+	}
+	if r.GenerationMS < 30 {
+		t.Errorf("GenerationMS = %d, want at least 30ms", r.GenerationMS)
+	}
+	if r.LatencyMS < r.TTFTMS+r.GenerationMS {
+		t.Errorf("LatencyMS = %d, want >= TTFT+generation (%d)", r.LatencyMS, r.TTFTMS+r.GenerationMS)
 	}
 }
 

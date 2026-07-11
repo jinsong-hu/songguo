@@ -290,18 +290,18 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	start := h.now()
 	resp, err := h.client.Do(upReq)
-	latency := h.now().Sub(start).Milliseconds()
+	headerLatency := h.now().Sub(start).Milliseconds()
 
 	// Transport error: we have no upstream response to forward, so surface the
 	// real failure verbatim.
 	if err != nil {
 		h.logger.Warn("upstream request failed",
 			"vendor", t.Vendor.Name, "model", rt.model, "credential", t.Credential.ID,
-			"url", upReq.URL.String(), "latency_ms", latency, "err", err)
+			"url", upReq.URL.String(), "latency_ms", headerLatency, "err", err)
 		h.denyCapture(w, r, body, false, calls.Entry{
 			ID:     callID,
 			UserID: user.ID, Model: rt.model, Modality: modality,
-			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID, LatencyMS: latency,
+			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID, LatencyMS: headerLatency,
 			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
 			ClientName: client.Name, ClientVersion: client.Version,
 			ClientOS: client.OS, ClientOSVersion: client.OSVersion,
@@ -311,7 +311,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Forward the vendor's response verbatim — including a 429/5xx. The client
 	// sees the real outcome and decides whether to retry.
-	h.forward(w, r, resp, callID, user.ID, rt.model, modality, rw, t, latency, tags, attr, client, capture, body)
+	h.forward(w, r, resp, callID, user.ID, rt.model, modality, rw, t, start, tags, attr, client, capture, body)
 }
 
 // route is the resolved plan for a request: the candidate targets in selection
@@ -752,7 +752,7 @@ func mergeQuery(u, inboundQuery string) string {
 // call row is written.
 func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Response,
 	callID, userID, model string, modality calls.Modality, rw resolvedWire, t router.Target,
-	latency int64, tags map[string]string, attr attribution, client calls.ClientInfo, capture bool, reqBody []byte) {
+	startedAt time.Time, tags map[string]string, attr attribution, client calls.ClientInfo, capture bool, reqBody []byte) {
 	defer resp.Body.Close()
 
 	stream := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
@@ -764,11 +764,17 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		ext           wire.Extraction
 		respBody      []byte
 		parseRespBody []byte // fullest response bytes available, for async parse
+		firstTokenAt  time.Time
 	)
 	if stream {
 		var scanner wire.StreamScanner
 		if rw.matched && rw.wire.NewScanner != nil {
 			scanner = rw.wire.NewScanner(rw.quirks)
+			if notifier, ok := scanner.(wire.FirstTokenNotifier); ok {
+				notifier.SetFirstTokenCallback(func() {
+					firstTokenAt = h.now()
+				})
+			}
 		}
 		respBody, parseRespBody = h.streamBody(r.Context(), w, resp.Body, capture, scanner, resp.Header.Get("Content-Encoding"))
 		if scanner != nil {
@@ -785,6 +791,13 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		} else {
 			ext = wire.Extraction{Confidence: calls.ConfidenceUnknown}
 		}
+	}
+	endedAt := h.now()
+	latency := endedAt.Sub(startedAt).Milliseconds()
+	var ttftMS, generationMS int64
+	if !firstTokenAt.IsZero() {
+		ttftMS = firstTokenAt.Sub(startedAt).Milliseconds()
+		generationMS = endedAt.Sub(firstTokenAt).Milliseconds()
 	}
 
 	// Cost is priced from the vendor's OFFICIAL usage only. ext.Norm is the
@@ -827,7 +840,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 
 	entry := calls.Entry{
 		ID:            callID,
-		TSEnd:         h.now(),
+		TSEnd:         endedAt,
 		UserID:        userID,
 		Model:         model,
 		Modality:      modality,
@@ -842,6 +855,8 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		CachedTokens:  ext.Norm.CachedInputTokens,
 		Cost:          cost,
 		LatencyMS:     latency,
+		TTFTMS:        ttftMS,
+		GenerationMS:  generationMS,
 		Stream:        stream,
 		Tags:          tags,
 		SessionID:     attr.session,

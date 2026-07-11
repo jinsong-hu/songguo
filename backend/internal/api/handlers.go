@@ -208,6 +208,8 @@ func (a *api) overviewData(since, until time.Time) (overviewView, error) {
 		Errors:          stats.Errors,
 		ErrorRate:       errorRate,
 		LatencyMS:       latencyView{P50: stats.P50, P95: stats.P95, P99: stats.P99},
+		TTFTMS:          latencyView{P50: stats.TTFTP50, P95: stats.TTFTP95, P99: stats.TTFTP99},
+		OutputTPS:       rateView{P50: stats.OutputTPSP50, P95: stats.OutputTPSP95, P99: stats.OutputTPSP99},
 		VendorsActive:   vendorsActive,
 		UsersActive:     usersActive,
 		ActiveCallers:   activeCallers,
@@ -309,6 +311,8 @@ func (a *api) usageSeriesData(since, until time.Time, bucketRaw string) (usageSe
 			OutputTokens: p.OutputTokens,
 			CachedTokens: p.CachedTokens,
 			AvgLatencyMS: p.AvgLatencyMS,
+			AvgTTFTMS:    p.AvgTTFTMS,
+			AvgOutputTPS: p.AvgOutputTokensSec,
 		})
 	}
 
@@ -369,6 +373,7 @@ func (a *api) handleTokensByModel(w http.ResponseWriter, r *http.Request) {
 			TS:     b.Bucket.UTC().Format(time.RFC3339),
 			Cost:   b.Cost,
 			Tokens: b.Tokens,
+			Costs:  b.CostByModel,
 		})
 	}
 	writeJSON(w, http.StatusOK, tokensByModelView{Bucket: label, Models: models, Points: points})

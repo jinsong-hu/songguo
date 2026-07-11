@@ -15,11 +15,17 @@ import (
 // >= 400. Percentiles use the nearest-rank method over the sorted, non-empty
 // set of latencies; they are 0 when there are no rows.
 type OverviewStats struct {
-	Requests int
-	Errors   int
-	P50      int64
-	P95      int64
-	P99      int64
+	Requests     int
+	Errors       int
+	P50          int64
+	P95          int64
+	P99          int64
+	TTFTP50      int64
+	TTFTP95      int64
+	TTFTP99      int64
+	OutputTPSP50 float64
+	OutputTPSP95 float64
+	OutputTPSP99 float64
 }
 
 // VendorStat holds per-vendor request/error counts, average latency, and the
@@ -66,7 +72,8 @@ func (s *Store) OverviewStats(since, until *time.Time) (OverviewStats, error) {
 	clause, args := windowClause(since, until)
 
 	rows, err := s.db.Query(
-		`SELECT latency_ms, status FROM calls`+clause+` ORDER BY latency_ms ASC`,
+		`SELECT latency_ms, status, ttft_ms, generation_ms, output_tokens
+		   FROM calls`+clause+` ORDER BY latency_ms ASC`,
 		args...,
 	)
 	if err != nil {
@@ -77,13 +84,18 @@ func (s *Store) OverviewStats(since, until *time.Time) (OverviewStats, error) {
 	var (
 		out       OverviewStats
 		latencies []int64
+		ttfts     []int64
+		outputTPS []float64
 	)
 	for rows.Next() {
 		var (
-			latency int64
-			status  int
+			latency      int64
+			status       int
+			ttft         int64
+			generation   int64
+			outputTokens float64
 		)
-		if err := rows.Scan(&latency, &status); err != nil {
+		if err := rows.Scan(&latency, &status, &ttft, &generation, &outputTokens); err != nil {
 			return OverviewStats{}, fmt.Errorf("store: scan overview stats: %w", err)
 		}
 		out.Requests++
@@ -91,6 +103,12 @@ func (s *Store) OverviewStats(since, until *time.Time) (OverviewStats, error) {
 			out.Errors++
 		}
 		latencies = append(latencies, latency)
+		if ttft > 0 {
+			ttfts = append(ttfts, ttft)
+		}
+		if generation > 0 && outputTokens > 0 {
+			outputTPS = append(outputTPS, outputTokens*1000/float64(generation))
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return OverviewStats{}, fmt.Errorf("store: overview stats: %w", err)
@@ -100,6 +118,12 @@ func (s *Store) OverviewStats(since, until *time.Time) (OverviewStats, error) {
 	out.P50 = percentileNearestRank(latencies, 50)
 	out.P95 = percentileNearestRank(latencies, 95)
 	out.P99 = percentileNearestRank(latencies, 99)
+	out.TTFTP50 = percentileNearestRank(ttfts, 50)
+	out.TTFTP95 = percentileNearestRank(ttfts, 95)
+	out.TTFTP99 = percentileNearestRank(ttfts, 99)
+	out.OutputTPSP50 = percentileNearestRankFloat(outputTPS, 50)
+	out.OutputTPSP95 = percentileNearestRankFloat(outputTPS, 95)
+	out.OutputTPSP99 = percentileNearestRankFloat(outputTPS, 99)
 	return out, nil
 }
 
@@ -376,16 +400,19 @@ var ErrTooManyBuckets = errors.New("store: too many buckets")
 
 // SeriesPoint is one bucket of the usage timeseries: the bucket start (UTC) and
 // the cost/request/error/token totals for rows whose ts falls in that bucket.
-// AvgLatencyMS is the mean latency over the bucket's rows (0 for an empty bucket).
+// Performance averages exclude rows where the corresponding streaming timing is
+// unavailable (stored as zero).
 type SeriesPoint struct {
-	Bucket       time.Time
-	Cost         float64
-	Requests     int
-	Errors       int
-	InputTokens  float64
-	OutputTokens float64
-	CachedTokens float64
-	AvgLatencyMS float64
+	Bucket             time.Time
+	Cost               float64
+	Requests           int
+	Errors             int
+	InputTokens        float64
+	OutputTokens       float64
+	CachedTokens       float64
+	AvgLatencyMS       float64
+	AvgTTFTMS          float64
+	AvgOutputTokensSec float64
 }
 
 // UsageSeries returns cost/request/error totals grouped into fixed time buckets
@@ -427,7 +454,12 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 		        COALESCE(SUM(input_tokens), 0),
 		        COALESCE(SUM(output_tokens), 0),
 		        COALESCE(SUM(cached_tokens), 0),
-		        COALESCE(AVG(latency_ms), 0)
+		        COALESCE(AVG(latency_ms), 0),
+		        COALESCE(AVG(CASE WHEN ttft_ms > 0 THEN ttft_ms END), 0),
+		        COALESCE(AVG(CASE
+		          WHEN generation_ms > 0 AND output_tokens > 0
+		          THEN output_tokens * 1000.0 / generation_ms
+		        END), 0)
 		   FROM calls
 		  WHERE ts >= ? AND ts < ?
 		  GROUP BY bucket_start`,
@@ -439,13 +471,15 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 	defer rows.Close()
 
 	type agg struct {
-		cost      float64
-		requests  int
-		errors    int
-		inTokens  float64
-		outTokens float64
-		cacheTok  float64
-		avgLat    float64
+		cost         float64
+		requests     int
+		errors       int
+		inTokens     float64
+		outTokens    float64
+		cacheTok     float64
+		avgLat       float64
+		avgTTFT      float64
+		avgOutputTPS float64
 	}
 	byBucket := make(map[int64]agg)
 	for rows.Next() {
@@ -454,7 +488,7 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 			a           agg
 		)
 		if err := rows.Scan(&bucketStart, &a.cost, &a.requests, &a.errors,
-			&a.inTokens, &a.outTokens, &a.cacheTok, &a.avgLat); err != nil {
+			&a.inTokens, &a.outTokens, &a.cacheTok, &a.avgLat, &a.avgTTFT, &a.avgOutputTPS); err != nil {
 			return nil, fmt.Errorf("store: scan usage series: %w", err)
 		}
 		byBucket[bucketStart] = a
@@ -475,6 +509,8 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 			p.OutputTokens = a.outTokens
 			p.CachedTokens = a.cacheTok
 			p.AvgLatencyMS = a.avgLat
+			p.AvgTTFTMS = a.avgTTFT
+			p.AvgOutputTokensSec = a.avgOutputTPS
 		}
 		out = append(out, p)
 	}
@@ -489,13 +525,15 @@ const tokensByModelTopN = 5
 const otherModelKey = "Other"
 
 // TokensByModelBucket is one time bucket of the tokens-by-model series: the
-// bucket start (UTC), the total cost over the bucket, and total tokens
-// (input+output) per model. Only the top models are kept as distinct keys; the
-// remaining models are aggregated under "Other".
+// bucket start (UTC), the total cost over the bucket, total tokens
+// (input+output) per model, and cost per model. Only the top models are kept as
+// distinct keys; the remaining models are aggregated under "Other". Tokens and
+// CostByModel carry the same key set.
 type TokensByModelBucket struct {
-	Bucket time.Time
-	Cost   float64
-	Tokens map[string]float64
+	Bucket      time.Time
+	Cost        float64
+	Tokens      map[string]float64
+	CostByModel map[string]float64
 }
 
 // TokensByModelSeries returns, for each fixed time bucket across [since, until),
@@ -545,6 +583,7 @@ func (s *Store) TokensByModelSeries(since, until time.Time, bucket time.Duration
 		bucket int64
 		model  string
 		tokens float64
+		cost   float64
 	}
 	var cells []cell
 	modelTotals := make(map[string]float64)
@@ -562,7 +601,7 @@ func (s *Store) TokensByModelSeries(since, until time.Time, bucket time.Duration
 		if model == "" {
 			model = "unknown"
 		}
-		cells = append(cells, cell{bucket: b, model: model, tokens: tokens})
+		cells = append(cells, cell{bucket: b, model: model, tokens: tokens, cost: cost})
 		modelTotals[model] += tokens
 		bucketCost[b] += cost
 	}
@@ -594,7 +633,9 @@ func (s *Store) TokensByModelSeries(since, until time.Time, bucket time.Duration
 	hasOther := len(ranked) > len(models)
 
 	// Fold each cell into its bucket, remapping non-top models to "Other".
+	// Tokens and cost are folded in parallel so they share the same key set.
 	perBucket := make(map[int64]map[string]float64)
+	perBucketCost := make(map[int64]map[string]float64)
 	for _, c := range cells {
 		key := c.model
 		if !top[key] {
@@ -606,6 +647,12 @@ func (s *Store) TokensByModelSeries(since, until time.Time, bucket time.Duration
 			perBucket[c.bucket] = m
 		}
 		m[key] += c.tokens
+		mc := perBucketCost[c.bucket]
+		if mc == nil {
+			mc = make(map[string]float64)
+			perBucketCost[c.bucket] = mc
+		}
+		mc[key] += c.cost
 	}
 	if hasOther {
 		models = append(models, otherModelKey)
@@ -615,16 +662,22 @@ func (s *Store) TokensByModelSeries(since, until time.Time, bucket time.Duration
 	for i := int64(0); i < count; i++ {
 		bs := startMs + i*bucketMs
 		tokens := make(map[string]float64, len(models))
+		costByModel := make(map[string]float64, len(models))
 		for _, m := range models {
 			tokens[m] = 0
+			costByModel[m] = 0
 		}
 		for m, v := range perBucket[bs] {
 			tokens[m] += v
 		}
+		for m, v := range perBucketCost[bs] {
+			costByModel[m] += v
+		}
 		out = append(out, TokensByModelBucket{
-			Bucket: time.UnixMilli(bs).UTC(),
-			Cost:   bucketCost[bs],
-			Tokens: tokens,
+			Bucket:      time.UnixMilli(bs).UTC(),
+			Cost:        bucketCost[bs],
+			Tokens:      tokens,
+			CostByModel: costByModel,
 		})
 	}
 	return models, out, nil
@@ -653,6 +706,23 @@ func percentileNearestRank(sorted []int64, p int) int64 {
 	}
 	// Nearest-rank: rank = ceil(p/100 * n), 1-based.
 	rank := (p*n + 99) / 100 // == ceil(p*n/100)
+	if rank < 1 {
+		rank = 1
+	}
+	if rank > n {
+		rank = n
+	}
+	return sorted[rank-1]
+}
+
+func percentileNearestRankFloat(values []float64, p int) float64 {
+	n := len(values)
+	if n == 0 {
+		return 0
+	}
+	sorted := append([]float64(nil), values...)
+	sort.Float64s(sorted)
+	rank := (p*n + 99) / 100
 	if rank < 1 {
 		rank = 1
 	}

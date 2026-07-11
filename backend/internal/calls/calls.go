@@ -66,7 +66,9 @@ type Entry struct {
 	OutputTokens  float64
 	CachedTokens  float64
 	Cost          float64 // computed cost in USD (0 if unknown/free)
-	LatencyMS     int64
+	LatencyMS     int64   // full upstream request duration through response body completion
+	TTFTMS        int64   // upstream request start to first generated stream delta; 0 when unavailable
+	GenerationMS  int64   // first generated stream delta to stream completion; 0 when unavailable
 	Stream        bool
 	Tags          map[string]string // optional business attribution (may be nil)
 	ClientName    string            // normalized caller client (e.g. claude-code, codex)

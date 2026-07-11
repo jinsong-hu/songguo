@@ -2,6 +2,7 @@ package wire
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/songguo/songguo/internal/calls"
 )
@@ -58,6 +59,8 @@ func (s *responsesScanner) processLine(line []byte) {
 		return
 	}
 	var env struct {
+		Type     string         `json:"type"`
+		Delta    any            `json:"delta"`
 		Usage    map[string]any `json:"usage"`
 		Response struct {
 			Usage map[string]any `json:"usage"`
@@ -65,6 +68,9 @@ func (s *responsesScanner) processLine(line []byte) {
 	}
 	if err := json.Unmarshal(payload, &env); err != nil {
 		return
+	}
+	if strings.HasSuffix(env.Type, ".delta") && nonEmptyJSONValue(env.Delta) {
+		s.markFirstToken()
 	}
 	if env.Response.Usage != nil {
 		s.usage = env.Response.Usage

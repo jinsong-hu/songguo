@@ -81,6 +81,9 @@ type entryView struct {
 	OutputTokens  float64           `json:"output_tokens"`
 	CachedTokens  float64           `json:"cached_tokens"`
 	LatencyMS     int64             `json:"latency_ms"`
+	TTFTMS        int64             `json:"ttft_ms"`
+	GenerationMS  int64             `json:"generation_ms"`
+	OutputTPS     float64           `json:"output_tokens_per_second"`
 	Stream        bool              `json:"stream"`
 	Tags          map[string]string `json:"tags"`
 	ClientName    string            `json:"client_name"`
@@ -131,6 +134,9 @@ func newEntryView(e calls.Entry) entryView {
 		OutputTokens:  e.OutputTokens,
 		CachedTokens:  e.CachedTokens,
 		LatencyMS:     e.LatencyMS,
+		TTFTMS:        e.TTFTMS,
+		GenerationMS:  e.GenerationMS,
+		OutputTPS:     outputTokensPerSecond(e.OutputTokens, e.GenerationMS),
 		Stream:        e.Stream,
 		Tags:          tags,
 		ClientName:    e.ClientName,
@@ -158,6 +164,12 @@ type latencyView struct {
 	P99 int64 `json:"p99"`
 }
 
+type rateView struct {
+	P50 float64 `json:"p50"`
+	P95 float64 `json:"p95"`
+	P99 float64 `json:"p99"`
+}
+
 // tokenView holds summed normalized token counts over a window.
 type tokenView struct {
 	Input  float64 `json:"input"`
@@ -175,6 +187,8 @@ type overviewView struct {
 	Errors          int                `json:"errors"`
 	ErrorRate       float64            `json:"error_rate"`
 	LatencyMS       latencyView        `json:"latency_ms"`
+	TTFTMS          latencyView        `json:"ttft_ms"`
+	OutputTPS       rateView           `json:"output_tokens_per_second"`
 	VendorsActive   int                `json:"vendors_active"`
 	UsersActive     int                `json:"users_active"`
 	// ActiveCallers is the count of distinct users with traffic in the window,
@@ -219,6 +233,15 @@ type seriesPoint struct {
 	OutputTokens float64 `json:"output_tokens"`
 	CachedTokens float64 `json:"cached_tokens"`
 	AvgLatencyMS float64 `json:"avg_latency_ms"`
+	AvgTTFTMS    float64 `json:"avg_ttft_ms"`
+	AvgOutputTPS float64 `json:"avg_output_tokens_per_second"`
+}
+
+func outputTokensPerSecond(tokens float64, generationMS int64) float64 {
+	if tokens <= 0 || generationMS <= 0 {
+		return 0
+	}
+	return tokens * 1000 / float64(generationMS)
 }
 
 // usageSeriesView is the GET /api/usage/series response.
@@ -228,11 +251,13 @@ type usageSeriesView struct {
 }
 
 // tokensByModelPoint is one bucket in the GET /api/usage/tokens-by-model
-// response: total cost plus total tokens (input+output) keyed by model.
+// response: total cost, total tokens (input+output) keyed by model, and cost
+// keyed by model. Tokens and Costs carry the same key set.
 type tokensByModelPoint struct {
 	TS     string             `json:"ts"`
 	Cost   float64            `json:"cost"`
 	Tokens map[string]float64 `json:"tokens"`
+	Costs  map[string]float64 `json:"costs"`
 }
 
 // tokensByModelView is the GET /api/usage/tokens-by-model response: the ordered

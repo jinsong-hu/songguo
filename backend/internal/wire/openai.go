@@ -131,10 +131,24 @@ func (s *openAIScanner) processLine(line []byte) {
 		return
 	}
 	var env struct {
-		Usage map[string]any `json:"usage"`
+		Usage   map[string]any `json:"usage"`
+		Choices []struct {
+			Text  string         `json:"text"`
+			Delta map[string]any `json:"delta"`
+		} `json:"choices"`
 	}
 	if err := json.Unmarshal(payload, &env); err != nil {
 		return
+	}
+	for _, choice := range env.Choices {
+		if choice.Text != "" ||
+			nonEmptyJSONValue(choice.Delta["content"]) ||
+			nonEmptyJSONValue(choice.Delta["reasoning_content"]) ||
+			nonEmptyJSONValue(choice.Delta["tool_calls"]) ||
+			nonEmptyJSONValue(choice.Delta["function_call"]) {
+			s.markFirstToken()
+			break
+		}
 	}
 	if env.Usage != nil {
 		s.usage = env.Usage

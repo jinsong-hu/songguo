@@ -12,9 +12,27 @@ const maxLineBytes = 1 << 20 // 1 MiB
 // can never disrupt the proxied stream. Per-wire scanners embed it and parse
 // lines in their onLine callback.
 type lineScanner struct {
-	buf      []byte // partial line carried across writes
-	onLine   func(line []byte)
-	overflow bool // current line exceeded maxLineBytes; discard until newline
+	buf            []byte // partial line carried across writes
+	onLine         func(line []byte)
+	overflow       bool // current line exceeded maxLineBytes; discard until newline
+	firstToken     func()
+	firstTokenSeen bool
+}
+
+// SetFirstTokenCallback registers a callback invoked once when a wire-specific
+// scanner identifies its first generated output delta.
+func (s *lineScanner) SetFirstTokenCallback(fn func()) {
+	s.firstToken = fn
+}
+
+func (s *lineScanner) markFirstToken() {
+	if s.firstTokenSeen {
+		return
+	}
+	s.firstTokenSeen = true
+	if s.firstToken != nil {
+		s.firstToken()
+	}
 }
 
 // Write consumes all of p, dispatching any complete lines. It always returns
@@ -77,4 +95,19 @@ func ssePayload(line []byte) ([]byte, bool) {
 		return nil, false
 	}
 	return payload, true
+}
+
+func nonEmptyJSONValue(v any) bool {
+	switch x := v.(type) {
+	case nil:
+		return false
+	case string:
+		return x != ""
+	case []any:
+		return len(x) > 0
+	case map[string]any:
+		return len(x) > 0
+	default:
+		return true
+	}
 }

@@ -139,6 +139,8 @@ func (s *Store) migrate() error {
 			usage         TEXT NOT NULL DEFAULT '{}',
 			cost          REAL NOT NULL DEFAULT 0,
 			latency_ms    INTEGER NOT NULL DEFAULT 0,
+			ttft_ms       INTEGER NOT NULL DEFAULT 0,
+			generation_ms INTEGER NOT NULL DEFAULT 0,
 			stream        INTEGER NOT NULL DEFAULT 0,
 			tags          TEXT NOT NULL DEFAULT '{}'
 		)`,
@@ -271,6 +273,10 @@ func (s *Store) migrate() error {
 		{"calls", "input_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"calls", "output_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"calls", "cached_tokens", "REAL NOT NULL DEFAULT 0"},
+		// Streaming performance timings. Zero means unavailable (legacy row,
+		// non-stream response, or a stream with no generated output delta).
+		{"calls", "ttft_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"calls", "generation_ms", "INTEGER NOT NULL DEFAULT 0"},
 		// Coding-agent attribution headers, captured read-only so the ledger can be
 		// grouped by session and by the main-loop→subagent tree when available.
 		// Empty for ordinary API traffic (and for rows written before these
@@ -711,6 +717,8 @@ func (s *Store) migrateCallsToUUID() error {
 		usage         TEXT NOT NULL DEFAULT '{}',
 		cost          REAL NOT NULL DEFAULT 0,
 		latency_ms    INTEGER NOT NULL DEFAULT 0,
+		ttft_ms       INTEGER NOT NULL DEFAULT 0,
+		generation_ms INTEGER NOT NULL DEFAULT 0,
 		stream        INTEGER NOT NULL DEFAULT 0,
 		tags          TEXT NOT NULL DEFAULT '{}',
 		wire          TEXT NOT NULL DEFAULT '',
@@ -736,7 +744,8 @@ func (s *Store) migrateCallsToUUID() error {
 	newSet := map[string]bool{
 		"id": true, "ts": true, "user_id": true, "model": true, "modality": true,
 		"vendor": true, "credential_id": true, "status": true, "err": true,
-		"usage": true, "cost": true, "latency_ms": true, "stream": true, "tags": true,
+		"usage": true, "cost": true, "latency_ms": true, "ttft_ms": true,
+		"generation_ms": true, "stream": true, "tags": true,
 		"wire": true, "confidence": true, "input_tokens": true, "output_tokens": true,
 		"cached_tokens": true, "session_id": true, "agent_id": true, "parent_agent_id": true,
 		"client_name": true, "client_version": true,

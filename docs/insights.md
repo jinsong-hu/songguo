@@ -16,8 +16,8 @@ Candidate sections, mapped to what the overview already renders:
 
 - **Usage** — requests / spend / tokens over time; top models; spend by model;
   by vendor.
-- **Performance** — latency percentiles; average latency over time.
-- **Tokens** — throughput; tokens by model; cache-hit ratio.
+- **Performance** — end-to-end latency, streamed TTFT, and output tokens/sec.
+- **Tokens** — token volume; tokens by model; cache-hit ratio.
 - **Context distribution** — where the input context window goes (composition
   sunburst).
 - **Reliability** — success rate over time; errors by class; error rate by

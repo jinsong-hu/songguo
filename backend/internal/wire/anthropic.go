@@ -81,6 +81,8 @@ func (s *anthropicScanner) processLine(line []byte) {
 		return
 	}
 	var env struct {
+		Type    string         `json:"type"`
+		Delta   map[string]any `json:"delta"`
 		Usage   map[string]any `json:"usage"`
 		Message struct {
 			Usage map[string]any `json:"usage"`
@@ -88,6 +90,9 @@ func (s *anthropicScanner) processLine(line []byte) {
 	}
 	if err := json.Unmarshal(payload, &env); err != nil {
 		return
+	}
+	if env.Type == "content_block_delta" && len(env.Delta) > 0 {
+		s.markFirstToken()
 	}
 	s.merge(env.Message.Usage)
 	s.merge(env.Usage)

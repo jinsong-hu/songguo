@@ -44,6 +44,13 @@ type StreamScanner interface {
 	Result() Extraction
 }
 
+// FirstTokenNotifier is implemented by stream scanners that can identify the
+// first meaningful generated output event. The proxy uses it to measure TTFT
+// without coupling transport code to vendor-specific SSE shapes.
+type FirstTokenNotifier interface {
+	SetFirstTokenCallback(func())
+}
+
 // Quirks are per-service data flags that parameterize an extractor without
 // forking the wire (e.g. {"cache_tokens": "deepseek"}).
 type Quirks map[string]string

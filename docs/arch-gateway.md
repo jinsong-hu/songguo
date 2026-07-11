@@ -102,7 +102,7 @@ same row:
 
 - `status` = final HTTP status (or 0 for a transport failure / no response)
 - `err`, `usage`, `input_tokens`, `output_tokens`, `cached_tokens`, `cost`,
-  `latency_ms`, `stream`, `confidence`, `wire`
+  `latency_ms`, `ttft_ms`, `generation_ms`, `stream`, `confidence`, `wire`
 - `ts_end` = now
 
 A row that has phase 1 but never phase 2 is a visible in-flight or interrupted

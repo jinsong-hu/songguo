@@ -639,6 +639,12 @@ components:
         p50: { type: integer, format: int64 }
         p95: { type: integer, format: int64 }
         p99: { type: integer, format: int64 }
+    RatePercentiles:
+      type: object
+      properties:
+        p50: { type: number }
+        p95: { type: number }
+        p99: { type: number }
     Overview:
       type: object
       properties:
@@ -651,7 +657,9 @@ components:
         requests: { type: integer }
         errors: { type: integer }
         error_rate: { type: number }
-        latency_ms: { $ref: "#/components/schemas/Latency" }
+        latency_ms: { $ref: "#/components/schemas/Latency", description: Full upstream request duration through response body completion }
+        ttft_ms: { $ref: "#/components/schemas/Latency", description: Streamed calls only; request start to first generated output delta }
+        output_tokens_per_second: { $ref: "#/components/schemas/RatePercentiles", description: Streamed output token generation rate }
         vendors_active: { type: integer }
         users_active: { type: integer }
         active_callers: { type: integer, description: Distinct users with traffic in the window }
@@ -674,6 +682,8 @@ components:
         output_tokens: { type: number }
         cached_tokens: { type: number }
         avg_latency_ms: { type: number }
+        avg_ttft_ms: { type: number }
+        avg_output_tokens_per_second: { type: number }
     UsageSeries:
       type: object
       properties:
@@ -688,6 +698,10 @@ components:
           type: object
           additionalProperties: { type: number }
           description: Total tokens (input+output) keyed by model (top N + "Other").
+        costs:
+          type: object
+          additionalProperties: { type: number }
+          description: Cost keyed by model using the same keys as tokens.
     TokensByModelSeries:
       type: object
       properties:
@@ -796,7 +810,10 @@ components:
         input_tokens: { type: number }
         output_tokens: { type: number }
         cached_tokens: { type: number }
-        latency_ms: { type: integer, format: int64 }
+        latency_ms: { type: integer, format: int64, description: Full upstream request duration through response body completion }
+        ttft_ms: { type: integer, format: int64, description: Request start to first generated output delta; zero when unavailable }
+        generation_ms: { type: integer, format: int64, description: First generated output delta to stream completion; zero when unavailable }
+        output_tokens_per_second: { type: number, description: Output tokens divided by generation duration; zero when unavailable }
         stream: { type: boolean }
         tags: { type: object, additionalProperties: { type: string } }
         session_id: { type: string, description: "Captured coding-agent session id, e.g. X-Claude-Code-Session-Id or Codex Session-Id (empty for ordinary API traffic)" }

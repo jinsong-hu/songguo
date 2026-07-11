@@ -12,8 +12,8 @@ func TestTokenTotalsAndSeries(t *testing.T) {
 	s := openTestStore(t)
 	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	entries := []calls.Entry{
-		{TS: base.Add(10 * time.Minute), Vendor: "v", Model: "m", Status: 200, InputTokens: 100, OutputTokens: 20, CachedTokens: 40, LatencyMS: 10},
-		{TS: base.Add(1*time.Hour + 10*time.Minute), Vendor: "v", Model: "m", Status: 200, InputTokens: 50, OutputTokens: 5, CachedTokens: 0, LatencyMS: 30},
+		{TS: base.Add(10 * time.Minute), Vendor: "v", Model: "m", Status: 200, InputTokens: 100, OutputTokens: 20, CachedTokens: 40, LatencyMS: 10, TTFTMS: 5, GenerationMS: 1000},
+		{TS: base.Add(1*time.Hour + 10*time.Minute), Vendor: "v", Model: "m", Status: 200, InputTokens: 50, OutputTokens: 5, CachedTokens: 0, LatencyMS: 30, TTFTMS: 15, GenerationMS: 500},
 	}
 	for i, e := range entries {
 		if _, err := s.AppendCall(e); err != nil {
@@ -43,10 +43,16 @@ func TestTokenTotalsAndSeries(t *testing.T) {
 	if !approx(pts[0].AvgLatencyMS, 10) {
 		t.Errorf("hour0 avg latency = %v, want 10", pts[0].AvgLatencyMS)
 	}
+	if !approx(pts[0].AvgTTFTMS, 5) || !approx(pts[0].AvgOutputTokensSec, 20) {
+		t.Errorf("hour0 performance = %+v, want TTFT 5 / output TPS 20", pts[0])
+	}
 	if !approx(pts[1].InputTokens, 50) || !approx(pts[1].AvgLatencyMS, 30) {
 		t.Errorf("hour1 = %+v", pts[1])
 	}
-	if pts[2].InputTokens != 0 || pts[2].AvgLatencyMS != 0 {
+	if !approx(pts[1].AvgTTFTMS, 15) || !approx(pts[1].AvgOutputTokensSec, 10) {
+		t.Errorf("hour1 performance = %+v, want TTFT 15 / output TPS 10", pts[1])
+	}
+	if pts[2].InputTokens != 0 || pts[2].AvgLatencyMS != 0 || pts[2].AvgTTFTMS != 0 || pts[2].AvgOutputTokensSec != 0 {
 		t.Errorf("hour2 (gap) = %+v, want zero", pts[2])
 	}
 }

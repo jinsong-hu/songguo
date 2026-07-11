@@ -125,6 +125,8 @@ func TestOpenAIExtractNoUsage(t *testing.T) {
 
 func TestOpenAIScannerFinalChunkUsage(t *testing.T) {
 	s := newOpenAIScanner(nil)
+	firstTokens := 0
+	s.(FirstTokenNotifier).SetFirstTokenCallback(func() { firstTokens++ })
 	stream := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}],\"usage\":null}\n\n" +
 		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7}}\n\n" +
 		"data: [DONE]\n\n"
@@ -141,6 +143,9 @@ func TestOpenAIScannerFinalChunkUsage(t *testing.T) {
 	}
 	if got.Confidence != calls.ConfidenceMeasured {
 		t.Errorf("confidence = %q", got.Confidence)
+	}
+	if firstTokens != 1 {
+		t.Errorf("first-token callbacks = %d, want 1", firstTokens)
 	}
 }
 
@@ -163,6 +168,8 @@ func TestAnthropicExtract(t *testing.T) {
 
 func TestAnthropicScannerMergesStartAndDelta(t *testing.T) {
 	s := newAnthropicScanner(nil)
+	firstTokens := 0
+	s.(FirstTokenNotifier).SetFirstTokenCallback(func() { firstTokens++ })
 	stream := "event: message_start\n" +
 		"data: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"usage\":{\"input_tokens\":120,\"cache_read_input_tokens\":30,\"output_tokens\":1}}}\n\n" +
 		"event: content_block_delta\n" +
@@ -181,6 +188,9 @@ func TestAnthropicScannerMergesStartAndDelta(t *testing.T) {
 	if got.Confidence != calls.ConfidenceMeasured {
 		t.Errorf("confidence = %q", got.Confidence)
 	}
+	if firstTokens != 1 {
+		t.Errorf("first-token callbacks = %d, want 1", firstTokens)
+	}
 }
 
 func TestResponsesExtract(t *testing.T) {
@@ -194,6 +204,8 @@ func TestResponsesExtract(t *testing.T) {
 
 func TestResponsesScannerCompletedEvent(t *testing.T) {
 	s := newResponsesScanner(nil)
+	firstTokens := 0
+	s.(FirstTokenNotifier).SetFirstTokenCallback(func() { firstTokens++ })
 	stream := "event: response.output_text.delta\n" +
 		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n" +
 		"event: response.completed\n" +
@@ -203,6 +215,9 @@ func TestResponsesScannerCompletedEvent(t *testing.T) {
 	want := Normalized{InputTokens: 77, OutputTokens: 9, CachedInputTokens: 50}
 	if got.Norm != want {
 		t.Errorf("norm = %+v, want %+v", got.Norm, want)
+	}
+	if firstTokens != 1 {
+		t.Errorf("first-token callbacks = %d, want 1", firstTokens)
 	}
 }
 

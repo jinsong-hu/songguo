@@ -6,11 +6,8 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  ComposedChart,
   Line,
   LineChart,
-  Pie,
-  PieChart,
   XAxis,
   YAxis,
 } from 'recharts';
@@ -32,6 +29,7 @@ import {
 } from '../components/ui/chart';
 import { LIVE_REFRESH_MS, useFetch, useLiveTick } from '../lib/useFetch';
 import { bucketLabel, duration, int, money, ms, percent } from '../lib/format';
+import { brandOf } from '../lib/modelBrand';
 import { ActivityFeed } from './ActivityFeed';
 import styles from './Overview.module.css';
 
@@ -51,7 +49,6 @@ const RANGES: RangeOption[] = [
 const REFRESH_MS = LIVE_REFRESH_MS;
 const TOP_N = 6;
 const CHART_CLS = 'aspect-auto h-full w-full';
-const PALETTE = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'];
 
 type FetchLike = { initialLoading: boolean; error: string | null; refetch: () => void };
 
@@ -101,35 +98,43 @@ export function OverviewPage() {
       input_tokens: p.input_tokens,
       output_tokens: p.output_tokens,
       avg_latency_ms: p.avg_latency_ms,
+      avg_ttft_ms: p.avg_ttft_ms,
+      avg_output_tokens_per_second: p.avg_output_tokens_per_second,
       success: p.requests > 0 ? ((p.requests - p.errors) / p.requests) * 100 : null,
       cache_hit: p.input_tokens > 0 ? (p.cached_tokens / p.input_tokens) * 100 : null,
     }));
   }, [series.data, range.bucket]);
   const seriesEmpty = points.length === 0;
 
-  // Tokens-by-model combo chart: one row per bucket with a numeric column per
-  // model plus total cost. Bars stack the model columns (left axis); cost is a
-  // line (right axis). Models come pre-ranked from the backend (top N + "Other").
-  const { tokenModels, tokenPoints } = useMemo(() => {
+  // Tokens-by-model chart: one row per bucket with a numeric column per model.
+  // Bars stack the model columns. Models come pre-ranked from the backend
+  // (top N + "Other").
+  const { tokenModels, tokenPoints, costPoints } = useMemo(() => {
     const data = tokenSeries.data;
     const modelKeys = data?.models ?? [];
     const bucket = data?.bucket ?? range.bucket;
-    const rows = (data?.points ?? []).map((p) => {
-      const row: Record<string, number | string> = { label: bucketLabel(p.ts, bucket), cost: p.cost };
-      for (const m of modelKeys) row[m] = p.tokens[m] ?? 0;
-      return row;
-    });
-    return { tokenModels: modelKeys, tokenPoints: rows };
+    const tokRows: Record<string, number | string>[] = [];
+    const costRows: Record<string, number | string>[] = [];
+    for (const p of data?.points ?? []) {
+      const label = bucketLabel(p.ts, bucket);
+      const tok: Record<string, number | string> = { label };
+      const cost: Record<string, number | string> = { label };
+      for (const m of modelKeys) {
+        tok[m] = p.tokens[m] ?? 0;
+        cost[m] = p.costs[m] ?? 0;
+      }
+      tokRows.push(tok);
+      costRows.push(cost);
+    }
+    return { tokenModels: modelKeys, tokenPoints: tokRows, costPoints: costRows };
   }, [tokenSeries.data, range.bucket]);
   const tokenConfig = useMemo<ChartConfig>(() => {
-    const c: ChartConfig = { cost: { label: 'Cost' } };
+    const c: ChartConfig = {};
     tokenModels.forEach((m) => {
       c[m] = { label: m };
     });
     return c;
   }, [tokenModels]);
-  const modelColor = (m: string, i: number) =>
-    m === 'Other' ? 'var(--text-muted)' : PALETTE[i % PALETTE.length];
 
   const models = (byModel.data?.rows ?? []).slice(0, TOP_N);
   const vendors = (byVendor.data?.rows ?? []).slice(0, TOP_N);
@@ -184,18 +189,25 @@ export function OverviewPage() {
           label="Sessions"
           loading={overview.initialLoading || sessions.initialLoading}
           value={ss ? int(ss.sessions) : '—'}
-          sub={ov ? `${int(ov.requests)} requests` : undefined}
+          sub={ov ? `${int(ov.requests)} calls` : undefined}
         />
         <Kpi
           icon={<Coins size={14} />}
           label="Tokens"
           loading={overview.initialLoading}
           value={ov ? int(ov.tokens.input + ov.tokens.output) : '—'}
-          sub={ov ? `${int(ov.tokens.input)} in · ${int(ov.tokens.output)} out` : undefined}
+          sub={
+            ov ? (
+              <span className={styles.kpiSubSplit}>
+                <span>{int(ov.tokens.input)} in</span>
+                <span>{int(ov.tokens.output)} out</span>
+              </span>
+            ) : undefined
+          }
         />
         <Kpi
           icon={<DollarSign size={14} />}
-          label="Spend"
+          label="Cost"
           loading={overview.initialLoading}
           value={ov ? money(ov.total_spend) : '—'}
         />
@@ -215,113 +227,72 @@ export function OverviewPage() {
       </div>
 
       {/* Usage */}
-      <SectionTitle name="Usage" hint="Requests and spend" />
-      <div className={`card ${styles.panel}`} style={{ marginBottom: 12 }}>
-        <div className={styles.panelHead}>
-          <span className={styles.panelTitle}>Tokens by model & cost</span>
-        </div>
-        <Frame r={tokenSeries} height={styles.chartLg} empty={tokenModels.length === 0}>
-          <ChartContainer config={tokenConfig} className={CHART_CLS}>
-            <ComposedChart data={tokenPoints} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-              <CartesianGrid vertical={false} />
-              <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
-              <YAxis
-                yAxisId="tokens"
-                tickLine={false}
-                axisLine={false}
-                width={48}
-                tickFormatter={(v: number) => compact(v)}
-              />
-              <YAxis
-                yAxisId="cost"
-                orientation="right"
-                tickLine={false}
-                axisLine={false}
-                width={52}
-                tickFormatter={(v: number) => money(v)}
-              />
-              <ChartTooltip content={<ChartTooltipContent />} />
-              <ChartLegend content={<ChartLegendContent />} />
-              {tokenModels.map((m, i) => (
-                <Bar
-                  key={m}
-                  yAxisId="tokens"
-                  dataKey={m}
-                  stackId="tok"
-                  fill={modelColor(m, i)}
-                  radius={i === tokenModels.length - 1 ? [3, 3, 0, 0] : undefined}
-                />
-              ))}
-              <Line
-                yAxisId="cost"
-                dataKey="cost"
-                type="monotone"
-                stroke="var(--text)"
-                strokeWidth={2}
-                dot={false}
-              />
-            </ComposedChart>
-          </ChartContainer>
-        </Frame>
-      </div>
+      <SectionTitle name="Usage" hint="Tokens and cost by model" />
       <div className={styles.grid2}>
-        <Panel title="Requests over time">
-          <Frame r={series} height={styles.chartSm} empty={seriesEmpty}>
-            <ChartContainer config={{ requests: { label: 'Requests', color: 'var(--chart-1)' } }} className={CHART_CLS}>
-              <AreaChart data={points} margin={{ top: 6, right: 8, left: -12, bottom: 0 }}>
+        <Panel title="Tokens">
+          <Frame r={tokenSeries} height={styles.chartSm} empty={tokenModels.length === 0}>
+            <ChartContainer config={tokenConfig} className={CHART_CLS}>
+              <BarChart data={tokenPoints} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid vertical={false} />
                 <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
-                <YAxis tickLine={false} axisLine={false} width={40} allowDecimals={false} />
+                <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={(v: number) => compact(v)} />
                 <ChartTooltip content={<ChartTooltipContent />} />
-                <Area dataKey="requests" type="monotone" stroke="var(--color-requests)" fill="var(--color-requests)" fillOpacity={0.15} strokeWidth={2} />
-              </AreaChart>
+                <ChartLegend content={<ChartLegendContent />} />
+                {tokenModels.map((m, i) => (
+                  <Bar
+                    key={m}
+                    dataKey={m}
+                    stackId="tok"
+                    fill={modelColor(m)}
+                    radius={i === tokenModels.length - 1 ? [3, 3, 0, 0] : undefined}
+                  />
+                ))}
+              </BarChart>
             </ChartContainer>
           </Frame>
         </Panel>
-        <Panel title="Spend over time">
-          <Frame r={series} height={styles.chartSm} empty={seriesEmpty}>
-            <ChartContainer config={{ cost: { label: 'Spend', color: 'var(--chart-1)' } }} className={CHART_CLS}>
-              <AreaChart data={points} margin={{ top: 6, right: 8, left: -4, bottom: 0 }}>
+        <Panel title="Cost">
+          <Frame r={tokenSeries} height={styles.chartSm} empty={tokenModels.length === 0}>
+            <ChartContainer config={tokenConfig} className={CHART_CLS}>
+              <BarChart data={costPoints} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid vertical={false} />
                 <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
                 <YAxis tickLine={false} axisLine={false} width={52} tickFormatter={(v: number) => money(v)} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Area dataKey="cost" type="monotone" stroke="var(--color-cost)" fill="var(--color-cost)" fillOpacity={0.15} strokeWidth={2} />
-              </AreaChart>
+                <ChartTooltip
+                  content={
+                    <ChartTooltipContent
+                      formatter={(value, name, item) => (
+                        <div className={styles.costTip}>
+                          <span
+                            className={styles.costTipDot}
+                            style={{ background: (item?.color as string) ?? 'var(--text-muted)' }}
+                          />
+                          <span className={styles.costTipName}>{name}</span>
+                          <span className={styles.costTipVal}>{money(Number(value))}</span>
+                        </div>
+                      )}
+                    />
+                  }
+                />
+                <ChartLegend content={<ChartLegendContent />} />
+                {tokenModels.map((m, i) => (
+                  <Bar
+                    key={m}
+                    dataKey={m}
+                    stackId="cost"
+                    fill={modelColor(m)}
+                    radius={i === tokenModels.length - 1 ? [3, 3, 0, 0] : undefined}
+                  />
+                ))}
+              </BarChart>
             </ChartContainer>
-          </Frame>
-        </Panel>
-      </div>
-      <div className={styles.grid3}>
-        <Panel title="Top models">
-          <Frame r={byModel} height={styles.chartSm} empty={models.length === 0}>
-            <CategoryBars rows={models} dataKey="requests" label="Requests" color="var(--chart-1)" fmt={int} />
-          </Frame>
-        </Panel>
-        <Panel title="By vendor">
-          <Frame r={byVendor} height={styles.chartSm} empty={vendors.length === 0}>
-            <ChartContainer config={{}} className={CHART_CLS}>
-              <PieChart>
-                <ChartTooltip content={<ChartTooltipContent nameKey="key" />} />
-                <Pie data={vendors} dataKey="requests" nameKey="key" innerRadius={42} outerRadius={68} strokeWidth={2} stroke="var(--surface)">
-                  {vendors.map((_, i) => (
-                    <Cell key={i} fill={PALETTE[i % PALETTE.length]} />
-                  ))}
-                </Pie>
-              </PieChart>
-            </ChartContainer>
-          </Frame>
-        </Panel>
-        <Panel title="Spend by model">
-          <Frame r={byModel} height={styles.chartSm} empty={models.length === 0}>
-            <CategoryBars rows={models} dataKey="cost" label="Spend" color="var(--chart-1)" fmt={money} />
           </Frame>
         </Panel>
       </div>
 
       {/* Performance */}
-      <SectionTitle name="Performance" hint="End-to-end latency" />
-      <div className={styles.grid2}>
+      <SectionTitle name="Performance" hint="End-to-end latency, TTFT, and output generation speed" />
+      <div className={styles.grid3}>
         <Panel title="Latency percentiles">
           {overview.initialLoading ? (
             <Skeleton height={64} />
@@ -335,9 +306,40 @@ export function OverviewPage() {
               ))}
             </div>
           )}
-          <div className={styles.deferred}>TTFT &amp; tokens/sec coming once streaming is instrumented.</div>
         </Panel>
-        <Panel title="Avg latency over time">
+        <Panel title="TTFT percentiles">
+          {overview.initialLoading ? (
+            <Skeleton height={64} />
+          ) : (
+            <div className={styles.latencyGroup} style={{ marginTop: 4 }}>
+              {(['p50', 'p95', 'p99'] as const).map((p) => (
+                <div key={p} className={styles.latencyStat}>
+                  <span className={styles.latencyLabel}>{p}</span>
+                  <span className={styles.latencyValue}>{ov?.ttft_ms[p] ? ms(ov.ttft_ms[p]) : '—'}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+        <Panel title="Output speed percentiles">
+          {overview.initialLoading ? (
+            <Skeleton height={64} />
+          ) : (
+            <div className={styles.latencyGroup} style={{ marginTop: 4 }}>
+              {(['p50', 'p95', 'p99'] as const).map((p) => (
+                <div key={p} className={styles.latencyStat}>
+                  <span className={styles.latencyLabel}>{p}</span>
+                  <span className={styles.latencyValue}>
+                    {ov?.output_tokens_per_second[p] ? tokenRate(ov.output_tokens_per_second[p]) : '—'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+      </div>
+      <div className={styles.grid3}>
+        <Panel title="Avg latency">
           <Frame r={series} height={styles.chartXs} empty={seriesEmpty}>
             <ChartContainer config={{ avg_latency_ms: { label: 'Avg latency', color: 'var(--chart-4)' } }} className={CHART_CLS}>
               <LineChart data={points} margin={{ top: 6, right: 8, left: -8, bottom: 0 }}>
@@ -350,12 +352,38 @@ export function OverviewPage() {
             </ChartContainer>
           </Frame>
         </Panel>
+        <Panel title="Avg TTFT">
+          <Frame r={series} height={styles.chartXs} empty={seriesEmpty}>
+            <ChartContainer config={{ avg_ttft_ms: { label: 'Avg TTFT', color: 'var(--chart-3)' } }} className={CHART_CLS}>
+              <LineChart data={points} margin={{ top: 6, right: 8, left: -8, bottom: 0 }}>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
+                <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={(v: number) => `${Math.round(v)}`} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Line dataKey="avg_ttft_ms" type="monotone" stroke="var(--color-avg_ttft_ms)" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ChartContainer>
+          </Frame>
+        </Panel>
+        <Panel title="Avg output speed">
+          <Frame r={series} height={styles.chartXs} empty={seriesEmpty}>
+            <ChartContainer config={{ avg_output_tokens_per_second: { label: 'Output tok/s', color: 'var(--chart-2)' } }} className={CHART_CLS}>
+              <LineChart data={points} margin={{ top: 6, right: 8, left: -8, bottom: 0 }}>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
+                <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={(v: number) => compact(v)} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Line dataKey="avg_output_tokens_per_second" type="monotone" stroke="var(--color-avg_output_tokens_per_second)" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ChartContainer>
+          </Frame>
+        </Panel>
       </div>
 
       {/* Tokens */}
       <SectionTitle name="Tokens" hint="LLM usage — input, output, and cache hits" />
       <div className={styles.grid3}>
-        <Panel title="Token throughput">
+        <Panel title="Token volume">
           <Frame r={series} height={styles.chartSm} empty={seriesEmpty}>
             <ChartContainer
               config={{
@@ -551,7 +579,7 @@ interface KpiProps {
   icon: React.ReactNode;
   label: string;
   value: string;
-  sub?: string;
+  sub?: React.ReactNode;
   loading?: boolean;
   danger?: boolean;
 }
@@ -663,7 +691,7 @@ function BreakdownTable({
             <th className="num">Success</th>
             <th className="num">Avg latency</th>
             <th className="num">Tokens</th>
-            <th className="num">Spend</th>
+            <th className="num">Cost</th>
           </tr>
         </thead>
         <tbody>
@@ -686,11 +714,64 @@ function BreakdownTable({
   );
 }
 
+/** FNV-1a hash of a string → unsigned 32-bit int. Stable across engines. */
+function hashStr(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/** Convert a #rrggbb hex color to [hue, saturation, lightness] (h in 0..360, s/l in 0..1). */
+function hexToHsl(hex: string): [number, number, number] {
+  const m = hex.replace('#', '');
+  const r = parseInt(m.slice(0, 2), 16) / 255;
+  const g = parseInt(m.slice(2, 4), 16) / 255;
+  const b = parseInt(m.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d === 0) return [0, 0, l];
+  const s = d / (1 - Math.abs(2 * l - 1));
+  let h: number;
+  if (max === r) h = (((g - b) / d) % 6 + 6) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return [h * 60, s, l];
+}
+
+/**
+ * Deterministic color for a model, derived only from its name so the same model
+ * gets the same swatch in every session, browser, and screenshot — regardless of
+ * how it ranks in the current range. Anchored to the model's vendor brand color
+ * (via brandOf, matching the Services/Providers pages) so a model stays on-brand
+ * app-wide; a name hash then spreads models that share a vendor across distinct
+ * lightness/hue shades so same-vendor models remain distinguishable in a stack.
+ * "Other" is always the muted grey.
+ */
+function modelColor(model: string): string {
+  if (model === 'Other') return 'var(--text-muted)';
+  const base = brandOf(model)?.color ?? '#3f8f5b';
+  const [baseHue, baseSat] = hexToHsl(base);
+  const n = hashStr(model);
+  const hue = ((baseHue + ((n % 31) - 15)) % 360 + 360) % 360;
+  const sat = Math.round(Math.min(0.85, Math.max(0.5, baseSat)) * 100);
+  const light = 44 + ((n >>> 5) % 24); // 44%..67%
+  return `hsl(${hue} ${sat}% ${light}%)`;
+}
+
 /** Compact large numbers for axis ticks, e.g. 12.3k, 4.5M. */
 function compact(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return `${Math.round(n)}`;
+}
+
+function tokenRate(n: number): string {
+  return `${n < 100 ? n.toFixed(1) : Math.round(n)} tok/s`;
 }
 
 // Inferred session outcomes, in bar/legend order.

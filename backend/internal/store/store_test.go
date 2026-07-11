@@ -404,7 +404,7 @@ func TestCallsAppendQueryAndAggregations(t *testing.T) {
 			TS: base, UserID: "tokA", Model: "gpt-4o", Modality: calls.ModalityChat,
 			Vendor: "openai", CredentialID: "c1", Status: 200,
 			Usage: map[string]any{"prompt_tokens": float64(10), "completion_tokens": float64(5)},
-			Cost:  0.10, LatencyMS: 120, Stream: true,
+			Cost:  0.10, LatencyMS: 120, TTFTMS: 40, GenerationMS: 80, Stream: true,
 			Tags: map[string]string{"team": "eng"},
 		},
 		{
@@ -467,6 +467,10 @@ func TestCallsAppendQueryAndAggregations(t *testing.T) {
 	}
 	if chat.Tags["team"] != "eng" {
 		t.Errorf("Tags round-trip = %v", chat.Tags)
+	}
+	if chat.TTFTMS != 40 || chat.GenerationMS != 80 {
+		t.Errorf("stream timings round-trip = TTFT %d / generation %d, want 40/80",
+			chat.TTFTMS, chat.GenerationMS)
 	}
 	if !chat.Stream {
 		t.Error("Stream round-trip = false, want true")
