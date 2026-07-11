@@ -71,6 +71,11 @@ type Entry struct {
 	Tags          map[string]string // optional business attribution (may be nil)
 	ClientName    string            // normalized caller client (e.g. claude-code, codex)
 	ClientVersion string            // caller client version parsed from User-Agent
+	// Best-effort caller OS. ClientOS is a normalized family (e.g. MacOS, Linux,
+	// Windows); ClientOSVersion is the OS version when the source carries one.
+	// Both empty when unavailable — see ParseClientInfo.
+	ClientOS        string
+	ClientOSVersion string
 	// Coding-agent attribution, captured verbatim from known request headers
 	// (read-only; no bytes are mutated). Empty for ordinary API traffic. SessionID
 	// groups a run's calls; AgentID + ParentAgentID reconstruct the
@@ -85,12 +90,25 @@ type Entry struct {
 type ClientInfo struct {
 	Name    string
 	Version string
+	// OS is the normalized caller OS family (e.g. MacOS, Linux, Windows); Version
+	// is the OS version when the source carries one. Both empty when unknown.
+	OS        string
+	OSVersion string
 }
 
-// ParseClientInfo recognizes the coding-agent clients we render specially.
-// User-Agent product tokens are intentionally parsed read-only; the original
-// header is still forwarded verbatim.
-func ParseClientInfo(ua string) ClientInfo {
+// ParseClientInfo recognizes the coding-agent clients we render specially and
+// makes a best-effort read of the caller OS. User-Agent product tokens and the
+// X-Stainless-Os header are parsed read-only; the original headers are still
+// forwarded verbatim.
+//
+// OS has two sources, both optional: the explicit X-Stainless-Os header sent by
+// Stainless-generated SDKs (claude-code, and raw openai/anthropic SDK callers),
+// which carries no version; else — for codex, whose UA embeds the platform in a
+// browser-style comment, e.g. "codex_cli_rs/0.129.0 (Mac OS 26.5.2; arm64)" —
+// the OS family and version parsed from that comment. Anything unrecognized
+// leaves the OS fields empty.
+func ParseClientInfo(ua, stainlessOS string) ClientInfo {
+	var ci ClientInfo
 	for _, raw := range strings.Fields(ua) {
 		token := strings.Trim(raw, "(),;")
 		product, version, ok := strings.Cut(token, "/")
@@ -99,12 +117,79 @@ func ParseClientInfo(ua string) ClientInfo {
 		}
 		switch strings.ToLower(product) {
 		case "claude-cli", "claude-code":
-			return ClientInfo{Name: "claude-code", Version: version}
+			ci.Name, ci.Version = "claude-code", version
 		case "codex", "codex-cli", "codex-tui", "codex_cli_rs":
-			return ClientInfo{Name: "codex-openai", Version: version}
+			ci.Name, ci.Version = "codex-openai", version
+		}
+		if ci.Name != "" {
+			break
 		}
 	}
-	return ClientInfo{}
+	// Prefer the explicit SDK header (no version); else parse codex's UA comment,
+	// which is the only client UA known to carry the platform. Gating on codex
+	// avoids mis-reading a non-OS comment (e.g. claude-cli's "(external, ...)").
+	if os := strings.TrimSpace(stainlessOS); os != "" {
+		ci.OS = normalizeOS(os)
+	} else if ci.Name == "codex-openai" {
+		if seg := uaCommentOS(ua); seg != "" {
+			name, version := splitOSVersion(seg)
+			ci.OS = normalizeOS(name)
+			ci.OSVersion = version
+		}
+	}
+	return ci
+}
+
+// normalizeOS maps a raw OS name to a canonical family. Known families collapse
+// to a single spelling (notably MacOS, matching the X-Stainless-Os token);
+// anything unrecognized is returned trimmed, best-effort, rather than dropped.
+func normalizeOS(name string) string {
+	name = strings.TrimSpace(name)
+	switch key := strings.ReplaceAll(strings.ToLower(name), " ", ""); {
+	case strings.HasPrefix(key, "macos"), key == "macosx", key == "osx", key == "darwin":
+		return "MacOS"
+	case strings.HasPrefix(key, "windows"), key == "win":
+		return "Windows"
+	case strings.HasPrefix(key, "linux"):
+		return "Linux"
+	case strings.HasPrefix(key, "ios"):
+		return "iOS"
+	case strings.HasPrefix(key, "android"):
+		return "Android"
+	}
+	return name
+}
+
+// uaCommentOS returns the first ';'-delimited segment inside a User-Agent's
+// first "(...)" comment — where browser-style clients (codex) place the OS —
+// or "" if there is no comment.
+func uaCommentOS(ua string) string {
+	i := strings.IndexByte(ua, '(')
+	if i < 0 {
+		return ""
+	}
+	j := strings.IndexByte(ua[i+1:], ')')
+	if j < 0 {
+		return ""
+	}
+	seg := ua[i+1 : i+1+j]
+	if k := strings.IndexByte(seg, ';'); k >= 0 {
+		seg = seg[:k]
+	}
+	return strings.TrimSpace(seg)
+}
+
+// splitOSVersion separates an OS segment like "Mac OS 26.5.2" into its family
+// name ("Mac OS") and version ("26.5.2") at the first digit-led token. A segment
+// with no numeric part (e.g. "Linux") yields an empty version.
+func splitOSVersion(seg string) (name, version string) {
+	fields := strings.Fields(seg)
+	for i, f := range fields {
+		if f != "" && f[0] >= '0' && f[0] <= '9' {
+			return strings.Join(fields[:i], " "), strings.Join(fields[i:], " ")
+		}
+	}
+	return strings.TrimSpace(seg), ""
 }
 
 // StatusPending is the sentinel status for a call that has been created (phase

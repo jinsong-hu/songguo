@@ -705,9 +705,11 @@ func (a *api) enrichClientFromTrace(v *entryView) {
 	if err != nil {
 		return
 	}
-	ci := calls.ParseClientInfo(headerValue(p.ReqHeaders, "User-Agent"))
+	ci := calls.ParseClientInfo(headerValue(p.ReqHeaders, "User-Agent"), headerValue(p.ReqHeaders, "X-Stainless-Os"))
 	v.ClientName = ci.Name
 	v.ClientVersion = ci.Version
+	v.ClientOS = ci.OS
+	v.ClientOSVersion = ci.OSVersion
 }
 
 func (a *api) sessionTitle(id string) string {

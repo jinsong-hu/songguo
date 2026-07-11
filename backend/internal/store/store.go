@@ -282,6 +282,11 @@ func (s *Store) migrate() error {
 		// written before this column existed or for unrecognized clients.
 		{"calls", "client_name", "TEXT NOT NULL DEFAULT ''"},
 		{"calls", "client_version", "TEXT NOT NULL DEFAULT ''"},
+		// Best-effort caller OS: client_os is a normalized family (e.g. MacOS);
+		// client_os_version is the OS version when the source carries one. Empty for
+		// rows written before these columns or when the OS can't be determined.
+		{"calls", "client_os", "TEXT NOT NULL DEFAULT ''"},
+		{"calls", "client_os_version", "TEXT NOT NULL DEFAULT ''"},
 		{"sessions", "title", "TEXT NOT NULL DEFAULT ''"},
 		{"providers", "allow_unmatched", "INTEGER NOT NULL DEFAULT 0"},
 		{"providers", "quirks", "TEXT NOT NULL DEFAULT '{}'"},
@@ -717,7 +722,9 @@ func (s *Store) migrateCallsToUUID() error {
 		agent_id      TEXT NOT NULL DEFAULT '',
 		parent_agent_id TEXT NOT NULL DEFAULT '',
 		client_name    TEXT NOT NULL DEFAULT '',
-		client_version TEXT NOT NULL DEFAULT ''
+		client_version TEXT NOT NULL DEFAULT '',
+		client_os      TEXT NOT NULL DEFAULT '',
+		client_os_version TEXT NOT NULL DEFAULT ''
 	)`); err != nil {
 		return fmt.Errorf("store: create calls_new: %w", err)
 	}
@@ -733,6 +740,7 @@ func (s *Store) migrateCallsToUUID() error {
 		"wire": true, "confidence": true, "input_tokens": true, "output_tokens": true,
 		"cached_tokens": true, "session_id": true, "agent_id": true, "parent_agent_id": true,
 		"client_name": true, "client_version": true,
+		"client_os": true, "client_os_version": true,
 	}
 	var copyCols, copyExprs []string
 	for i, c := range newCols {

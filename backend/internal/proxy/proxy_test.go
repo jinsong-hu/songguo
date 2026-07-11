@@ -1837,28 +1837,80 @@ func TestExtractAttributionCodexFallbacksAndGuards(t *testing.T) {
 
 func TestExtractClientInfo(t *testing.T) {
 	tests := []struct {
-		name        string
-		ua          string
-		wantName    string
-		wantVersion string
+		name          string
+		ua            string
+		stainlessOS   string
+		wantName      string
+		wantVersion   string
+		wantOS        string
+		wantOSVersion string
 	}{
 		{
-			name:        "claude cli",
+			// claude-cli's UA comment carries no OS; the OS comes from the
+			// Stainless SDK header (no version there).
+			name:        "claude cli, stainless linux",
 			ua:          "claude-cli/2.1.201 (external, sdk-ts, agent-sdk/0.3.198)",
+			stainlessOS: "Linux",
 			wantName:    "claude-code",
 			wantVersion: "2.1.201",
+			wantOS:      "Linux",
 		},
 		{
-			name:        "codex tui",
+			// MacOS is already the Stainless spelling — passes through canonical.
+			name:        "claude cli, stainless macos",
+			ua:          "claude-cli/2.1.198 (external, sdk-ts, agent-sdk/0.3.198)",
+			stainlessOS: "MacOS",
+			wantName:    "claude-code",
+			wantVersion: "2.1.198",
+			wantOS:      "MacOS",
+		},
+		{
+			// No Stainless header and no OS in the claude UA comment -> no OS.
+			name:        "claude cli, no os",
+			ua:          "claude-cli/2.1.198 (external, sdk-ts, agent-sdk/0.3.198)",
+			wantName:    "claude-code",
+			wantVersion: "2.1.198",
+		},
+		{
+			name:        "codex tui, no comment",
 			ua:          "codex-tui/0.142.5",
 			wantName:    "codex-openai",
 			wantVersion: "0.142.5",
 		},
 		{
-			name:        "codex rust cli",
-			ua:          "codex_cli_rs/0.137.0 (Debian 13.0.0; x86_64) unknown",
+			// codex embeds the OS browser-style in the UA comment; family + version.
+			name:          "codex mac from ua",
+			ua:            "codex_cli_rs/0.129.0 (Mac OS 26.5.2; arm64) otty/1.2.1",
+			wantName:      "codex-openai",
+			wantVersion:   "0.129.0",
+			wantOS:        "MacOS",
+			wantOSVersion: "26.5.2",
+		},
+		{
+			// Unrecognized distro name is kept best-effort (not forced to "Linux").
+			name:          "codex rust cli, debian from ua",
+			ua:            "codex_cli_rs/0.137.0 (Debian 13.0.0; x86_64) unknown",
+			wantName:      "codex-openai",
+			wantVersion:   "0.137.0",
+			wantOS:        "Debian",
+			wantOSVersion: "13.0.0",
+		},
+		{
+			// The explicit Stainless header wins over the UA comment (and carries
+			// no version).
+			name:        "stainless header overrides ua comment",
+			ua:          "codex_cli_rs/0.129.0 (Mac OS 26.5.2; arm64) otty/1.2.1",
+			stainlessOS: "Linux",
 			wantName:    "codex-openai",
-			wantVersion: "0.137.0",
+			wantVersion: "0.129.0",
+			wantOS:      "Linux",
+		},
+		{
+			// OS is captured even when the client family is unrecognized.
+			name:        "unknown client, stainless windows",
+			ua:          "openai-node/4.0",
+			stainlessOS: "Windows",
+			wantOS:      "Windows",
 		},
 		{
 			name: "unknown",
@@ -1868,10 +1920,14 @@ func TestExtractClientInfo(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := calls.ParseClientInfo(tt.ua)
+			got := calls.ParseClientInfo(tt.ua, tt.stainlessOS)
 			if got.Name != tt.wantName || got.Version != tt.wantVersion {
-				t.Fatalf("calls.ParseClientInfo(%q) = %q/%q, want %q/%q",
-					tt.ua, got.Name, got.Version, tt.wantName, tt.wantVersion)
+				t.Fatalf("calls.ParseClientInfo(%q, %q) name/version = %q/%q, want %q/%q",
+					tt.ua, tt.stainlessOS, got.Name, got.Version, tt.wantName, tt.wantVersion)
+			}
+			if got.OS != tt.wantOS || got.OSVersion != tt.wantOSVersion {
+				t.Fatalf("calls.ParseClientInfo(%q, %q) os/version = %q/%q, want %q/%q",
+					tt.ua, tt.stainlessOS, got.OS, got.OSVersion, tt.wantOS, tt.wantOSVersion)
 			}
 		})
 	}

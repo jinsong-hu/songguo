@@ -85,6 +85,10 @@ type entryView struct {
 	Tags          map[string]string `json:"tags"`
 	ClientName    string            `json:"client_name"`
 	ClientVersion string            `json:"client_version"`
+	// Best-effort caller OS (normalized family, e.g. MacOS) and version; empty
+	// when unavailable.
+	ClientOS        string `json:"client_os"`
+	ClientOSVersion string `json:"client_os_version"`
 	// Coding-agent attribution (empty for ordinary API traffic).
 	SessionID     string               `json:"session_id"`
 	AgentID       string               `json:"agent_id"`
@@ -131,6 +135,10 @@ func newEntryView(e calls.Entry) entryView {
 		Tags:          tags,
 		ClientName:    e.ClientName,
 		ClientVersion: e.ClientVersion,
+		// Caller OS, read-only from headers (X-Stainless-Os, else codex UA comment).
+		ClientOS:        e.ClientOS,
+		ClientOSVersion: e.ClientOSVersion,
+		// Coding-agent attribution.
 		SessionID:     e.SessionID,
 		AgentID:       e.AgentID,
 		ParentAgentID: e.ParentAgentID,

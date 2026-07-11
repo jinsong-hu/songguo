@@ -239,6 +239,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				Vendor: t.Vendor.Name, CredentialID: t.Credential.ID,
 				Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
 				ClientName: client.Name, ClientVersion: client.Version,
+				ClientOS: client.OS, ClientOSVersion: client.OSVersion,
 			}, http.StatusPaymentRequired, "budget_exceeded", "budget exceeded")
 			return
 		}
@@ -252,6 +253,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID,
 			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
 			ClientName: client.Name, ClientVersion: client.Version,
+			ClientOS: client.OS, ClientOSVersion: client.OSVersion,
 		}, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded")
 		return
 	}
@@ -281,6 +283,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID,
 			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
 			ClientName: client.Name, ClientVersion: client.Version,
+			ClientOS: client.OS, ClientOSVersion: client.OSVersion,
 		}, http.StatusBadGateway, "upstream_error", "failed to build upstream request")
 		return
 	}
@@ -301,6 +304,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID, LatencyMS: latency,
 			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
 			ClientName: client.Name, ClientVersion: client.Version,
+			ClientOS: client.OS, ClientOSVersion: client.OSVersion,
 		}, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
@@ -378,7 +382,7 @@ func resolveWires(targets []router.Target, method, path string) (kept []router.T
 // ledger. See docs/arch-gateway.md.
 func (h *handler) createCall(callID, userID string, r *http.Request) {
 	attr := extractAttribution(r.Header)
-	client := calls.ParseClientInfo(r.UserAgent())
+	client := calls.ParseClientInfo(r.UserAgent(), r.Header.Get("X-Stainless-Os"))
 	if err := h.store.CreateCall(calls.Entry{
 		ID:            callID,
 		TS:            h.now(),
@@ -388,6 +392,9 @@ func (h *handler) createCall(callID, userID string, r *http.Request) {
 		ParentAgentID: attr.parentAgent,
 		ClientName:    client.Name,
 		ClientVersion: client.Version,
+		// Caller OS, read-only from headers (X-Stainless-Os, else codex UA comment).
+		ClientOS:        client.OS,
+		ClientOSVersion: client.OSVersion,
 	}); err != nil {
 		h.logger.Error("call create failed", "err", err, "call_id", callID)
 	}
@@ -406,7 +413,7 @@ func (h *handler) denyCapture(w http.ResponseWriter, r *http.Request, body []byt
 	e.TSEnd = h.now()
 	e.Status = status
 	if e.ClientName == "" {
-		client := calls.ParseClientInfo(r.UserAgent())
+		client := calls.ParseClientInfo(r.UserAgent(), r.Header.Get("X-Stainless-Os"))
 		e.ClientName = client.Name
 		e.ClientVersion = client.Version
 	}
@@ -465,7 +472,7 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 	res := meter.Classify(r.Method, r.URL.Path, body)
 	tags := extractTags(r.Header.Get("X-Songguo-Tags"), body)
 	attr := extractAttribution(r.Header)
-	client := calls.ParseClientInfo(r.UserAgent())
+	client := calls.ParseClientInfo(r.UserAgent(), r.Header.Get("X-Stainless-Os"))
 
 	// Two distinct identities, deliberately kept apart:
 	//   routingModel — the body's model, the ONLY thing we route on. Empty for
@@ -489,6 +496,7 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 			UserID: user.ID, Model: billingModel, Modality: res.Modality, Vendor: vendor,
 			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
 			ClientName: client.Name, ClientVersion: client.Version,
+			ClientOS: client.OS, ClientOSVersion: client.OSVersion,
 		}
 	}
 
@@ -841,8 +849,10 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		ParentAgentID: attr.parentAgent,
 		// Client identity is authoritatively persisted at createCall (phase 1);
 		// carried here too so the insights fork sees a complete entry.
-		ClientName:    client.Name,
-		ClientVersion: client.Version,
+		ClientName:      client.Name,
+		ClientVersion:   client.Version,
+		ClientOS:        client.OS,
+		ClientOSVersion: client.OSVersion,
 	}
 	// Phase 2, update-at-end: finalize the row opened at request-start.
 	if err := h.store.FinalizeCall(entry); err != nil {

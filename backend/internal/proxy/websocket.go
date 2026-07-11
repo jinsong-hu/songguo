@@ -98,7 +98,7 @@ func wsCompressionNegotiated(h http.Header) bool {
 // vendors; we forward the handshake to the top candidate whose wire matches —
 // a single attempt, no failover (like the HTTP path).
 func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user store.User) {
-	client := calls.ParseClientInfo(r.UserAgent())
+	client := calls.ParseClientInfo(r.UserAgent(), r.Header.Get("X-Stainless-Os"))
 	// Billing model: ByteDance openspeech names the billed class in the
 	// X-Api-Resource-Id header (mirroring the HTTP path, proxy.go); fall back to
 	// the query model. This is what we meter/price as, never used for routing.
@@ -148,6 +148,7 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 			Err:        "unmatched: " + r.Method + " " + r.URL.Path,
 			Confidence: calls.ConfidenceUnknown,
 			ClientName: client.Name, ClientVersion: client.Version,
+			ClientOS: client.OS, ClientOSVersion: client.OSVersion,
 		})
 		writeError(w, http.StatusNotFound, "wire_unmatched",
 			fmt.Sprintf("no enabled wire matches %s %s on service %s; add a wire mapping or enable allow_unmatched",
@@ -352,6 +353,9 @@ func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Respons
 		Stream:        true,
 		ClientName:    client.Name,
 		ClientVersion: client.Version,
+		// Caller OS, read-only from headers (X-Stainless-Os, else codex UA comment).
+		ClientOS:        client.OS,
+		ClientOSVersion: client.OSVersion,
 	})
 }
 
@@ -509,6 +513,9 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 		Stream:        true,
 		ClientName:    client.Name,
 		ClientVersion: client.Version,
+		// Caller OS, read-only from headers (X-Stainless-Os, else codex UA comment).
+		ClientOS:        client.OS,
+		ClientOSVersion: client.OSVersion,
 	})
 }
 

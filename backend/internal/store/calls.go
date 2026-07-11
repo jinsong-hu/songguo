@@ -42,11 +42,11 @@ func (s *Store) CreateCall(e calls.Entry) error {
 	}
 	if _, err := s.db.Exec(
 		`INSERT INTO calls
-		 (id, ts, ts_end, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens, session_id, agent_id, parent_agent_id, client_name, client_version)
-		 VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, '', '{}', 0, 0, ?, ?, '', '', 0, 0, 0, ?, ?, ?, ?, ?)`,
+		 (id, ts, ts_end, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens, session_id, agent_id, parent_agent_id, client_name, client_version, client_os, client_os_version)
+		 VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, '', '{}', 0, 0, ?, ?, '', '', 0, 0, 0, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ID, ts.UnixMilli(), e.UserID, e.Model, string(modality), e.Vendor, e.CredentialID,
 		calls.StatusPending, boolToInt(e.Stream), tagsJSON, e.SessionID, e.AgentID, e.ParentAgentID,
-		e.ClientName, e.ClientVersion,
+		e.ClientName, e.ClientVersion, e.ClientOS, e.ClientOSVersion,
 	); err != nil {
 		return fmt.Errorf("store: create call: %w", err)
 	}
@@ -177,7 +177,7 @@ func (f CallFilter) where() (string, []any) {
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
-const callsSelect = `SELECT id, ts, ts_end, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens, session_id, agent_id, parent_agent_id, client_name, client_version FROM calls`
+const callsSelect = `SELECT id, ts, ts_end, user_id, model, modality, vendor, credential_id, status, err, usage, cost, latency_ms, stream, tags, wire, confidence, input_tokens, output_tokens, cached_tokens, session_id, agent_id, parent_agent_id, client_name, client_version, client_os, client_os_version FROM calls`
 
 // QueryCalls returns matching entries ordered by ts DESC. Limit defaults to
 // 100 and is capped at 1000.
@@ -352,6 +352,7 @@ func scanEntry(rows *sql.Rows) (calls.Entry, error) {
 		&e.Status, &e.Err, &usageJSON, &e.Cost, &e.LatencyMS, &stream, &tagsJSON,
 		&e.Wire, &confidence, &e.InputTokens, &e.OutputTokens, &e.CachedTokens,
 		&e.SessionID, &e.AgentID, &e.ParentAgentID, &e.ClientName, &e.ClientVersion,
+		&e.ClientOS, &e.ClientOSVersion,
 	); err != nil {
 		return calls.Entry{}, err
 	}
