@@ -5,18 +5,46 @@
   width: 100%;
 }
 
+/* One-breakout modes: center the main + sub-donut pair as a balanced
+   left/right pair with symmetric outer margins, and give the sub-chart a
+   roomy column so it can be drawn large. */
 .modeOneRight {
-  grid-template-columns: minmax(0, 1fr) 240px minmax(320px, 1fr);
+  grid-template-columns: minmax(16px, 1fr) 240px minmax(300px, 360px) minmax(16px, 1fr);
   grid-template-areas:
-    ". main right"
-    "legend legend legend";
+    ". main right ."
+    "legend legend legend legend";
 }
 
 .modeOneLeft {
-  grid-template-columns: minmax(320px, 1fr) 240px minmax(0, 1fr);
+  grid-template-columns: minmax(16px, 1fr) minmax(300px, 360px) 240px minmax(16px, 1fr);
   grid-template-areas:
-    "left main ."
-    "legend legend legend";
+    ". left main ."
+    "legend legend legend legend";
+}
+
+/* Bigger sub-donut + text in one-breakout mode — there's plenty of space. */
+.modeOneRight .miniChart,
+.modeOneLeft .miniChart {
+  width: 150px;
+  height: 150px;
+}
+
+.modeOneRight .breakoutRight {
+  grid-template-columns: 150px minmax(0, 1fr);
+}
+
+.modeOneLeft .breakoutLeft {
+  grid-template-columns: minmax(0, 1fr) 150px;
+}
+
+.modeOneRight .breakoutTitle,
+.modeOneLeft .breakoutTitle {
+  font-size: 14px;
+}
+
+.modeOneRight .breakoutKids,
+.modeOneLeft .breakoutKids {
+  font-size: 12.5px;
 }
 
 .modeTwo,
