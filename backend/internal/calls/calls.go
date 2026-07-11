@@ -70,6 +70,15 @@ type Entry struct {
 	TTFTMS        int64   // upstream request start to first generated stream delta; 0 when unavailable
 	GenerationMS  int64   // first generated stream delta to stream completion; 0 when unavailable
 	Stream        bool
+	// Tool-use metrics for the just-completed tool round-trip this call carries
+	// (see compose.ToolTurn): the number of tool calls the assistant issued that
+	// turn and a LOCAL o200k token estimate of the results that came back. Read
+	// from the request tail only, so they sum cleanly across a session without
+	// double-counting cumulative history. ToolTokens is a derived estimate,
+	// decoupled from InputTokens/OutputTokens — it does NOT reconcile to billed
+	// usage. Both are 0 for non-chat traffic and for turns that carry no results.
+	ToolCalls     int
+	ToolTokens    float64
 	Tags          map[string]string // optional business attribution (may be nil)
 	ClientName    string            // normalized caller client (e.g. claude-code, codex)
 	ClientVersion string            // caller client version parsed from User-Agent

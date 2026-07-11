@@ -22,6 +22,8 @@ type FeedRow struct {
 	Cost         float64
 	InputTokens  float64
 	OutputTokens float64
+	ToolCalls    int     // tool calls issued across the group's turns
+	ToolTokens   float64 // local o200k estimate of tool-result tokens (see compose.ToolTurn)
 	FirstTS      time.Time
 	LastTS       time.Time // ordering key + "last activity" display
 	DurationMS   int64     // max(request start + latency) - first request start
@@ -84,6 +86,8 @@ func (s *Store) Feed(f CallFilter) ([]FeedRow, int, error) {
 		COALESCE(SUM(cost), 0) AS cost,
 		COALESCE(SUM(input_tokens), 0) AS input_tokens,
 		COALESCE(SUM(output_tokens), 0) AS output_tokens,
+		COALESCE(SUM(tool_calls), 0) AS tool_calls,
+		COALESCE(SUM(tool_tokens), 0) AS tool_tokens,
 		MIN(ts) AS first_ts,
 		MAX(ts) AS last_ts,
 		COALESCE(MAX(ts + latency_ms) - MIN(ts), 0) AS duration_ms,
@@ -196,7 +200,7 @@ func scanFeedRow(rows *sql.Rows) (FeedRow, error) {
 	)
 	if err := rows.Scan(
 		&gkey, &isSession, &r.SessionID, &r.RequestID, &r.Calls,
-		&r.Cost, &r.InputTokens, &r.OutputTokens, &firstMs, &lastMs, &r.DurationMS, &r.ErrorCount,
+		&r.Cost, &r.InputTokens, &r.OutputTokens, &r.ToolCalls, &r.ToolTokens, &firstMs, &lastMs, &r.DurationMS, &r.ErrorCount,
 		&modelsAll, &models, &vendors,
 		&r.Model, &r.Vendor, &r.Wire, &confidence, &modality, &r.Status, &r.LatencyMS, &stream,
 	); err != nil {

@@ -44,8 +44,8 @@ func (s *Store) UpsertSessionCall(e calls.Entry, title string) error {
 
 	if _, err := s.db.Exec(
 		`INSERT INTO sessions
-		   (id, title, first_ts, last_ts, turns, error_count, input_tokens, output_tokens, cost, last_status, has_subagents)
-		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+		   (id, title, first_ts, last_ts, turns, error_count, input_tokens, output_tokens, cost, tool_calls, tool_tokens, last_status, has_subagents)
+		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   title         = CASE
 		                     WHEN sessions.title = '' AND excluded.title != '' THEN excluded.title
@@ -58,11 +58,13 @@ func (s *Store) UpsertSessionCall(e calls.Entry, title string) error {
 		   input_tokens  = input_tokens + excluded.input_tokens,
 		   output_tokens = output_tokens + excluded.output_tokens,
 		   cost          = cost + excluded.cost,
+		   tool_calls    = tool_calls + excluded.tool_calls,
+		   tool_tokens   = tool_tokens + excluded.tool_tokens,
 		   -- Advance the outcome-bearing status only when this call is the newest
 		   -- seen so far, so out-of-order processing can't regress it.
 		   last_status   = CASE WHEN excluded.last_ts >= last_ts THEN excluded.last_status ELSE last_status END,
 		   has_subagents = MAX(has_subagents, excluded.has_subagents)`,
-		e.SessionID, title, tsMs, tsMs, isErr, e.InputTokens, e.OutputTokens, e.Cost, e.Status, hasSub,
+		e.SessionID, title, tsMs, tsMs, isErr, e.InputTokens, e.OutputTokens, e.Cost, e.ToolCalls, e.ToolTokens, e.Status, hasSub,
 	); err != nil {
 		return fmt.Errorf("store: upsert session call: %w", err)
 	}

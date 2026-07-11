@@ -827,6 +827,21 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		wireName = rw.wire.Name
 	}
 
+	// Tool-use metrics: a read-only sniff of the request tail for the tool
+	// round-trip this call carries — how many tool calls the previous turn issued
+	// and a LOCAL o200k estimate of the results that came back (compose.ToolTurn).
+	// Read from the tail only, so per-call values sum cleanly across a session
+	// without double-counting the cumulative history. Same category as compose
+	// below: decoupled from billed usage, never mutates bytes. Only chat wires
+	// carry tools; everything else yields (0, 0). Uses the same raw reqBody bytes
+	// compose does, so the two stay consistent.
+	var toolCalls int
+	var toolTokens float64
+	if modality == calls.ModalityChat && rw.matched {
+		n, tok := compose.ToolTurn(wireName, reqBody)
+		toolCalls, toolTokens = n, float64(tok)
+	}
+
 	// An error status on the chosen (forwarded) response is the single most
 	// useful debugging signal: the vendor rejected the call. Log it with the
 	// vendor's own error body so the cause (bad key, unknown model, quota, …)
@@ -853,6 +868,8 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		InputTokens:   ext.Norm.InputTokens,
 		OutputTokens:  ext.Norm.OutputTokens,
 		CachedTokens:  ext.Norm.CachedInputTokens,
+		ToolCalls:     toolCalls,
+		ToolTokens:    toolTokens,
 		Cost:          cost,
 		LatencyMS:     latency,
 		TTFTMS:        ttftMS,

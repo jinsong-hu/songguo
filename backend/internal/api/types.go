@@ -80,6 +80,8 @@ type entryView struct {
 	InputTokens   float64           `json:"input_tokens"`
 	OutputTokens  float64           `json:"output_tokens"`
 	CachedTokens  float64           `json:"cached_tokens"`
+	ToolCalls     int               `json:"tool_calls"`
+	ToolTokens    float64           `json:"tool_tokens"`
 	LatencyMS     int64             `json:"latency_ms"`
 	TTFTMS        int64             `json:"ttft_ms"`
 	GenerationMS  int64             `json:"generation_ms"`
@@ -133,6 +135,8 @@ func newEntryView(e calls.Entry) entryView {
 		InputTokens:   e.InputTokens,
 		OutputTokens:  e.OutputTokens,
 		CachedTokens:  e.CachedTokens,
+		ToolCalls:     e.ToolCalls,
+		ToolTokens:    e.ToolTokens,
 		LatencyMS:     e.LatencyMS,
 		TTFTMS:        e.TTFTMS,
 		GenerationMS:  e.GenerationMS,
@@ -315,6 +319,8 @@ type feedRowView struct {
 	Cost         float64  `json:"cost"`
 	InputTokens  float64  `json:"input_tokens"`
 	OutputTokens float64  `json:"output_tokens"`
+	ToolCalls    int      `json:"tool_calls"`
+	ToolTokens   float64  `json:"tool_tokens"`
 	FirstTS      string   `json:"first_ts"`
 	LastTS       string   `json:"last_ts"`
 	DurationMS   int64    `json:"duration_ms"`
@@ -352,6 +358,8 @@ func newFeedRowView(r store.FeedRow) feedRowView {
 		Cost:         r.Cost,
 		InputTokens:  r.InputTokens,
 		OutputTokens: r.OutputTokens,
+		ToolCalls:    r.ToolCalls,
+		ToolTokens:   r.ToolTokens,
 		FirstTS:      r.FirstTS.UTC().Format(time.RFC3339),
 		LastTS:       r.LastTS.UTC().Format(time.RFC3339),
 		DurationMS:   r.DurationMS,

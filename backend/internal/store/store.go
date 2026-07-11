@@ -293,7 +293,14 @@ func (s *Store) migrate() error {
 		// rows written before these columns or when the OS can't be determined.
 		{"calls", "client_os", "TEXT NOT NULL DEFAULT ''"},
 		{"calls", "client_os_version", "TEXT NOT NULL DEFAULT ''"},
+		// Per-call tool-use metrics (compose.ToolTurn): count of tool calls the
+		// carried turn issued, and a local o200k token estimate of their results.
+		// Derived/estimate — see calls.Entry. Summed into the sessions rollup.
+		{"calls", "tool_calls", "INTEGER NOT NULL DEFAULT 0"},
+		{"calls", "tool_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"sessions", "title", "TEXT NOT NULL DEFAULT ''"},
+		{"sessions", "tool_calls", "INTEGER NOT NULL DEFAULT 0"},
+		{"sessions", "tool_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"providers", "allow_unmatched", "INTEGER NOT NULL DEFAULT 0"},
 		{"providers", "quirks", "TEXT NOT NULL DEFAULT '{}'"},
 		{"providers", "api_key", "TEXT NOT NULL DEFAULT ''"},
@@ -402,7 +409,7 @@ func (s *Store) backfillSessions() error {
 	// last_status is the status of the newest call per session (max ts, tie-broken
 	// by id). A correlated subquery keeps this to one statement.
 	if _, err := s.db.Exec(`INSERT INTO sessions
-		(id, first_ts, last_ts, turns, error_count, input_tokens, output_tokens, cost, last_status, has_subagents)
+		(id, first_ts, last_ts, turns, error_count, input_tokens, output_tokens, cost, tool_calls, tool_tokens, last_status, has_subagents)
 		SELECT
 			c.session_id,
 			MIN(c.ts),
@@ -412,6 +419,8 @@ func (s *Store) backfillSessions() error {
 			COALESCE(SUM(c.input_tokens), 0),
 			COALESCE(SUM(c.output_tokens), 0),
 			COALESCE(SUM(c.cost), 0),
+			COALESCE(SUM(c.tool_calls), 0),
+			COALESCE(SUM(c.tool_tokens), 0),
 			(SELECT l.status FROM calls l
 			  WHERE l.session_id = c.session_id
 			  ORDER BY COALESCE(l.ts_end, l.ts) DESC, l.id DESC LIMIT 1),
