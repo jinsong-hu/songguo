@@ -340,9 +340,10 @@ func resolveBucket(bucketRaw string, since, until time.Time) (time.Duration, str
 	}
 }
 
-// handleTokensByModel returns per-bucket token totals broken down by model (top
-// N + "Other") alongside total cost, for the Usage tokens-by-model combo chart.
-// Window defaults to the last 7 days; bucket auto-selects like handleUsageSeries.
+// handleTokensByModel returns per-bucket token totals broken down by a dimension
+// (model, vendor, or user; top N + "Other") alongside total cost, for the Usage
+// stacked charts. Dimension defaults to model; window defaults to the last 7
+// days; bucket auto-selects like handleUsageSeries.
 func (a *api) handleTokensByModel(w http.ResponseWriter, r *http.Request) {
 	now := a.now().UTC()
 	since := now.AddDate(0, 0, -7)
@@ -354,15 +355,24 @@ func (a *api) handleTokensByModel(w http.ResponseWriter, r *http.Request) {
 		until = *v
 	}
 
+	dim := store.BreakdownByModel
+	if d := r.URL.Query().Get("dimension"); d != "" {
+		dim = store.BreakdownDimension(d)
+	}
+
 	bucket, label, err := resolveBucket(r.URL.Query().Get("bucket"), since, until)
 	if err != nil {
 		a.writeDataErr(w, "tokens by model", err)
 		return
 	}
-	models, buckets, err := a.store.TokensByModelSeries(since, until, bucket)
+	models, buckets, err := a.store.TokensByModelSeries(dim, since, until, bucket)
 	if err != nil {
 		if errors.Is(err, store.ErrTooManyBuckets) {
 			a.writeDataErr(w, "tokens by model", badRequestErr("requested range is too large for the chosen bucket"))
+			return
+		}
+		if errors.Is(err, store.ErrBadDimension) {
+			a.writeDataErr(w, "tokens by model", badRequestErr("dimension must be model, vendor, or user"))
 			return
 		}
 		a.writeDataErr(w, "tokens by model", err)

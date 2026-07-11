@@ -25,6 +25,7 @@ import type {
   Settings,
   User,
   UsageSeries,
+  UsageDimension,
   TokensByModelSeries,
   Vendor,
   VendorTestResult,
@@ -158,8 +159,15 @@ export const api = {
   series: (since: number, until: number, bucket: 'hour' | 'day') =>
     request<UsageSeries>(`/usage/series${qs({ since, until, bucket })}`),
 
-  tokensByModel: (since: number, until: number, bucket: 'hour' | 'day') =>
-    request<TokensByModelSeries>(`/usage/tokens-by-model${qs({ since, until, bucket })}`),
+  tokensByModel: (
+    since: number,
+    until: number,
+    bucket: 'hour' | 'day',
+    dimension: UsageDimension = 'model',
+  ) =>
+    request<TokensByModelSeries>(
+      `/usage/tokens-by-model${qs({ since, until, bucket, dimension })}`,
+    ),
 
   breakdown: (dimension: BreakdownDimension, since: number, until: number) =>
     request<Breakdown>(`/usage/breakdown${qs({ dimension, since, until })}`),

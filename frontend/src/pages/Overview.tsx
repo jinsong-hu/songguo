@@ -13,7 +13,7 @@ import {
 } from 'recharts';
 import { Activity, Clock, Coins, DollarSign, GitBranch, MessageSquare, ShieldCheck, Users } from 'lucide-react';
 import { api } from '../api/client';
-import type { Bucket, BreakdownRow } from '../api/types';
+import type { Bucket, BreakdownRow, UsageDimension } from '../api/types';
 import { ContextSunburst } from '../components/ContextSunburst';
 import { InfoHint } from '../components/InfoHint';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -29,7 +29,7 @@ import {
 } from '../components/ui/chart';
 import { LIVE_REFRESH_MS, useFetch, useLiveTick } from '../lib/useFetch';
 import { bucketLabel, duration, int, money, ms, percent } from '../lib/format';
-import { brandOf } from '../lib/modelBrand';
+import { brandOf, providerBrand } from '../lib/modelBrand';
 import { ActivityFeed } from './ActivityFeed';
 import styles from './Overview.module.css';
 
@@ -48,12 +48,21 @@ const RANGES: RangeOption[] = [
 
 const REFRESH_MS = LIVE_REFRESH_MS;
 const TOP_N = 6;
+
+// Usage stacked-chart breakdown dimensions. "provider" is the label for the
+// vendor dimension (the calls `vendor` column) — see UsageDimension.
+const USAGE_DIMS: { key: UsageDimension; label: string }[] = [
+  { key: 'model', label: 'By model' },
+  { key: 'vendor', label: 'By provider' },
+  { key: 'user', label: 'By user' },
+];
 const CHART_CLS = 'aspect-auto h-full w-full';
 
 type FetchLike = { initialLoading: boolean; error: string | null; refetch: () => void };
 
 export function OverviewPage() {
   const [rangeKey, setRangeKey] = useState('24h');
+  const [usageDim, setUsageDim] = useState<UsageDimension>('model');
   const [bdDim, setBdDim] = useState<'model' | 'vendor' | 'user'>('model');
   const tick = useLiveTick(REFRESH_MS);
   const range = RANGES.find((r) => r.key === rangeKey) ?? RANGES[0];
@@ -72,8 +81,8 @@ export function OverviewPage() {
     opts,
   );
   const tokenSeries = useFetch(
-    () => api.tokensByModel(since, until, range.bucket),
-    [since, until, range.bucket],
+    () => api.tokensByModel(since, until, range.bucket, usageDim),
+    [since, until, range.bucket, usageDim],
     opts,
   );
   const byModel = useFetch(() => api.breakdown('model', since, until), [since, until], opts);
@@ -141,6 +150,11 @@ export function OverviewPage() {
     });
     return c;
   }, [tokenModels]);
+  // Distinct, brand-anchored color per series key for the current dimension.
+  const seriesColors = useMemo(
+    () => assignSeriesColors(tokenModels, usageDim),
+    [tokenModels, usageDim],
+  );
 
   const models = (byModel.data?.rows ?? []).slice(0, TOP_N);
   const vendors = (byVendor.data?.rows ?? []).slice(0, TOP_N);
@@ -233,7 +247,24 @@ export function OverviewPage() {
       </div>
 
       {/* Usage */}
-      <SectionTitle name="Usage" hint="Tokens and cost by model" />
+      <SectionTitle
+        name="Usage"
+        control={
+          <div className={styles.seg} role="tablist" aria-label="Usage breakdown dimension">
+            {USAGE_DIMS.map((d) => (
+              <button
+                key={d.key}
+                role="tab"
+                aria-selected={d.key === usageDim}
+                className={`${styles.segBtn} ${d.key === usageDim ? styles.segActive : ''}`}
+                onClick={() => setUsageDim(d.key)}
+              >
+                {d.label}
+              </button>
+            ))}
+          </div>
+        }
+      />
       <div className={styles.grid2}>
         <Panel title="Tokens">
           <Frame r={tokenSeries} height={styles.chartSm} empty={tokenModels.length === 0}>
@@ -249,7 +280,7 @@ export function OverviewPage() {
                     key={m}
                     dataKey={m}
                     stackId="tok"
-                    fill={modelColor(m)}
+                    fill={seriesColors[m]}
                     radius={i === tokenModels.length - 1 ? [3, 3, 0, 0] : undefined}
                   />
                 ))}
@@ -286,7 +317,7 @@ export function OverviewPage() {
                     key={m}
                     dataKey={m}
                     stackId="cost"
-                    fill={modelColor(m)}
+                    fill={seriesColors[m]}
                     radius={i === tokenModels.length - 1 ? [3, 3, 0, 0] : undefined}
                   />
                 ))}
@@ -728,16 +759,6 @@ function BreakdownTable({
   );
 }
 
-/** FNV-1a hash of a string → unsigned 32-bit int. Stable across engines. */
-function hashStr(s: string): number {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
-}
-
 /** Convert a #rrggbb hex color to [hue, saturation, lightness] (h in 0..360, s/l in 0..1). */
 function hexToHsl(hex: string): [number, number, number] {
   const m = hex.replace('#', '');
@@ -758,23 +779,64 @@ function hexToHsl(hex: string): [number, number, number] {
 }
 
 /**
- * Deterministic color for a model, derived only from its name so the same model
- * gets the same swatch in every session, browser, and screenshot — regardless of
- * how it ranks in the current range. Anchored to the model's vendor brand color
- * (via brandOf, matching the Services/Providers pages) so a model stays on-brand
- * app-wide; a name hash then spreads models that share a vendor across distinct
- * lightness/hue shades so same-vendor models remain distinguishable in a stack.
+ * Assigns a distinct color to every series key for the current Usage dimension.
+ * Keys are grouped by their brand — the model creator's brand for the `model`
+ * dimension, the provider's brand for `vendor` — then same-brand siblings are
+ * spread across a wide lightness+hue ramp so they stay clearly distinguishable
+ * in a stacked bar (e.g. Claude Opus vs Haiku, which used to collide). Anchoring
+ * to the brand color keeps a series on-brand relative to other vendors. Keys we
+ * can't brand (users, unknown vendors) get evenly-spaced categorical hues.
  * "Other" is always the muted grey.
+ *
+ * A key's exact shade depends on which same-brand siblings are currently shown,
+ * not on its name alone — the deliberate cost of guaranteeing sibling contrast.
  */
-function modelColor(model: string): string {
-  if (model === 'Other') return 'var(--text-muted)';
-  const base = brandOf(model)?.color ?? '#3f8f5b';
-  const [baseHue, baseSat] = hexToHsl(base);
-  const n = hashStr(model);
-  const hue = ((baseHue + ((n % 31) - 15)) % 360 + 360) % 360;
-  const sat = Math.round(Math.min(0.85, Math.max(0.5, baseSat)) * 100);
-  const light = 44 + ((n >>> 5) % 24); // 44%..67%
-  return `hsl(${hue} ${sat}% ${light}%)`;
+function assignSeriesColors(keys: string[], dim: UsageDimension): Record<string, string> {
+  const baseColor = (k: string): string | null => {
+    if (dim === 'model') return brandOf(k)?.color ?? null;
+    if (dim === 'vendor') return providerBrand(k, [])?.color ?? null;
+    return null; // users have no brand
+  };
+
+  // Partition into brand groups (keyed by base hex) plus one unbranded bucket.
+  const branded = new Map<string, string[]>();
+  const unbranded: string[] = [];
+  for (const k of keys) {
+    if (k === 'Other') continue;
+    const base = baseColor(k);
+    if (base) {
+      const g = branded.get(base);
+      if (g) g.push(k);
+      else branded.set(base, [k]);
+    } else {
+      unbranded.push(k);
+    }
+  }
+
+  const out: Record<string, string> = {};
+  for (const [base, group] of branded) {
+    const [h, s] = hexToHsl(base);
+    const sat = Math.round(Math.min(0.85, Math.max(0.5, s)) * 100);
+    const sorted = [...group].sort();
+    const n = sorted.length;
+    sorted.forEach((k, i) => {
+      const t = n === 1 ? 0.5 : i / (n - 1); // 0..1 position within the group
+      const light = Math.round(40 + t * 32); // 40%..72%
+      const hue = (((h + (t - 0.5) * 34) % 360) + 360) % 360; // ±17° spread
+      out[k] = `hsl(${hue} ${sat}% ${light}%)`;
+    });
+  }
+
+  // Unbranded keys: evenly-spaced hues starting near the pine-green accent.
+  const sortedU = [...unbranded].sort();
+  const nu = sortedU.length;
+  sortedU.forEach((k, i) => {
+    const hue = Math.round(150 + (i / Math.max(1, nu)) * 300) % 360;
+    out[k] = `hsl(${hue} 55% 55%)`;
+  });
+
+  out.Other = 'var(--text-muted)';
+  return out;
 }
 
 /** Compact large numbers for axis ticks, e.g. 12.3k, 4.5M. */

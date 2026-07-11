@@ -102,8 +102,14 @@ export interface TokensByModelPoint {
   costs: Record<string, number>;
 }
 
+// Dimension the Usage stacked charts group their series by. "vendor" is
+// surfaced as "provider" in the UI; the underlying calls column is `vendor`.
+export type UsageDimension = 'model' | 'vendor' | 'user';
+
 export interface TokensByModelSeries {
   bucket: Bucket;
+  // Series keys for the current dimension (model ids, vendor names, or user
+  // ids), top-N + "Other". Named `models` for historical reasons.
   models: string[];
   points: TokensByModelPoint[];
 }

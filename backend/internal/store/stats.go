@@ -557,14 +557,19 @@ type TokensByModelBucket struct {
 }
 
 // TokensByModelSeries returns, for each fixed time bucket across [since, until),
-// the total cost and total tokens (input+output) broken down by model. The top
-// tokensByModelTopN models by total tokens over the whole range are kept as
-// distinct keys; every other model is summed into "Other". Every bucket in the
-// range is present (gaps filled with zeroes), and every bucket's Tokens map
-// carries the same key set. The returned slice is that key set, ordered
-// descending by total tokens with "Other" (when present) last. Bucket
-// timestamps are UTC. Empty model names are reported as "unknown".
-func (s *Store) TokensByModelSeries(since, until time.Time, bucket time.Duration) ([]string, []TokensByModelBucket, error) {
+// the total cost and total tokens (input+output) broken down by the given
+// dimension (model, vendor, or user). The top tokensByModelTopN keys by total
+// tokens over the whole range are kept as distinct series; every other key is
+// summed into "Other". Every bucket in the range is present (gaps filled with
+// zeroes), and every bucket's Tokens map carries the same key set. The returned
+// slice is that key set, ordered descending by total tokens with "Other" (when
+// present) last. Bucket timestamps are UTC. Empty key values are reported as
+// "unknown". An unrecognized dimension returns ErrBadDimension.
+func (s *Store) TokensByModelSeries(dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []TokensByModelBucket, error) {
+	col, ok := breakdownColumn(dim)
+	if !ok {
+		return nil, nil, ErrBadDimension
+	}
 	if bucket <= 0 {
 		return nil, nil, fmt.Errorf("store: tokens by model series: bucket must be positive")
 	}
@@ -584,14 +589,16 @@ func (s *Store) TokensByModelSeries(since, until time.Time, bucket time.Duration
 		return nil, nil, fmt.Errorf("%w: %d exceeds limit of %d", ErrTooManyBuckets, count, maxSeriesBuckets)
 	}
 
+	// col comes from the breakdownColumn whitelist, so it is safe to interpolate
+	// (column names cannot be bound as query parameters).
 	rows, err := s.db.Query(
-		`SELECT (ts / ?) * ? AS bucket_start,
-		        model,
+		fmt.Sprintf(`SELECT (ts / ?) * ? AS bucket_start,
+		        %s,
 		        COALESCE(SUM(input_tokens + cache_read_input_tokens + cache_creation_input_tokens + output_tokens), 0),
 		        COALESCE(SUM(cost), 0)
 		   FROM calls
 		  WHERE ts >= ? AND ts < ?
-		  GROUP BY bucket_start, model`,
+		  GROUP BY bucket_start, %s`, col, col),
 		bucketMs, bucketMs, sinceMs, untilMs,
 	)
 	if err != nil {
