@@ -458,6 +458,10 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 		"bytes_down":  bd,
 		"duration_ms": duration.Milliseconds(),
 	}
+	// Priced from the vendor's OFFICIAL usage only (ext.Norm, decoded from the
+	// upstream WS usage frames), never a local reconcile — same rule as the HTTP
+	// path. Unknown usage meters $0, never a guess. Local counters belong to
+	// insights (internal/compose), not billing.
 	cost := 0.0
 	var confidence calls.Confidence
 	if meter != nil {

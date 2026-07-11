@@ -779,6 +779,19 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		}
 	}
 
+	// Cost is priced from the vendor's OFFICIAL usage only. ext.Norm is the
+	// canonical view of the `usage` object the vendor returned in the response
+	// body (see the wire extractors). We never reconcile it against a locally
+	// counted token total: the number we bill is the number the vendor reported,
+	// verbatim. If the vendor under-reports, over-reports, or omits usage (then
+	// Norm is zero), cost reflects that faithfully and meters accordingly —
+	// $0 on unknown usage, never a local guess.
+	//
+	// Local token counting DOES exist (internal/compose) but is deliberately kept
+	// out of billing: it feeds context-composition insights, where granularity and
+	// stable proportions/trends matter more than matching the vendor's exact total.
+	// Billing wants the authoritative number; insights want the granular one. They
+	// are separate on purpose and must not be cross-reconciled.
 	cost := 0.0
 	if rw.matched && !rw.wire.ZeroCost {
 		if snap := h.snapshot(); snap != nil {

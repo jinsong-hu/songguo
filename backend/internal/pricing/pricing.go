@@ -11,6 +11,14 @@ import (
 // the canonical usage extracted by the call's wire. It is deliberately
 // defensive: an unknown or empty Unit yields zero, and it never panics.
 //
+// INVARIANT: n must be the vendor's OFFICIAL usage — the counts the wire
+// extractor read out of the vendor's response (usage object / SSE usage /
+// decoded WS frames). Never pass a locally counted or estimated token total
+// here. Billing bills what the vendor reported, with no local reconciliation;
+// unknown usage arrives as a zero Normalized and correctly meters $0 rather than
+// a guess. Local token counts (internal/compose) are for insights granularity
+// and trends, and are kept out of this function on purpose.
+//
 // Cached input tokens (a subset of InputTokens) are billed at the CachedInput
 // rate when one is configured; a non-positive CachedInput means no discount
 // and the full Input rate applies.
