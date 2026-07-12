@@ -163,7 +163,7 @@ function breakoutColumns(
 export function ContextSunburst({
   data,
   centerValue,
-  centerLabel = 'total',
+  centerLabel = '',
   active,
   onSelect,
 }: {
@@ -330,7 +330,7 @@ export function ContextSunburst({
             </PieChart>
           </ChartContainer>
           <div className={styles.sunCenter}>
-            <div className={styles.sunCenterVal}>{compact(centerValue ?? data.avg_total)}</div>
+            <div className={styles.sunCenterVal}>{compact(centerValue ?? total)}</div>
             {centerLabel ? <div className={styles.sunCenterLbl}>{centerLabel}</div> : null}
           </div>
         </div>
