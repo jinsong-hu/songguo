@@ -76,8 +76,11 @@ function sideRows(n: number): number[] {
 }
 
 function chooseBreakouts(sources: SourceSlice[], total: number): { mode: LayoutMode; breakouts: SourceSlice[] } {
+  // Rank every source bucket by size — a breakout is drawn for the largest
+  // buckets whether or not they carry a producer drill-down. Copy before
+  // sorting so we don't reorder the caller's array (the legend keeps its order).
   const candidates = sources
-    .filter((s) => (s.children?.length ?? 0) > 0)
+    .slice()
     .sort((a, b) => b.tokens - a.tokens);
   const share = (i: number) => (candidates[i]?.tokens ?? 0) / total;
   if (candidates.length <= 1 || share(1) < 0.1) {
@@ -202,7 +205,27 @@ export function ContextSunburst({
 
   const breakoutCard = (s: SourceSlice, side: 'left' | 'right') => {
     const children = s.children ?? [];
+    const hasKids = children.length > 0;
     const childTotal = children.reduce((a, c) => a + c.tokens, 0) || 1;
+    // Ring segments: producer children when the bucket has a drill-down,
+    // otherwise the whole bucket as one solid ring (same chrome, no breakdown).
+    const segments = hasKids
+      ? children.map((c) => ({
+          key: c.key,
+          name: prodLabel(c.key),
+          tokens: c.tokens,
+          color: kidColor.get(`${s.key}/${c.key}`)!,
+          selected: isActive(s.key, c.key),
+          onClick: () => selectProducer(s.key, c.key),
+        }))
+      : [{
+          key: s.key,
+          name: srcLabel(s.key),
+          tokens: s.tokens,
+          color: srcColor(s.key),
+          selected: isActive(s.key),
+          onClick: () => selectSource(s.key),
+        }];
     return (
       <div key={s.key} className={`${styles.breakout} ${side === 'left' ? styles.breakoutLeft : styles.breakoutRight}`}>
         <div className={styles.miniChart}>
@@ -210,7 +233,7 @@ export function ContextSunburst({
             <PieChart>
               <ChartTooltip content={<ChartTooltipContent nameKey="name" />} />
               <Pie
-                data={children.map((c) => ({ name: prodLabel(c.key), tokens: c.tokens, color: kidColor.get(`${s.key}/${c.key}`)! }))}
+                data={segments}
                 dataKey="tokens"
                 nameKey="name"
                 innerRadius="56%"
@@ -221,13 +244,13 @@ export function ContextSunburst({
                 stroke="var(--surface)"
                 isAnimationActive={false}
               >
-                {children.map((c) => (
+                {segments.map((seg) => (
                   <Cell
-                    key={c.key}
-                    fill={kidColor.get(`${s.key}/${c.key}`)!}
+                    key={seg.key}
+                    fill={seg.color}
                     cursor={onSelect ? 'pointer' : undefined}
-                    opacity={active && !isActive(s.key, c.key) ? 0.5 : 1}
-                    onClick={() => selectProducer(s.key, c.key)}
+                    opacity={active && !seg.selected ? 0.5 : 1}
+                    onClick={seg.onClick}
                   />
                 ))}
               </Pie>
@@ -245,20 +268,26 @@ export function ContextSunburst({
             {srcLabel(s.key)}
             <b className={styles.nlPct}>{pct(s.tokens)}</b>
           </button>
-          <div className={styles.breakoutKids}>
-            {children.slice(0, 4).map((c) => (
-              <button
-                type="button"
-                key={c.key}
-                className={`${styles.kidPick} ${isActive(s.key, c.key) ? styles.chartPickActive : ''}`}
-                onClick={() => selectProducer(s.key, c.key)}
-                disabled={!onSelect}
-              >
-                <span className={styles.nlDot} style={{ background: kidColor.get(`${s.key}/${c.key}`) }} />
-                {prodLabel(c.key)} <span className="mono">{Math.round((c.tokens / childTotal) * 100)}%</span>
-              </button>
-            ))}
-          </div>
+          {hasKids ? (
+            <div className={styles.breakoutKids}>
+              {children.slice(0, 4).map((c) => (
+                <button
+                  type="button"
+                  key={c.key}
+                  className={`${styles.kidPick} ${isActive(s.key, c.key) ? styles.chartPickActive : ''}`}
+                  onClick={() => selectProducer(s.key, c.key)}
+                  disabled={!onSelect}
+                >
+                  <span className={styles.nlDot} style={{ background: kidColor.get(`${s.key}/${c.key}`) }} />
+                  {prodLabel(c.key)} <span className="mono">{Math.round((c.tokens / childTotal) * 100)}%</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className={styles.breakoutKids}>
+              <span className={styles.breakoutNoKids}>no breakdown</span>
+            </div>
+          )}
         </div>
       </div>
     );

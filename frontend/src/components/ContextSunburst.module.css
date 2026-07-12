@@ -224,6 +224,11 @@
   color: var(--text-muted);
 }
 
+.breakoutNoKids {
+  font-style: italic;
+  opacity: 0.7;
+}
+
 .breakoutLeft .breakoutKids {
   justify-content: flex-end;
   text-align: right;
