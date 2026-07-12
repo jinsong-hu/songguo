@@ -134,7 +134,7 @@ function rowKey(row: FeedRow): string {
 
 /** Short, readable form of a session id for the feed. */
 function shortId(id: string): string {
-  return id.length > 12 ? `${id.slice(0, 12)}…` : id;
+  return id.length > 18 ? `${id.slice(0, 18)}…` : id;
 }
 
 function FeedRowView({ row, onOpen }: { row: FeedRow; onOpen: () => void }) {
@@ -151,14 +151,12 @@ function FeedRowView({ row, onOpen }: { row: FeedRow; onOpen: () => void }) {
       <td>
         {isSession ? (
           <div className={styles.activitySession}>
-            <span className={styles.activitySessionTitle} title={row.title || row.session_id}>
+            <span
+              className={`${styles.activitySessionTitle} ${row.title ? '' : 'mono'}`}
+              title={row.title || row.session_id}
+            >
               {row.title || shortId(row.session_id ?? '')}
             </span>
-            {row.title ? (
-              <span className={`mono ${styles.activitySessionId}`}>
-                {shortId(row.session_id ?? '')}
-              </span>
-            ) : null}
           </div>
         ) : row.wire ? (
           <span className="mono" style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
