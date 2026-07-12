@@ -546,14 +546,22 @@ const otherModelKey = "Other"
 
 // TokensByModelBucket is one time bucket of the tokens-by-model series: the
 // bucket start (UTC), the total cost over the bucket, total tokens
-// (input+output) per model, and cost per model. Only the top models are kept as
-// distinct keys; the remaining models are aggregated under "Other". Tokens and
-// CostByModel carry the same key set.
+// (input+output) per model, cost per model, and per-model average TTFT and
+// output throughput. Only the top models are kept as distinct keys; the
+// remaining models are aggregated under "Other". Tokens, CostByModel,
+// TTFTByModel, and TPSByModel all carry the same key set.
+//
+// TTFTByModel is the mean time-to-first-token (ms) over calls that reported a
+// TTFT; TPSByModel is the mean output tokens/sec over calls that generated
+// output — both per-call averages, matching UsageSeries. A key with no
+// qualifying calls in the bucket reports 0.
 type TokensByModelBucket struct {
 	Bucket      time.Time
 	Cost        float64
 	Tokens      map[string]float64
 	CostByModel map[string]float64
+	TTFTByModel map[string]float64
+	TPSByModel  map[string]float64
 }
 
 // TokensByModelSeries returns, for each fixed time bucket across [since, until),
@@ -595,7 +603,11 @@ func (s *Store) TokensByModelSeries(dim BreakdownDimension, since, until time.Ti
 		fmt.Sprintf(`SELECT (ts / ?) * ? AS bucket_start,
 		        %s,
 		        COALESCE(SUM(input_tokens + cache_read_input_tokens + cache_creation_input_tokens + output_tokens), 0),
-		        COALESCE(SUM(cost), 0)
+		        COALESCE(SUM(cost), 0),
+		        COALESCE(SUM(CASE WHEN ttft_ms > 0 THEN ttft_ms END), 0),
+		        COUNT(CASE WHEN ttft_ms > 0 THEN 1 END),
+		        COALESCE(SUM(CASE WHEN generation_ms > 0 AND output_tokens > 0 THEN output_tokens * 1000.0 / generation_ms END), 0),
+		        COUNT(CASE WHEN generation_ms > 0 AND output_tokens > 0 THEN 1 END)
 		   FROM calls
 		  WHERE ts >= ? AND ts < ?
 		  GROUP BY bucket_start, %s`, col, col),
@@ -606,31 +618,36 @@ func (s *Store) TokensByModelSeries(dim BreakdownDimension, since, until time.Ti
 	}
 	defer rows.Close()
 
+	// ttftSum/ttftN and tpsSum/tpsN are the numerator/denominator of each key's
+	// per-call average, kept unreduced so they fold correctly into "Other".
 	type cell struct {
-		bucket int64
-		model  string
-		tokens float64
-		cost   float64
+		bucket  int64
+		model   string
+		tokens  float64
+		cost    float64
+		ttftSum float64
+		ttftN   int64
+		tpsSum  float64
+		tpsN    int64
 	}
 	var cells []cell
 	modelTotals := make(map[string]float64)
 	bucketCost := make(map[int64]float64)
 	for rows.Next() {
 		var (
-			b      int64
-			model  string
-			tokens float64
-			cost   float64
+			b int64
+			c cell
 		)
-		if err := rows.Scan(&b, &model, &tokens, &cost); err != nil {
+		if err := rows.Scan(&b, &c.model, &c.tokens, &c.cost, &c.ttftSum, &c.ttftN, &c.tpsSum, &c.tpsN); err != nil {
 			return nil, nil, fmt.Errorf("store: scan tokens by model series: %w", err)
 		}
-		if model == "" {
-			model = "unknown"
+		if c.model == "" {
+			c.model = "unknown"
 		}
-		cells = append(cells, cell{bucket: b, model: model, tokens: tokens, cost: cost})
-		modelTotals[model] += tokens
-		bucketCost[b] += cost
+		c.bucket = b
+		cells = append(cells, c)
+		modelTotals[c.model] += c.tokens
+		bucketCost[b] += c.cost
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, fmt.Errorf("store: tokens by model series: %w", err)
@@ -660,26 +677,38 @@ func (s *Store) TokensByModelSeries(dim BreakdownDimension, since, until time.Ti
 	hasOther := len(ranked) > len(models)
 
 	// Fold each cell into its bucket, remapping non-top models to "Other".
-	// Tokens and cost are folded in parallel so they share the same key set.
+	// Tokens, cost, and the TTFT/TPS sum+count pairs are folded in parallel so
+	// they share the same key set. Averages are deferred to emit time so the
+	// "Other" group averages across all its folded calls.
 	perBucket := make(map[int64]map[string]float64)
 	perBucketCost := make(map[int64]map[string]float64)
+	perBucketTTFTSum := make(map[int64]map[string]float64)
+	perBucketTTFTN := make(map[int64]map[string]int64)
+	perBucketTPSSum := make(map[int64]map[string]float64)
+	perBucketTPSN := make(map[int64]map[string]int64)
+	ensureF := func(m map[int64]map[string]float64, b int64) map[string]float64 {
+		if m[b] == nil {
+			m[b] = make(map[string]float64)
+		}
+		return m[b]
+	}
+	ensureI := func(m map[int64]map[string]int64, b int64) map[string]int64 {
+		if m[b] == nil {
+			m[b] = make(map[string]int64)
+		}
+		return m[b]
+	}
 	for _, c := range cells {
 		key := c.model
 		if !top[key] {
 			key = otherModelKey
 		}
-		m := perBucket[c.bucket]
-		if m == nil {
-			m = make(map[string]float64)
-			perBucket[c.bucket] = m
-		}
-		m[key] += c.tokens
-		mc := perBucketCost[c.bucket]
-		if mc == nil {
-			mc = make(map[string]float64)
-			perBucketCost[c.bucket] = mc
-		}
-		mc[key] += c.cost
+		ensureF(perBucket, c.bucket)[key] += c.tokens
+		ensureF(perBucketCost, c.bucket)[key] += c.cost
+		ensureF(perBucketTTFTSum, c.bucket)[key] += c.ttftSum
+		ensureI(perBucketTTFTN, c.bucket)[key] += c.ttftN
+		ensureF(perBucketTPSSum, c.bucket)[key] += c.tpsSum
+		ensureI(perBucketTPSN, c.bucket)[key] += c.tpsN
 	}
 	if hasOther {
 		models = append(models, otherModelKey)
@@ -690,9 +719,13 @@ func (s *Store) TokensByModelSeries(dim BreakdownDimension, since, until time.Ti
 		bs := startMs + i*bucketMs
 		tokens := make(map[string]float64, len(models))
 		costByModel := make(map[string]float64, len(models))
+		ttftByModel := make(map[string]float64, len(models))
+		tpsByModel := make(map[string]float64, len(models))
 		for _, m := range models {
 			tokens[m] = 0
 			costByModel[m] = 0
+			ttftByModel[m] = 0
+			tpsByModel[m] = 0
 		}
 		for m, v := range perBucket[bs] {
 			tokens[m] += v
@@ -700,11 +733,23 @@ func (s *Store) TokensByModelSeries(dim BreakdownDimension, since, until time.Ti
 		for m, v := range perBucketCost[bs] {
 			costByModel[m] += v
 		}
+		for m, n := range perBucketTTFTN[bs] {
+			if n > 0 {
+				ttftByModel[m] = perBucketTTFTSum[bs][m] / float64(n)
+			}
+		}
+		for m, n := range perBucketTPSN[bs] {
+			if n > 0 {
+				tpsByModel[m] = perBucketTPSSum[bs][m] / float64(n)
+			}
+		}
 		out = append(out, TokensByModelBucket{
 			Bucket:      time.UnixMilli(bs).UTC(),
 			Cost:        bucketCost[bs],
 			Tokens:      tokens,
 			CostByModel: costByModel,
+			TTFTByModel: ttftByModel,
+			TPSByModel:  tpsByModel,
 		})
 	}
 	return models, out, nil

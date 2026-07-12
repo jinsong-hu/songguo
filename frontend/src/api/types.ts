@@ -100,6 +100,10 @@ export interface TokensByModelPoint {
   cost: number;
   tokens: Record<string, number>;
   costs: Record<string, number>;
+  /** Per-key average time-to-first-token (ms). Same key set as `tokens`. */
+  ttft: Record<string, number>;
+  /** Per-key average output throughput (tokens/sec). Same key set as `tokens`. */
+  tps: Record<string, number>;
 }
 
 // Dimension the Usage stacked charts group their series by. "vendor" is

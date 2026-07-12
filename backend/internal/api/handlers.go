@@ -386,6 +386,8 @@ func (a *api) handleTokensByModel(w http.ResponseWriter, r *http.Request) {
 			Cost:   b.Cost,
 			Tokens: b.Tokens,
 			Costs:  b.CostByModel,
+			TTFT:   b.TTFTByModel,
+			TPS:    b.TPSByModel,
 		})
 	}
 	writeJSON(w, http.StatusOK, tokensByModelView{Bucket: label, Models: models, Points: points})

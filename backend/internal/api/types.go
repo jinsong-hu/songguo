@@ -265,13 +265,16 @@ type usageSeriesView struct {
 }
 
 // tokensByModelPoint is one bucket in the GET /api/usage/tokens-by-model
-// response: total cost, total tokens (input+output) keyed by model, and cost
-// keyed by model. Tokens and Costs carry the same key set.
+// response: total cost, total tokens (input+output) keyed by model, cost keyed
+// by model, and per-model average TTFT (ms) and output throughput (tokens/sec).
+// All four maps carry the same key set.
 type tokensByModelPoint struct {
 	TS     string             `json:"ts"`
 	Cost   float64            `json:"cost"`
 	Tokens map[string]float64 `json:"tokens"`
 	Costs  map[string]float64 `json:"costs"`
+	TTFT   map[string]float64 `json:"ttft"`
+	TPS    map[string]float64 `json:"tps"`
 }
 
 // tokensByModelView is the GET /api/usage/tokens-by-model response: the ordered

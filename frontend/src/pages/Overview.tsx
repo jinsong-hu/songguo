@@ -60,6 +60,7 @@ type FetchLike = { initialLoading: boolean; error: string | null; refetch: () =>
 export function OverviewPage() {
   const [rangeKey, setRangeKey] = useState('24h');
   const [usageDim, setUsageDim] = useState<UsageDimension>('model');
+  const [perfDim, setPerfDim] = useState<UsageDimension>('model');
   const tick = useLiveTick(REFRESH_MS);
   const range = RANGES.find((r) => r.key === rangeKey) ?? RANGES[0];
 
@@ -79,6 +80,13 @@ export function OverviewPage() {
   const tokenSeries = useFetch(
     () => api.tokensByModel(since, until, range.bucket, usageDim),
     [since, until, range.bucket, usageDim],
+    opts,
+  );
+  // Performance charts reuse the tokens-by-model endpoint (which also carries
+  // per-key TTFT/throughput) with an independent dimension selector.
+  const perfSeries = useFetch(
+    () => api.tokensByModel(since, until, range.bucket, perfDim),
+    [since, until, range.bucket, perfDim],
     opts,
   );
   const byVendor = useFetch(() => api.breakdown('vendor', since, until), [since, until], opts);
@@ -156,6 +164,42 @@ export function OverviewPage() {
     () => assignSeriesColors(tokenModels, usageDim),
     [tokenModels, usageDim],
   );
+
+  // Performance-by-dimension: one row per bucket with a numeric TTFT and a
+  // numeric throughput column per key. Mirrors the tokens-by-model shaping but
+  // reads the ttft/tps maps and uses the independent perfDim selector.
+  const { perfKeys, ttftPoints, tpsPoints } = useMemo(() => {
+    const data = perfSeries.data;
+    const keys = data?.models ?? [];
+    const bucket = data?.bucket ?? range.bucket;
+    const ttftRows: Record<string, number | string>[] = [];
+    const tpsRows: Record<string, number | string>[] = [];
+    for (const p of data?.points ?? []) {
+      const label = bucketLabel(p.ts, bucket);
+      const ttft: Record<string, number | string> = { label };
+      const tps: Record<string, number | string> = { label };
+      for (const k of keys) {
+        ttft[k] = p.ttft[k] ?? 0;
+        tps[k] = p.tps[k] ?? 0;
+      }
+      ttftRows.push(ttft);
+      tpsRows.push(tps);
+    }
+    return { perfKeys: keys, ttftPoints: ttftRows, tpsPoints: tpsRows };
+  }, [perfSeries.data, range.bucket]);
+  const perfLabel = useMemo(() => {
+    const names = new Map((usersList.data ?? []).map((u) => [u.id, u.name]));
+    return (key: string) => (perfDim === 'user' ? names.get(key) ?? key : key);
+  }, [usersList.data, perfDim]);
+  const perfConfig = useMemo<ChartConfig>(() => {
+    const c: ChartConfig = {};
+    perfKeys.forEach((k) => {
+      c[k] = { label: perfLabel(k) };
+    });
+    return c;
+  }, [perfKeys, perfLabel]);
+  const perfColors = useMemo(() => assignSeriesColors(perfKeys, perfDim), [perfKeys, perfDim]);
+  const perfEmpty = perfKeys.length === 0;
 
   const vendors = (byVendor.data?.rows ?? []).slice(0, TOP_N);
 
@@ -327,30 +371,53 @@ export function OverviewPage() {
       </ContextDistributionCard>
 
       {/* Performance */}
-      <SectionTitle name="Performance" hint="TTFT and output generation speed" />
+      <SectionTitle
+        name="Performance"
+        control={
+          <div className={styles.seg} role="tablist" aria-label="Performance breakdown dimension">
+            {USAGE_DIMS.map((d) => (
+              <button
+                key={d.key}
+                role="tab"
+                aria-selected={d.key === perfDim}
+                className={`${styles.segBtn} ${d.key === perfDim ? styles.segActive : ''}`}
+                onClick={() => setPerfDim(d.key)}
+              >
+                {d.label}
+              </button>
+            ))}
+          </div>
+        }
+      />
       <div className={styles.grid2}>
         <Panel title="Avg TTFT">
-          <Frame r={series} height={styles.chartXs} empty={seriesEmpty}>
-            <ChartContainer config={{ avg_ttft_ms: { label: 'Avg TTFT', color: 'var(--chart-3)' } }} className={CHART_CLS}>
-              <LineChart data={points} margin={{ top: 6, right: 8, left: -8, bottom: 0 }}>
+          <Frame r={perfSeries} height={styles.chartXs} empty={perfEmpty}>
+            <ChartContainer config={perfConfig} className={CHART_CLS}>
+              <LineChart data={ttftPoints} margin={{ top: 6, right: 8, left: -8, bottom: 0 }}>
                 <CartesianGrid vertical={false} />
                 <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
                 <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={(v: number) => `${Math.round(v)}`} />
                 <ChartTooltip content={<ChartTooltipContent />} />
-                <Line dataKey="avg_ttft_ms" type="monotone" stroke="var(--color-avg_ttft_ms)" strokeWidth={2} dot={false} />
+                <ChartLegend content={<ChartLegendContent />} />
+                {perfKeys.map((k) => (
+                  <Line key={k} dataKey={k} type="monotone" stroke={perfColors[k]} strokeWidth={2} dot={false} connectNulls />
+                ))}
               </LineChart>
             </ChartContainer>
           </Frame>
         </Panel>
         <Panel title="Avg throughput">
-          <Frame r={series} height={styles.chartXs} empty={seriesEmpty}>
-            <ChartContainer config={{ avg_output_tokens_per_second: { label: 'Output tok/s', color: 'var(--chart-2)' } }} className={CHART_CLS}>
-              <LineChart data={points} margin={{ top: 6, right: 8, left: -8, bottom: 0 }}>
+          <Frame r={perfSeries} height={styles.chartXs} empty={perfEmpty}>
+            <ChartContainer config={perfConfig} className={CHART_CLS}>
+              <LineChart data={tpsPoints} margin={{ top: 6, right: 8, left: -8, bottom: 0 }}>
                 <CartesianGrid vertical={false} />
                 <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
                 <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={(v: number) => compact(v)} />
                 <ChartTooltip content={<ChartTooltipContent />} />
-                <Line dataKey="avg_output_tokens_per_second" type="monotone" stroke="var(--color-avg_output_tokens_per_second)" strokeWidth={2} dot={false} />
+                <ChartLegend content={<ChartLegendContent />} />
+                {perfKeys.map((k) => (
+                  <Line key={k} dataKey={k} type="monotone" stroke={perfColors[k]} strokeWidth={2} dot={false} connectNulls />
+                ))}
               </LineChart>
             </ChartContainer>
           </Frame>
