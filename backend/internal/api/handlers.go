@@ -393,6 +393,56 @@ func (a *api) handleTokensByModel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tokensByModelView{Bucket: label, Models: models, Points: points})
 }
 
+// handleSuccessByModel returns per-bucket request/error counts broken down by a
+// dimension (model, vendor, or user; top N by requests + "Other"), for the
+// Success % over-time chart. Dimension defaults to model; window defaults to the
+// last 7 days; bucket auto-selects like handleUsageSeries.
+func (a *api) handleSuccessByModel(w http.ResponseWriter, r *http.Request) {
+	now := a.now().UTC()
+	since := now.AddDate(0, 0, -7)
+	until := now
+	if v, ok := parseUnixTime(r, "since"); ok {
+		since = *v
+	}
+	if v, ok := parseUnixTime(r, "until"); ok {
+		until = *v
+	}
+
+	dim := store.BreakdownByModel
+	if d := r.URL.Query().Get("dimension"); d != "" {
+		dim = store.BreakdownDimension(d)
+	}
+
+	bucket, label, err := resolveBucket(r.URL.Query().Get("bucket"), since, until)
+	if err != nil {
+		a.writeDataErr(w, "success by model", err)
+		return
+	}
+	models, buckets, err := a.store.SuccessByModelSeries(dim, since, until, bucket)
+	if err != nil {
+		if errors.Is(err, store.ErrTooManyBuckets) {
+			a.writeDataErr(w, "success by model", badRequestErr("requested range is too large for the chosen bucket"))
+			return
+		}
+		if errors.Is(err, store.ErrBadDimension) {
+			a.writeDataErr(w, "success by model", badRequestErr("dimension must be model, vendor, or user"))
+			return
+		}
+		a.writeDataErr(w, "success by model", err)
+		return
+	}
+
+	points := make([]successByModelPoint, 0, len(buckets))
+	for _, b := range buckets {
+		points = append(points, successByModelPoint{
+			TS:       b.Bucket.UTC().Format(time.RFC3339),
+			Requests: b.Requests,
+			Errors:   b.Errors,
+		})
+	}
+	writeJSON(w, http.StatusOK, successByModelView{Bucket: label, Models: models, Points: points})
+}
+
 // handleBreakdown groups the call log by a dimension (model, vendor, user, or
 // modality) over a window (default last 30d) for the breakdown table and the
 // category bar charts.

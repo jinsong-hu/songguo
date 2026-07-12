@@ -285,6 +285,23 @@ type tokensByModelView struct {
 	Points []tokensByModelPoint `json:"points"`
 }
 
+// successByModelPoint is one bucket in the GET /api/usage/success-by-model
+// response: request and error counts keyed by dimension key. Requests and Errors
+// carry the same key set; the client derives success % as (req-err)/req.
+type successByModelPoint struct {
+	TS       string         `json:"ts"`
+	Requests map[string]int `json:"requests"`
+	Errors   map[string]int `json:"errors"`
+}
+
+// successByModelView is the GET /api/usage/success-by-model response: the ordered
+// key set (top N by requests + "Other") and per-bucket request/error points.
+type successByModelView struct {
+	Bucket string                `json:"bucket"`
+	Models []string              `json:"models"`
+	Points []successByModelPoint `json:"points"`
+}
+
 // breakdownRow is one group's aggregates in the GET /api/usage/breakdown response.
 type breakdownRow struct {
 	Key                 string  `json:"key"`

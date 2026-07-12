@@ -118,6 +118,23 @@ export interface TokensByModelSeries {
   points: TokensByModelPoint[];
 }
 
+// One bucket of the success-by-model series: request and error counts keyed by
+// dimension key. `requests` and `errors` carry the same key set; success % is
+// derived as (requests - errors) / requests.
+export interface SuccessByModelPoint {
+  ts: string;
+  requests: Record<string, number>;
+  errors: Record<string, number>;
+}
+
+export interface SuccessByModelSeries {
+  bucket: Bucket;
+  // Series keys for the current dimension (top-N by requests + "Other").
+  // Named `models` to mirror TokensByModelSeries.
+  models: string[];
+  points: SuccessByModelPoint[];
+}
+
 export type BreakdownDimension = 'model' | 'vendor' | 'user' | 'modality';
 
 export interface BreakdownRow {

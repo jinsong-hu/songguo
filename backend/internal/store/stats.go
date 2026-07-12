@@ -755,6 +755,167 @@ func (s *Store) TokensByModelSeries(dim BreakdownDimension, since, until time.Ti
 	return models, out, nil
 }
 
+// SuccessByModelBucket is one time bucket of the success-rate series: the bucket
+// start (UTC) and the request/error counts per dimension key. Requests and Errors
+// carry the same key set (top N by request volume + "Other"). Callers derive the
+// per-key success rate as (Requests-Errors)/Requests.
+type SuccessByModelBucket struct {
+	Bucket   time.Time
+	Requests map[string]int
+	Errors   map[string]int
+}
+
+// SuccessByModelSeries returns, for each fixed time bucket across [since, until),
+// the request and error counts broken down by the given dimension (model, vendor,
+// or user). The top tokensByModelTopN keys by total request count over the whole
+// range are kept as distinct series; every other key is summed into "Other". Every
+// bucket in the range is present (gaps filled with zeroes), and every bucket's maps
+// carry the same key set. The returned slice is that key set, ordered descending by
+// total requests with "Other" (when present) last. Bucket timestamps are UTC. An
+// "error" is any row whose status is 0 (transport failure) or >= 400. Empty key
+// values are reported as "unknown". An unrecognized dimension returns ErrBadDimension.
+func (s *Store) SuccessByModelSeries(dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []SuccessByModelBucket, error) {
+	col, ok := breakdownColumn(dim)
+	if !ok {
+		return nil, nil, ErrBadDimension
+	}
+	if bucket <= 0 {
+		return nil, nil, fmt.Errorf("store: success by model series: bucket must be positive")
+	}
+	bucketMs := bucket.Milliseconds()
+	if bucketMs <= 0 {
+		return nil, nil, fmt.Errorf("store: success by model series: bucket too small")
+	}
+
+	sinceMs := since.UnixMilli()
+	untilMs := until.UnixMilli()
+	startMs := (sinceMs / bucketMs) * bucketMs
+	if untilMs <= startMs {
+		return []string{}, []SuccessByModelBucket{}, nil
+	}
+	count := (untilMs-startMs-1)/bucketMs + 1
+	if count > maxSeriesBuckets {
+		return nil, nil, fmt.Errorf("%w: %d exceeds limit of %d", ErrTooManyBuckets, count, maxSeriesBuckets)
+	}
+
+	// col comes from the breakdownColumn whitelist, so it is safe to interpolate
+	// (column names cannot be bound as query parameters).
+	rows, err := s.db.Query(
+		fmt.Sprintf(`SELECT (ts / ?) * ? AS bucket_start,
+		        %s,
+		        COUNT(*),
+		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END)
+		   FROM calls
+		  WHERE ts >= ? AND ts < ?
+		  GROUP BY bucket_start, %s`, col, col),
+		bucketMs, bucketMs, sinceMs, untilMs,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("store: success by model series: %w", err)
+	}
+	defer rows.Close()
+
+	type cell struct {
+		bucket   int64
+		model    string
+		requests int
+		errors   int
+	}
+	var cells []cell
+	modelTotals := make(map[string]int)
+	for rows.Next() {
+		var (
+			b        int64
+			model    string
+			requests int
+			errCount int
+		)
+		if err := rows.Scan(&b, &model, &requests, &errCount); err != nil {
+			return nil, nil, fmt.Errorf("store: scan success by model series: %w", err)
+		}
+		if model == "" {
+			model = "unknown"
+		}
+		cells = append(cells, cell{bucket: b, model: model, requests: requests, errors: errCount})
+		modelTotals[model] += requests
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("store: success by model series: %w", err)
+	}
+
+	// Rank models by total requests (desc), tie-break by name (asc); keep top N.
+	ranked := make([]string, 0, len(modelTotals))
+	for m := range modelTotals {
+		ranked = append(ranked, m)
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		if modelTotals[ranked[i]] != modelTotals[ranked[j]] {
+			return modelTotals[ranked[i]] > modelTotals[ranked[j]]
+		}
+		return ranked[i] < ranked[j]
+	})
+
+	top := make(map[string]bool)
+	models := make([]string, 0, tokensByModelTopN+1)
+	for _, m := range ranked {
+		if len(models) >= tokensByModelTopN {
+			break
+		}
+		top[m] = true
+		models = append(models, m)
+	}
+	hasOther := len(ranked) > len(models)
+
+	// Fold each cell into its bucket, remapping non-top models to "Other".
+	// Requests and errors are folded in parallel so they share the same key set.
+	perBucketReq := make(map[int64]map[string]int)
+	perBucketErr := make(map[int64]map[string]int)
+	for _, c := range cells {
+		key := c.model
+		if !top[key] {
+			key = otherModelKey
+		}
+		mr := perBucketReq[c.bucket]
+		if mr == nil {
+			mr = make(map[string]int)
+			perBucketReq[c.bucket] = mr
+		}
+		mr[key] += c.requests
+		me := perBucketErr[c.bucket]
+		if me == nil {
+			me = make(map[string]int)
+			perBucketErr[c.bucket] = me
+		}
+		me[key] += c.errors
+	}
+	if hasOther {
+		models = append(models, otherModelKey)
+	}
+
+	out := make([]SuccessByModelBucket, 0, count)
+	for i := int64(0); i < count; i++ {
+		bs := startMs + i*bucketMs
+		requests := make(map[string]int, len(models))
+		errCounts := make(map[string]int, len(models))
+		for _, m := range models {
+			requests[m] = 0
+			errCounts[m] = 0
+		}
+		for m, v := range perBucketReq[bs] {
+			requests[m] += v
+		}
+		for m, v := range perBucketErr[bs] {
+			errCounts[m] += v
+		}
+		out = append(out, SuccessByModelBucket{
+			Bucket:   time.UnixMilli(bs).UTC(),
+			Requests: requests,
+			Errors:   errCounts,
+		})
+	}
+	return models, out, nil
+}
+
 // isErrorStatus reports whether a recorded upstream status counts as an error:
 // 0 (transport failure / no response) or any 4xx/5xx.
 func isErrorStatus(status int) bool {

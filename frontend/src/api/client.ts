@@ -27,6 +27,7 @@ import type {
   UsageSeries,
   UsageDimension,
   TokensByModelSeries,
+  SuccessByModelSeries,
   Vendor,
   VendorTestResult,
 } from './types';
@@ -167,6 +168,16 @@ export const api = {
   ) =>
     request<TokensByModelSeries>(
       `/usage/tokens-by-model${qs({ since, until, bucket, dimension })}`,
+    ),
+
+  successByModel: (
+    since: number,
+    until: number,
+    bucket: 'hour' | 'day',
+    dimension: UsageDimension = 'model',
+  ) =>
+    request<SuccessByModelSeries>(
+      `/usage/success-by-model${qs({ since, until, bucket, dimension })}`,
     ),
 
   breakdown: (dimension: BreakdownDimension, since: number, until: number) =>

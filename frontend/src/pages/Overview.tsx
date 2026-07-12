@@ -3,7 +3,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
   Line,
   LineChart,
   XAxis,
@@ -44,7 +43,6 @@ const RANGES: RangeOption[] = [
 ];
 
 const REFRESH_MS = LIVE_REFRESH_MS;
-const TOP_N = 6;
 
 // Usage stacked-chart breakdown dimensions. "provider" is the label for the
 // vendor dimension (the calls `vendor` column) — see UsageDimension.
@@ -61,6 +59,7 @@ export function OverviewPage() {
   const [rangeKey, setRangeKey] = useState('24h');
   const [usageDim, setUsageDim] = useState<UsageDimension>('model');
   const [perfDim, setPerfDim] = useState<UsageDimension>('model');
+  const [successDim, setSuccessDim] = useState<UsageDimension>('model');
   const tick = useLiveTick(REFRESH_MS);
   const range = RANGES.find((r) => r.key === rangeKey) ?? RANGES[0];
 
@@ -72,11 +71,6 @@ export function OverviewPage() {
   const opts = { intervalMs: REFRESH_MS };
   const overview = useFetch(() => api.overview(since, until), [since, until], opts);
   const sessions = useFetch(() => api.sessionsOverview(since, until), [since, until], opts);
-  const series = useFetch(
-    () => api.series(since, until, range.bucket),
-    [since, until, range.bucket],
-    opts,
-  );
   const tokenSeries = useFetch(
     () => api.tokensByModel(since, until, range.bucket, usageDim),
     [since, until, range.bucket, usageDim],
@@ -89,40 +83,17 @@ export function OverviewPage() {
     [since, until, range.bucket, perfDim],
     opts,
   );
-  const byVendor = useFetch(() => api.breakdown('vendor', since, until), [since, until], opts);
-  // Resolve user-id series keys to display names for the by-user Usage view.
+  const successSeries = useFetch(
+    () => api.successByModel(since, until, range.bucket, successDim),
+    [since, until, range.bucket, successDim],
+    opts,
+  );
+  // Resolve user-id series keys to display names for the by-user views.
   const usersList = useFetch(() => api.users(), [], opts);
   const composition = useFetch(() => api.contextComposition(since, until), [since, until], opts);
-  const errs = useFetch(() => api.errors(since, until), [since, until], opts);
 
   const ov = overview.data;
   const ss = sessions.data;
-
-  // Time-series rows with derived ratios for the charts.
-  const points = useMemo(() => {
-    const pts = series.data?.points ?? [];
-    const bucket = series.data?.bucket ?? range.bucket;
-    return pts.map((p) => ({
-      label: bucketLabel(p.ts, bucket),
-      requests: p.requests,
-      errors: p.errors,
-      cost: p.cost,
-      input_tokens: p.input_tokens,
-      output_tokens: p.output_tokens,
-      cache_read_input_tokens: p.cache_read_input_tokens,
-      cache_creation_input_tokens: p.cache_creation_input_tokens,
-      avg_latency_ms: p.avg_latency_ms,
-      avg_ttft_ms: p.avg_ttft_ms,
-      avg_output_tokens_per_second: p.avg_output_tokens_per_second,
-      success: p.requests > 0 ? ((p.requests - p.errors) / p.requests) * 100 : null,
-      // Cache hit rate = cache reads / total input (fresh + cache read + cache write).
-      cache_hit: (() => {
-        const totalInput = p.input_tokens + p.cache_read_input_tokens + p.cache_creation_input_tokens;
-        return totalInput > 0 ? (p.cache_read_input_tokens / totalInput) * 100 : null;
-      })(),
-    }));
-  }, [series.data, range.bucket]);
-  const seriesEmpty = points.length === 0;
 
   // Tokens-by-model chart: one row per bucket with a numeric column per model.
   // Bars stack the model columns. Models come pre-ranked from the backend
@@ -201,19 +172,45 @@ export function OverviewPage() {
   const perfColors = useMemo(() => assignSeriesColors(perfKeys, perfDim), [perfKeys, perfDim]);
   const perfEmpty = perfKeys.length === 0;
 
-  const vendors = (byVendor.data?.rows ?? []).slice(0, TOP_N);
+  // Success %-over-time chart: one row per bucket with a per-key success rate
+  // column (null when the key had no requests in that bucket, so the line breaks
+  // rather than dropping to 0%). Keys come pre-ranked by request volume from the
+  // backend (top N + "Other").
+  const { successModels, successPoints } = useMemo(() => {
+    const data = successSeries.data;
+    const keys = data?.models ?? [];
+    const bucket = data?.bucket ?? range.bucket;
+    const rows: Record<string, number | string | null>[] = [];
+    for (const p of data?.points ?? []) {
+      const row: Record<string, number | string | null> = { label: bucketLabel(p.ts, bucket) };
+      for (const k of keys) {
+        const req = p.requests[k] ?? 0;
+        const err = p.errors[k] ?? 0;
+        row[k] = req > 0 ? ((req - err) / req) * 100 : null;
+      }
+      rows.push(row);
+    }
+    return { successModels: keys, successPoints: rows };
+  }, [successSeries.data, range.bucket]);
+  const successEmpty = successModels.length === 0;
+  // Series-key -> display label for the Success dimension (user ids resolve to
+  // names in the by-user view, like seriesLabel does for Usage).
+  const successSeriesLabel = useMemo(() => {
+    const names = new Map((usersList.data ?? []).map((u) => [u.id, u.name]));
+    return (key: string) => (successDim === 'user' ? names.get(key) ?? key : key);
+  }, [usersList.data, successDim]);
+  const successConfig = useMemo<ChartConfig>(() => {
+    const c: ChartConfig = {};
+    successModels.forEach((m) => {
+      c[m] = { label: successSeriesLabel(m) };
+    });
+    return c;
+  }, [successModels, successSeriesLabel]);
+  const successColors = useMemo(
+    () => assignSeriesColors(successModels, successDim),
+    [successModels, successDim],
+  );
 
-  const errorClasses = useMemo(() => {
-    const e = errs.data;
-    if (!e) return [];
-    return [
-      { name: '429', value: e.rate_limited, fill: 'var(--chart-3)' },
-      { name: '4xx', value: e.client_error, fill: 'var(--chart-5)' },
-      { name: '5xx', value: e.server_error, fill: 'var(--danger)' },
-      { name: 'transport', value: e.transport, fill: 'var(--chart-4)' },
-    ];
-  }, [errs.data]);
-  const errorsEmpty = errorClasses.every((c) => c.value === 0);
   const rangeSwitch = (
     <div className={styles.seg} role="tablist" aria-label="Time range">
       {RANGES.map((r) => (
@@ -424,50 +421,66 @@ export function OverviewPage() {
         </Panel>
       </div>
 
-      {/* Reliability */}
-      <SectionTitle name="Reliability" />
-      <div className={styles.grid3}>
-        <Panel title="Success rate over time">
-          <Frame r={series} height={styles.chartSm} empty={seriesEmpty}>
-            <ChartContainer config={{ success: { label: 'Success', color: 'var(--chart-1)' } }} className={CHART_CLS}>
-              <LineChart data={points} margin={{ top: 6, right: 8, left: -16, bottom: 0 }}>
-                <CartesianGrid vertical={false} />
-                <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
-                <YAxis tickLine={false} axisLine={false} width={40} domain={[0, 100]} tickFormatter={(v: number) => `${v}%`} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Line dataKey="success" type="monotone" stroke="var(--color-success)" strokeWidth={2} dot={false} connectNulls />
-              </LineChart>
-            </ChartContainer>
-          </Frame>
-        </Panel>
-        <Panel title="Errors by class">
-          <Frame r={errs} height={styles.chartSm} empty={errorsEmpty}>
-            <ChartContainer config={{}} className={CHART_CLS}>
-              <BarChart data={errorClasses} layout="vertical" margin={{ top: 2, right: 12, left: 2, bottom: 2 }}>
-                <XAxis type="number" hide allowDecimals={false} />
-                <YAxis type="category" dataKey="name" width={72} tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
-                <ChartTooltip content={<ChartTooltipContent nameKey="name" hideLabel />} />
-                <Bar dataKey="value" radius={3}>
-                  {errorClasses.map((c) => (
-                    <Cell key={c.name} fill={c.fill} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ChartContainer>
-          </Frame>
-        </Panel>
-        <Panel title="Error rate by vendor">
-          <Frame r={byVendor} height={styles.chartSm} empty={vendors.length === 0}>
-            <CategoryBars
-              rows={vendors.map((v) => ({ ...v, err_rate: v.requests > 0 ? (v.errors / v.requests) * 100 : 0 }))}
-              dataKey="err_rate"
-              label="Error rate"
-              color="var(--chart-5)"
-              fmt={(v) => `${v.toFixed(1)}%`}
-            />
-          </Frame>
-        </Panel>
-      </div>
+      {/* Success */}
+      <SectionTitle
+        name="Success"
+        control={
+          <div className={styles.seg} role="tablist" aria-label="Success breakdown dimension">
+            {USAGE_DIMS.map((d) => (
+              <button
+                key={d.key}
+                role="tab"
+                aria-selected={d.key === successDim}
+                className={`${styles.segBtn} ${d.key === successDim ? styles.segActive : ''}`}
+                onClick={() => setSuccessDim(d.key)}
+              >
+                {d.label}
+              </button>
+            ))}
+          </div>
+        }
+      />
+      <Panel title="Success %">
+        <Frame r={successSeries} height={styles.chartSm} empty={successEmpty}>
+          <ChartContainer config={successConfig} className={CHART_CLS}>
+            <LineChart data={successPoints} margin={{ top: 6, right: 8, left: -16, bottom: 0 }}>
+              <CartesianGrid vertical={false} />
+              <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
+              <YAxis tickLine={false} axisLine={false} width={40} domain={[0, 100]} tickFormatter={(v: number) => `${v}%`} />
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent
+                    formatter={(value, name, item) => (
+                      <div className={styles.costTip}>
+                        <span
+                          className={styles.costTipDot}
+                          style={{ background: (item?.color as string) ?? 'var(--text-muted)' }}
+                        />
+                        <span className={styles.costTipName}>{successSeriesLabel(String(name))}</span>
+                        <span className={styles.costTipVal}>
+                          {value == null ? '—' : `${Number(value).toFixed(1)}%`}
+                        </span>
+                      </div>
+                    )}
+                  />
+                }
+              />
+              <ChartLegend content={<ChartLegendContent />} />
+              {successModels.map((m) => (
+                <Line
+                  key={m}
+                  dataKey={m}
+                  type="monotone"
+                  stroke={successColors[m]}
+                  strokeWidth={2}
+                  dot={false}
+                  connectNulls
+                />
+              ))}
+            </LineChart>
+          </ChartContainer>
+        </Frame>
+      </Panel>
 
       {/* Sessions */}
       <SectionTitle name="Sessions" hint="Agent runs — outcome inferred from each session's last call" />
@@ -588,33 +601,6 @@ function Frame({
     children
   );
   return height ? <div className={height}>{inner}</div> : <>{inner}</>;
-}
-
-/** Horizontal bar chart over breakdown rows (single metric), keyed by `.key`. */
-function CategoryBars<T extends { key: string }>({
-  rows,
-  dataKey,
-  label,
-  color,
-  fmt,
-}: {
-  rows: T[];
-  dataKey: string;
-  label: string;
-  color: string;
-  fmt: (n: number) => string;
-}) {
-  const config: ChartConfig = { [dataKey]: { label, color } };
-  return (
-    <ChartContainer config={config} className={CHART_CLS}>
-      <BarChart data={rows} layout="vertical" margin={{ top: 2, right: 14, left: 2, bottom: 2 }}>
-        <XAxis type="number" hide tickFormatter={fmt} />
-        <YAxis type="category" dataKey="key" width={104} tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
-        <ChartTooltip content={<ChartTooltipContent />} />
-        <Bar dataKey={dataKey} fill={`var(--color-${dataKey})`} radius={3} />
-      </BarChart>
-    </ChartContainer>
-  );
 }
 
 /** Convert a #rrggbb hex color to [hue, saturation, lightness] (h in 0..360, s/l in 0..1). */
