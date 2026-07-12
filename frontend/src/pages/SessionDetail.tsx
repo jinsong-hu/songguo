@@ -6,7 +6,7 @@ import { svg as claudeCodeSvg } from 'thesvg/claude-code';
 import { svg as codexOpenAISvg } from 'thesvg/codex-openai';
 import { api } from '../api/client';
 import type { CallEntry, ContextBlock, SessionMessages, SourceSlice } from '../api/types';
-import { ContextSunburst, srcColor, srcLabel, type ContextSelection } from '../components/ContextSunburst';
+import { ContextSunburst, ContextDistributionCard, srcColor, srcLabel, type ContextSelection } from '../components/ContextSunburst';
 import { InfoHint } from '../components/InfoHint';
 import { CopyButton } from '../components/CopyButton';
 import { EmptyState } from '../components/EmptyState';
@@ -141,9 +141,8 @@ export function SessionDetailPage() {
           </div>
 
           {distribution && distribution.sources.length > 0 && (
-            <div className="card" style={{ padding: 16 }}>
-              <div className={styles.fieldLabel} style={{ marginBottom: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                Context distribution
+            <ContextDistributionCard
+              info={
                 <InfoHint
                   text="Total tokens across request windows, including repeated context. Calculated with Songguo's local token counter, so counts may differ from official provider counts."
                   content={
@@ -162,10 +161,11 @@ export function SessionDetailPage() {
                     </>
                   }
                 />
-              </div>
+              }
+            >
               <ContextSunburst data={distribution} centerValue={distributionTotal} centerLabel="" active={ctxSelection} onSelect={setCtxSelection} />
               <ContextBlockDrilldown selection={ctxSelection} blocks={distribution.blocks ?? []} promptBlocks={prompt?.blocks ?? []} sources={distribution.sources} />
-            </div>
+            </ContextDistributionCard>
           )}
 
           {turns.length > 0 && (

@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Cell, Pie, PieChart } from 'recharts';
 import type { SourceSlice } from '../api/types';
 import {
@@ -5,6 +6,7 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from './ui/chart';
+import { InfoHint } from './InfoHint';
 import styles from './ContextSunburst.module.css';
 
 const CHART_CLS = 'aspect-auto h-full w-full';
@@ -158,7 +160,7 @@ function breakoutColumns(
 export function ContextSunburst({
   data,
   centerValue,
-  centerLabel = 'avg window',
+  centerLabel = 'total',
   active,
   onSelect,
 }: {
@@ -357,6 +359,31 @@ export function ContextSunburst({
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Shared card chrome for the context-distribution view — the "Context
+ * distribution" heading + info hint + a padded card. Both the Overview and
+ * Session-detail pages wrap their `ContextSunburst` (and any drill-down) in
+ * this, so the two read identically. Pass `info` to override the default
+ * `InfoHint`; `children` holds the donut and page-specific extras.
+ */
+export function ContextDistributionCard({
+  info,
+  children,
+}: {
+  info?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`card ${styles.ctxCard}`}>
+      <div className={styles.ctxHeading}>
+        Context distribution
+        {info ?? <InfoHint />}
+      </div>
+      {children}
     </div>
   );
 }

@@ -12,8 +12,7 @@ import {
 import { Activity, Clock, Coins, DollarSign, GitBranch, MessageSquare, ShieldCheck, Users } from 'lucide-react';
 import { api } from '../api/client';
 import type { Bucket, UsageDimension } from '../api/types';
-import { ContextSunburst } from '../components/ContextSunburst';
-import { InfoHint } from '../components/InfoHint';
+import { ContextSunburst, ContextDistributionCard } from '../components/ContextSunburst';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
 import { Skeleton } from '../components/Skeleton';
@@ -320,6 +319,13 @@ export function OverviewPage() {
         </Panel>
       </div>
 
+      {/* Context distribution */}
+      <ContextDistributionCard>
+        <Frame r={composition} height="" empty={(composition.data?.sources.length ?? 0) === 0}>
+          {composition.data ? <ContextSunburst data={composition.data} /> : null}
+        </Frame>
+      </ContextDistributionCard>
+
       {/* Performance */}
       <SectionTitle name="Performance" hint="TTFT and output generation speed" />
       <div className={styles.grid2}>
@@ -349,14 +355,6 @@ export function OverviewPage() {
             </ChartContainer>
           </Frame>
         </Panel>
-      </div>
-
-      {/* Context distribution */}
-      <SectionTitle name="Context distribution" hint="Where the average context window goes" info={<InfoHint />} />
-      <div className={`card ${styles.panel}`}>
-        <Frame r={composition} height="" empty={(composition.data?.sources.length ?? 0) === 0}>
-          {composition.data ? <ContextSunburst data={composition.data} /> : null}
-        </Frame>
       </div>
 
       {/* Reliability */}

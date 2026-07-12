@@ -267,6 +267,28 @@
   margin-right: 5px;
 }
 
+/* Producer sub-legend percent — the literal JSX space collapses inside the
+   inline-flex .kidPick, so space the percent off the label explicitly. */
+.kidPick :global(.mono) {
+  margin-left: 4px;
+}
+
+/* Shared card chrome for ContextDistributionCard. */
+.ctxCard {
+  padding: 16px;
+}
+
+.ctxHeading {
+  margin-bottom: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
 @media (max-width: 860px) {
   .modeOneLeft,
   .modeOneRight,
