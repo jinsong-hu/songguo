@@ -82,12 +82,14 @@ func (s *Store) FinalizeCall(e calls.Entry) error {
 		   generation_ms = ?, stream = ?,
 		   wire = ?, confidence = ?, input_tokens = ?, output_tokens = ?,
 		   cache_read_input_tokens = ?, cache_creation_input_tokens = ?, thinking_tokens = ?,
+		   seconds = ?, chars = ?,
 		   tool_calls = ?, tool_tokens = ?
 		 WHERE id = ?`,
 		tsEnd.UnixMilli(), e.Model, string(modality), e.Vendor, e.CredentialID,
 		e.Status, e.Err, usageJSON, e.Cost, e.LatencyMS, e.TTFTMS, e.GenerationMS, boolToInt(e.Stream),
 		e.Wire, string(e.Confidence), e.InputTokens, e.OutputTokens,
 		e.CachedTokens, e.CacheCreationTokens, e.ThinkingTokens,
+		e.Seconds, e.Chars,
 		e.ToolCalls, e.ToolTokens,
 		e.ID,
 	); err != nil {

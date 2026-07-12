@@ -870,6 +870,8 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		CachedTokens:        ext.Norm.CachedInputTokens,
 		CacheCreationTokens: ext.Norm.CacheCreationTokens,
 		ThinkingTokens:      ext.Norm.ThinkingTokens,
+		Seconds:             ext.Norm.Seconds,
+		Chars:               ext.Norm.Chars,
 		ToolCalls:           toolCalls,
 		ToolTokens:          toolTokens,
 		Cost:                cost,

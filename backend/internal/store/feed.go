@@ -26,6 +26,10 @@ type FeedRow struct {
 	OutputTokens        float64
 	CachedTokens        float64 // cache_read_input_tokens
 	CacheCreationTokens float64
+	// Non-token metered units: Seconds is billed audio duration (ASR wires),
+	// Chars is billed text length (TTS wires). Both 0 for token-metered rows.
+	Seconds             float64
+	Chars               float64
 	ToolCalls           int     // tool calls issued across the group's turns
 	ToolTokens          float64 // local o200k estimate of tool-result tokens (see compose.ToolTurn)
 	FirstTS             time.Time
@@ -92,6 +96,8 @@ func (s *Store) Feed(f CallFilter) ([]FeedRow, int, error) {
 		COALESCE(SUM(output_tokens), 0) AS output_tokens,
 		COALESCE(SUM(cache_read_input_tokens), 0) AS cache_read_input_tokens,
 		COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation_input_tokens,
+		COALESCE(SUM(seconds), 0) AS seconds,
+		COALESCE(SUM(chars), 0) AS chars,
 		COALESCE(SUM(tool_calls), 0) AS tool_calls,
 		COALESCE(SUM(tool_tokens), 0) AS tool_tokens,
 		MIN(ts) AS first_ts,
@@ -207,6 +213,7 @@ func scanFeedRow(rows *sql.Rows) (FeedRow, error) {
 	if err := rows.Scan(
 		&gkey, &isSession, &r.SessionID, &r.RequestID, &r.Calls,
 		&r.Cost, &r.InputTokens, &r.OutputTokens, &r.CachedTokens, &r.CacheCreationTokens,
+		&r.Seconds, &r.Chars,
 		&r.ToolCalls, &r.ToolTokens, &firstMs, &lastMs, &r.DurationMS, &r.ErrorCount,
 		&modelsAll, &models, &vendors,
 		&r.Model, &r.Vendor, &r.Wire, &confidence, &modality, &r.Status, &r.LatencyMS, &stream,

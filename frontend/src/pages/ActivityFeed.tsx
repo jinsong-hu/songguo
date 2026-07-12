@@ -132,6 +132,24 @@ function rowKey(row: FeedRow): string {
   return row.kind === 'session' ? `s:${row.session_id}` : `r:${row.request_id}`;
 }
 
+/**
+ * The usage column is unit-aware: speech wires meter no tokens, so ASR bills by
+ * audio duration (seconds) and TTS by text length (characters). Prefer whichever
+ * unit the row actually accrued; fall back to tokens, then em-dash when nothing
+ * was metered.
+ */
+function usageCell(row: FeedRow, tokens: number): string {
+  if (row.seconds > 0) return duration(row.seconds);
+  if (row.chars > 0) return `${int(row.chars)} ch`;
+  return tokens > 0 ? int(tokens) : '—';
+}
+
+function usageTip(row: FeedRow): string {
+  if (row.seconds > 0) return 'billed audio duration';
+  if (row.chars > 0) return 'billed characters';
+  return 'input + output tokens';
+}
+
 /** Short, readable form of a session id for the feed. */
 function shortId(id: string): string {
   return id.length > 18 ? `${id.slice(0, 18)}…` : id;
@@ -174,8 +192,8 @@ function FeedRowView({ row, onOpen }: { row: FeedRow; onOpen: () => void }) {
         )}
       </td>
       <td className="num">{row.calls}</td>
-      <td className="num" title="input + output tokens">
-        {tokens > 0 ? int(tokens) : '—'}
+      <td className="num" title={usageTip(row)}>
+        {usageCell(row, tokens)}
       </td>
       <td className="num">{money(row.cost)}</td>
       <td className="num">

@@ -333,6 +333,9 @@ type feedRowView struct {
 	OutputTokens        float64  `json:"output_tokens"`
 	CachedTokens        float64  `json:"cache_read_input_tokens"`
 	CacheCreationTokens float64  `json:"cache_creation_input_tokens"`
+	// Non-token metered units: seconds (ASR audio duration), chars (TTS text).
+	Seconds             float64  `json:"seconds"`
+	Chars               float64  `json:"chars"`
 	ToolCalls           int      `json:"tool_calls"`
 	ToolTokens          float64  `json:"tool_tokens"`
 	FirstTS             string   `json:"first_ts"`
@@ -374,6 +377,8 @@ func newFeedRowView(r store.FeedRow) feedRowView {
 		OutputTokens:        r.OutputTokens,
 		CachedTokens:        r.CachedTokens,
 		CacheCreationTokens: r.CacheCreationTokens,
+		Seconds:             r.Seconds,
+		Chars:               r.Chars,
 		ToolCalls:           r.ToolCalls,
 		ToolTokens:          r.ToolTokens,
 		FirstTS:             r.FirstTS.UTC().Format(time.RFC3339),

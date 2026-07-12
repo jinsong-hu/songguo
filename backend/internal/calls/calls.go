@@ -70,6 +70,13 @@ type Entry struct {
 	CachedTokens        float64
 	CacheCreationTokens float64
 	ThinkingTokens      float64
+	// Non-token metered units, persisted as typed columns like the token fields
+	// so speech usage is queryable without parsing the per-vendor `Usage` JSON.
+	// Seconds is billed audio duration (ASR, per_second); Chars is billed text
+	// length (TTS, per_char). Both 0 for token-metered traffic. Images stays in
+	// the raw `Usage` JSON only — no wire meters it into a column yet.
+	Seconds float64
+	Chars   float64
 	Cost                float64 // computed cost in USD (0 if unknown/free)
 	LatencyMS           int64   // full upstream request duration through response body completion
 	TTFTMS              int64   // upstream request start to first generated stream delta; 0 when unavailable

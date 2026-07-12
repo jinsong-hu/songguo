@@ -279,6 +279,11 @@ func (s *Store) migrate() error {
 		{"calls", "output_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"calls", "cache_creation_input_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"calls", "thinking_tokens", "REAL NOT NULL DEFAULT 0"},
+		// Non-token metered units (speech wires): seconds is billed audio duration
+		// (ASR, per_second), chars is billed text length (TTS, per_char). Default 0
+		// for token-metered traffic and rows written before these columns.
+		{"calls", "seconds", "REAL NOT NULL DEFAULT 0"},
+		{"calls", "chars", "REAL NOT NULL DEFAULT 0"},
 		// Streaming performance timings. Zero means unavailable (legacy row,
 		// non-stream response, or a stream with no generated output delta).
 		{"calls", "ttft_ms", "INTEGER NOT NULL DEFAULT 0"},

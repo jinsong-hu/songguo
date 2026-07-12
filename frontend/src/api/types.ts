@@ -234,6 +234,10 @@ export interface FeedRow {
   output_tokens: number;
   cache_read_input_tokens: number;
   cache_creation_input_tokens: number;
+  /** Billed audio duration in seconds (ASR wires); 0 for token-metered rows. */
+  seconds: number;
+  /** Billed text length in characters (TTS wires); 0 for token-metered rows. */
+  chars: number;
   first_ts: string;
   last_ts: string;
   /** Duration from first request start to last request end, in milliseconds. */
