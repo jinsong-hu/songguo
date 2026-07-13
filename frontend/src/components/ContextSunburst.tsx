@@ -145,13 +145,20 @@ function breakoutColumns(
     }
     return cols;
   }
-  // four mode: place by size rank, not sector geometry, so the order is stable.
-  // breakouts is already sorted largest-first by chooseBreakouts — the right
-  // column leads (#1 top, #2 bottom), then the left column (#3 top, #4 bottom).
+  // four mode: assign columns by size rank (right column gets the two largest,
+  // left the next two) so the biggest buckets read top-right. breakouts is
+  // already sorted largest-first by chooseBreakouts. Within each column, order
+  // the rows by the donut sector's vertical position (higher sector = top row)
+  // so the connector lines never cross.
   if (breakouts[0]) cols.right.push(breakouts[0]);
   if (breakouts[1]) cols.right.push(breakouts[1]);
   if (breakouts[2]) cols.left.push(breakouts[2]);
   if (breakouts[3]) cols.left.push(breakouts[3]);
+  const bySectorHeight = (a: SourceSlice, b: SourceSlice) =>
+    Math.sin(((angles.get(b.key) ?? 0) * Math.PI) / 180) -
+    Math.sin(((angles.get(a.key) ?? 0) * Math.PI) / 180);
+  cols.left.sort(bySectorHeight);
+  cols.right.sort(bySectorHeight);
   return cols;
 }
 
