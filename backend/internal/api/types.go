@@ -353,6 +353,19 @@ type errorsView struct {
 	Transport   int       `json:"transport"`
 }
 
+// errorCodeRow is one upstream status code and its error-row count.
+type errorCodeRow struct {
+	Status int `json:"status"`
+	Count  int `json:"count"`
+}
+
+// errorCodesView is the GET /api/usage/error-codes response: error-row counts
+// grouped by upstream status code, ranked by count desc.
+type errorCodesView struct {
+	Range rangeView      `json:"range"`
+	Rows  []errorCodeRow `json:"rows"`
+}
+
 // callsView is the GET /api/calls response.
 type callsView struct {
 	Entries []entryView `json:"entries"`

@@ -571,6 +571,48 @@ func (a *api) handleErrors(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleTopErrorCodes returns error-row counts grouped by upstream status code,
+// ranked by count (top 8), over a window (default last 30d). An optional
+// dimension+key pair scopes the result to one series (e.g. dimension=model &
+// key=<model> for a single service), so the Overview error-codes panel can filter
+// to the row the user clicked.
+func (a *api) handleTopErrorCodes(w http.ResponseWriter, r *http.Request) {
+	now := a.now().UTC()
+	since := now.AddDate(0, 0, -30)
+	until := now
+	if v, ok := parseUnixTime(r, "since"); ok {
+		since = *v
+	}
+	if v, ok := parseUnixTime(r, "until"); ok {
+		until = *v
+	}
+
+	dim := store.BreakdownByModel
+	if d := r.URL.Query().Get("dimension"); d != "" {
+		dim = store.BreakdownDimension(d)
+	}
+	key := r.URL.Query().Get("key")
+
+	rows, err := a.store.TopErrorCodes(dim, key, &since, &until, 8)
+	if err != nil {
+		if errors.Is(err, store.ErrBadDimension) {
+			a.writeDataErr(w, "usage error codes", badRequestErr("dimension must be model, vendor, or user"))
+			return
+		}
+		a.writeDataErr(w, "usage error codes", err)
+		return
+	}
+
+	views := make([]errorCodeRow, 0, len(rows))
+	for _, row := range rows {
+		views = append(views, errorCodeRow{Status: row.Status, Count: row.Count})
+	}
+	writeJSON(w, http.StatusOK, errorCodesView{
+		Range: rangeView{Since: since.Unix(), Until: until.Unix()},
+		Rows:  views,
+	})
+}
+
 // handleCalls returns a filtered, paginated page of call entries plus the
 // total count for the same filter.
 func (a *api) handleCalls(w http.ResponseWriter, r *http.Request) {

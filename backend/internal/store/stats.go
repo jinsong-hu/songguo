@@ -401,6 +401,74 @@ func (s *Store) ErrorClassCounts(since, until *time.Time) (ErrorClasses, error) 
 	return c, nil
 }
 
+// ErrorCodeRow is one upstream status code and how many error rows carried it
+// over the queried window. Status 0 means a transport failure (no response).
+type ErrorCodeRow struct {
+	Status int
+	Count  int
+}
+
+// TopErrorCodes returns error rows grouped by upstream status, ranked by count
+// (desc, tie-broken by status asc), capped at limit. Only error rows are counted
+// — status 0 (transport failure) or >= 400, matching isErrorStatus. When dim is a
+// recognized dimension and key is non-empty, the count is scoped to rows whose
+// dimension column equals key (e.g. one model, vendor, or user); an empty key
+// leaves the result unscoped. An unrecognized non-empty dim returns
+// ErrBadDimension. limit <= 0 defaults to 8.
+func (s *Store) TopErrorCodes(dim BreakdownDimension, key string, since, until *time.Time, limit int) ([]ErrorCodeRow, error) {
+	if limit <= 0 {
+		limit = 8
+	}
+	conds := []string{"(status = 0 OR status >= 400)"}
+	var args []any
+	if since != nil {
+		conds = append(conds, "ts >= ?")
+		args = append(args, since.UnixMilli())
+	}
+	if until != nil {
+		conds = append(conds, "ts < ?")
+		args = append(args, until.UnixMilli())
+	}
+	if key != "" {
+		col, ok := breakdownColumn(dim)
+		if !ok {
+			return nil, ErrBadDimension
+		}
+		// col comes from the breakdownColumn whitelist, so it is safe to
+		// interpolate (column names cannot be bound as query parameters).
+		conds = append(conds, col+" = ?")
+		args = append(args, key)
+	}
+	args = append(args, limit)
+
+	rows, err := s.db.Query(
+		`SELECT status, COUNT(*) AS n
+		   FROM calls
+		  WHERE `+strings.Join(conds, " AND ")+`
+		  GROUP BY status
+		  ORDER BY n DESC, status ASC
+		  LIMIT ?`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: top error codes: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]ErrorCodeRow, 0, limit)
+	for rows.Next() {
+		var r ErrorCodeRow
+		if err := rows.Scan(&r.Status, &r.Count); err != nil {
+			return nil, fmt.Errorf("store: scan top error codes: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: top error codes: %w", err)
+	}
+	return out, nil
+}
+
 // maxSeriesBuckets caps the number of buckets UsageSeries will produce, so an
 // absurd range/bucket combination cannot allocate unbounded memory.
 const maxSeriesBuckets = 10000

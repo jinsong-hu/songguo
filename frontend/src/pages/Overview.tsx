@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Bar,
   BarChart,
@@ -8,9 +8,9 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Activity, Clock, Coins, DatabaseZap, DollarSign, GitBranch, MessageSquare, ShieldCheck, Users, Wrench } from 'lucide-react';
+import { Activity, Clock, Coins, DatabaseZap, DollarSign, GitBranch, MessageSquare, ShieldCheck, Users, Wrench, X } from 'lucide-react';
 import { api } from '../api/client';
-import type { Bucket, UsageDimension } from '../api/types';
+import type { Bucket, ErrorCodeRow, UsageDimension } from '../api/types';
 import { ContextSunburst, ContextDistributionCard } from '../components/ContextSunburst';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
@@ -25,7 +25,7 @@ import {
 } from '../components/ui/chart';
 import { LIVE_REFRESH_MS, useFetch, useLiveTick } from '../lib/useFetch';
 import { bucketLabel, duration, int, money, percent } from '../lib/format';
-import { brandOf, providerBrand } from '../lib/modelBrand';
+import { brandOf, providerBrand, ModelIcon } from '../lib/modelBrand';
 import { ActivityFeed } from './ActivityFeed';
 import styles from './Overview.module.css';
 
@@ -61,6 +61,9 @@ export function OverviewPage() {
   const [perfDim, setPerfDim] = useState<UsageDimension>('model');
   const [successDim, setSuccessDim] = useState<UsageDimension>('model');
   const [cacheDim, setCacheDim] = useState<UsageDimension>('model');
+  // Series key of the Success row the user clicked; scopes the error-codes panel
+  // to that one service/vendor/user. Null = all rows (unscoped).
+  const [selectedService, setSelectedService] = useState<string | null>(null);
   const tick = useLiveTick(REFRESH_MS);
   const range = RANGES.find((r) => r.key === rangeKey) ?? RANGES[0];
 
@@ -187,44 +190,69 @@ export function OverviewPage() {
   const perfColors = useMemo(() => assignSeriesColors(perfKeys, perfDim), [perfKeys, perfDim]);
   const perfEmpty = perfKeys.length === 0;
 
-  // Success %-over-time chart: one row per bucket with a per-key success rate
-  // column (null when the key had no requests in that bucket, so the line breaks
-  // rather than dropping to 0%). Keys come pre-ranked by request volume from the
-  // backend (top N + "Other").
-  const { successModels, successPoints } = useMemo(() => {
+  // Success bar-table: one entry per series key (pre-ranked by request volume by
+  // the backend, top N + "Other"), each carrying a per-bucket bar (request volume
+  // + success rate) and an overall success %. Bar height ∝ requests / maxReq (the
+  // busiest bucket across all shown series), color ∝ the bucket's success band.
+  // Buckets with no requests carry rate=null (rendered as an empty spacer so bars
+  // stay time-aligned across rows).
+  const { successRows, successMaxReq } = useMemo(() => {
     const data = successSeries.data;
     const keys = data?.models ?? [];
     const bucket = data?.bucket ?? range.bucket;
-    const rows: Record<string, number | string | null>[] = [];
-    for (const p of data?.points ?? []) {
-      const row: Record<string, number | string | null> = { label: bucketLabel(p.ts, bucket) };
-      for (const k of keys) {
+    const points = data?.points ?? [];
+    let maxReq = 0;
+    const rows = keys.map((k) => {
+      let totReq = 0;
+      let totErr = 0;
+      const bars = points.map((p) => {
         const req = p.requests[k] ?? 0;
         const err = p.errors[k] ?? 0;
-        row[k] = req > 0 ? ((req - err) / req) * 100 : null;
-      }
-      rows.push(row);
-    }
-    return { successModels: keys, successPoints: rows };
+        totReq += req;
+        totErr += err;
+        if (req > maxReq) maxReq = req;
+        return { req, rate: req > 0 ? (req - err) / req : null, label: bucketLabel(p.ts, bucket) };
+      });
+      return { key: k, bars, requests: totReq, overall: totReq > 0 ? (totReq - totErr) / totReq : null };
+    });
+    return { successRows: rows, successMaxReq: maxReq };
   }, [successSeries.data, range.bucket]);
-  const successEmpty = successModels.length === 0;
+  const successEmpty = successRows.length === 0;
   // Series-key -> display label for the Success dimension (user ids resolve to
   // names in the by-user view, like seriesLabel does for Usage).
   const successSeriesLabel = useMemo(() => {
     const names = new Map((usersList.data ?? []).map((u) => [u.id, u.name]));
     return (key: string) => (successDim === 'user' ? names.get(key) ?? key : key);
   }, [usersList.data, successDim]);
-  const successConfig = useMemo<ChartConfig>(() => {
-    const c: ChartConfig = {};
-    successModels.forEach((m) => {
-      c[m] = { label: successSeriesLabel(m) };
-    });
-    return c;
-  }, [successModels, successSeriesLabel]);
-  const successColors = useMemo(
-    () => assignSeriesColors(successModels, successDim),
-    [successModels, successDim],
+  // "Other" and "unknown" are synthetic buckets, not a real series key, so they
+  // can't scope the error-codes panel — treat them as non-selectable.
+  const selectableKey = (k: string) => k !== 'Other' && k !== 'unknown';
+  // The selection only counts while it names a row currently shown for this
+  // dimension/range. Deriving it (rather than reading raw selectedService) means a
+  // stale key — from a just-changed dimension, or one that dropped out of the
+  // top-N on a live refresh — is ignored immediately, with no wasted mismatched
+  // fetch and no filtering to an invisible row. The reset effect below then clears
+  // the raw state so the "clear filter" chip disappears too.
+  const effectiveService = useMemo(
+    () =>
+      selectedService && successRows.some((r) => r.key === selectedService)
+        ? selectedService
+        : null,
+    [selectedService, successRows],
   );
+  // Top error codes, scoped to the effective Success row (dimension + key) or all
+  // rows when none is selected. Re-fetches when the effective selection changes.
+  const errorCodes = useFetch(
+    () => api.errorCodes(since, until, successDim, effectiveService ?? undefined),
+    [since, until, successDim, effectiveService],
+    opts,
+  );
+  // A selected key is meaningless once the range or dimension changes (the key
+  // set differs), so clear the raw state. Deriving effectiveService already keeps
+  // the fetch correct in the same render; this just tidies the stored selection.
+  useEffect(() => {
+    setSelectedService(null);
+  }, [successDim, rangeKey]);
 
   // Cache-hit %-over-time chart: one row per bucket with a per-key cache-hit rate
   // (cache reads / total input tokens, as a %). Null when the key had no input in
@@ -498,47 +526,59 @@ export function OverviewPage() {
           </div>
         }
       />
-      <Panel title="Success %">
-        <Frame r={successSeries} height={styles.chartSm} empty={successEmpty}>
-          <ChartContainer config={successConfig} className={CHART_CLS}>
-            <LineChart data={successPoints} margin={{ top: 6, right: 8, left: -16, bottom: 0 }}>
-              <CartesianGrid vertical={false} />
-              <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
-              <YAxis tickLine={false} axisLine={false} width={40} domain={[0, 100]} tickFormatter={(v: number) => `${v}%`} />
-              <ChartTooltip
-                content={
-                  <ChartTooltipContent
-                    formatter={(value, name, item) => (
-                      <div className={styles.costTip}>
-                        <span
-                          className={styles.costTipDot}
-                          style={{ background: (item?.color as string) ?? 'var(--text-muted)' }}
-                        />
-                        <span className={styles.costTipName}>{successSeriesLabel(String(name))}</span>
-                        <span className={styles.costTipVal}>
-                          {value == null ? '—' : `${Number(value).toFixed(1)}%`}
-                        </span>
-                      </div>
-                    )}
-                  />
-                }
-              />
-              <ChartLegend content={<ChartLegendContent />} />
-              {successModels.map((m) => (
-                <Line
-                  key={m}
-                  dataKey={m}
-                  type="monotone"
-                  stroke={successColors[m]}
-                  strokeWidth={2}
-                  dot={false}
-                  connectNulls
-                />
-              ))}
-            </LineChart>
-          </ChartContainer>
-        </Frame>
-      </Panel>
+      <div className={styles.grid2}>
+        <Panel title={successDim === 'vendor' ? 'By provider' : successDim === 'user' ? 'By user' : 'By service'}>
+          <Frame r={successSeries} height="" empty={successEmpty}>
+            <div className={styles.svcTable} role="list">
+              {successRows.map((row) => {
+                const selectable = selectableKey(row.key);
+                const active = selectedService === row.key;
+                return (
+                  <button
+                    key={row.key}
+                    type="button"
+                    role="listitem"
+                    className={`${styles.svcRow} ${active ? styles.svcRowActive : ''}`}
+                    disabled={!selectable}
+                    aria-pressed={active}
+                    onClick={() =>
+                      selectable && setSelectedService((cur) => (cur === row.key ? null : row.key))
+                    }
+                    title={selectable ? 'Filter error codes to this row' : undefined}
+                  >
+                    <span className={styles.svcName}>
+                      {successDim === 'model' && selectable ? (
+                        <ModelIcon model={row.key} size={16} />
+                      ) : null}
+                      <span className={styles.svcLabel}>{successSeriesLabel(row.key)}</span>
+                    </span>
+                    <BarStrip bars={row.bars} maxReq={successMaxReq} />
+                    <span className={styles.rowPct} style={{ color: bandColor(row.overall) }}>
+                      {row.overall == null ? '—' : `${Math.round(row.overall * 100)}%`}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </Frame>
+        </Panel>
+
+        <Panel title="Top error codes">
+          <div className={styles.ecFilter}>
+            {effectiveService ? (
+              <button type="button" className={styles.ecClear} onClick={() => setSelectedService(null)}>
+                <span className={styles.ecFilterName}>{successSeriesLabel(effectiveService)}</span>
+                <X size={12} />
+              </button>
+            ) : (
+              <span className={styles.ecFilterAll}>All {successDim === 'vendor' ? 'providers' : successDim === 'user' ? 'users' : 'services'}</span>
+            )}
+          </div>
+          <Frame r={errorCodes} height="" empty={(errorCodes.data?.rows.length ?? 0) === 0}>
+            <ErrorCodeList rows={errorCodes.data?.rows ?? []} />
+          </Frame>
+        </Panel>
+      </div>
 
       {/* Cache */}
       <SectionTitle
@@ -804,4 +844,95 @@ function compact(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return `${Math.round(n)}`;
+}
+
+// ---- Success bar-table + error codes ----
+
+// Success-rate → band color: green ≥ 99%, amber ≥ 90%, red below. null (no
+// traffic) → muted grey. Bars and the overall % share this scale.
+function bandColor(rate: number | null): string {
+  if (rate == null) return 'var(--text-muted)';
+  if (rate >= 0.99) return 'var(--chart-1)';
+  if (rate >= 0.9) return 'var(--amber)';
+  return 'var(--danger)';
+}
+
+interface SuccessBar {
+  req: number;
+  rate: number | null;
+  label: string;
+}
+
+/**
+ * A compact strip of vertical bars, one per time bucket (same buckets as the old
+ * line chart). Height ∝ request volume relative to the busiest bucket across all
+ * shown rows; color ∝ that bucket's success band. Empty buckets render a flat
+ * baseline tick so bars stay time-aligned across rows.
+ */
+function BarStrip({ bars, maxReq }: { bars: SuccessBar[]; maxReq: number }) {
+  return (
+    <div className={styles.barStrip} aria-hidden="true">
+      {bars.map((b, i) => {
+        const h = maxReq > 0 && b.req > 0 ? Math.max(8, (b.req / maxReq) * 100) : 0;
+        return (
+          <div key={i} className={styles.barSlot}>
+            <div
+              className={styles.bar}
+              style={{ height: `${h}%`, background: bandColor(b.rate) }}
+              title={
+                b.rate == null
+                  ? `${b.label}: no requests`
+                  : `${b.label}: ${b.req} req · ${Math.round(b.rate * 100)}% ok`
+              }
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Short human label for an upstream status. 0 = transport failure (no response);
+// 429 rate-limited; other 4xx client; 5xx server.
+function errorReason(status: number): string {
+  if (status === 0) return 'Transport error';
+  if (status === 429) return 'Rate limited';
+  if (status >= 500) return 'Server error';
+  if (status >= 400) return 'Client error';
+  return `Status ${status}`;
+}
+
+// Pill/proportion-bar color for a status class.
+function errorColor(status: number): string {
+  if (status === 429) return 'var(--amber)';
+  if (status === 0 || status >= 500) return 'var(--danger)';
+  return 'var(--text-muted)'; // other 4xx
+}
+
+/** Ranked list of top error codes with a status pill, reason, count, and a
+ *  proportion bar (relative to the largest count). */
+function ErrorCodeList({ rows }: { rows: ErrorCodeRow[] }) {
+  const max = rows.reduce((m, r) => Math.max(m, r.count), 0);
+  return (
+    <div className={styles.ecList} role="list">
+      {rows.map((r) => {
+        const color = errorColor(r.status);
+        return (
+          <div key={r.status} className={styles.ecRow} role="listitem">
+            <span className={styles.ecStatus} style={{ color, borderColor: color }}>
+              {r.status === 0 ? 'ERR' : r.status}
+            </span>
+            <span className={styles.ecReason}>{errorReason(r.status)}</span>
+            <div className={styles.ecBarTrack}>
+              <div
+                className={styles.ecBar}
+                style={{ width: `${max > 0 ? (r.count / max) * 100 : 0}%`, background: color }}
+              />
+            </div>
+            <span className={styles.ecCount}>{int(r.count)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
 }

@@ -186,6 +186,19 @@ export interface ErrorBreakdown {
   transport: number;
 }
 
+// One upstream status code and its error-row count. status 0 = transport failure
+// (no response); otherwise the raw HTTP status (429, 500, 503, …).
+export interface ErrorCodeRow {
+  status: number;
+  count: number;
+}
+
+// GET /usage/error-codes: error rows grouped by status, ranked by count desc.
+export interface ErrorCodesBreakdown {
+  range: Range;
+  rows: ErrorCodeRow[];
+}
+
 export interface CallEntry {
   /** UUID minted by the gateway at request-start. */
   id: string;

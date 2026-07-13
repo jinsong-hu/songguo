@@ -114,6 +114,7 @@ var adminRoutes = []adminRoute{
 	{"GET", "/api/usage/cache-by-model", (*api).handleCacheByModel, false},
 	{"GET", "/api/usage/breakdown", (*api).handleBreakdown, false},
 	{"GET", "/api/usage/errors", (*api).handleErrors, false},
+	{"GET", "/api/usage/error-codes", (*api).handleTopErrorCodes, false},
 	{"GET", "/api/context/composition", (*api).handleContextComposition, false},
 	{"GET", "/api/feed", (*api).handleFeed, false},
 	{"GET", "/api/calls", (*api).handleCalls, false},

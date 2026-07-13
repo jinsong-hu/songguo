@@ -10,6 +10,7 @@ import type {
   CreateProviderBody,
   CreateUserBody,
   ErrorBreakdown,
+  ErrorCodesBreakdown,
   FeedPage,
   Me,
   Overview,
@@ -196,6 +197,21 @@ export const api = {
 
   errors: (since: number, until: number) =>
     request<ErrorBreakdown>(`/usage/errors${qs({ since, until })}`),
+
+  /**
+   * Top upstream error codes (status → count, ranked). Optionally scoped to one
+   * series via dimension+key (e.g. dimension='model', key=<model>) so the
+   * Overview error-codes panel can filter to the clicked row.
+   */
+  errorCodes: (
+    since: number,
+    until: number,
+    dimension?: UsageDimension,
+    key?: string,
+  ) =>
+    request<ErrorCodesBreakdown>(
+      `/usage/error-codes${qs({ since, until, dimension: key ? dimension : undefined, key })}`,
+    ),
 
   calls: (f: CallsFilters) => request<CallsPage>(`/calls${callsQuery(f)}`),
 

@@ -112,6 +112,7 @@ func TestAuthRequiredOnAllEndpoints(t *testing.T) {
 		{"GET", "/api/usage/series"},
 		{"GET", "/api/usage/breakdown?dimension=model"},
 		{"GET", "/api/usage/errors"},
+		{"GET", "/api/usage/error-codes"},
 		{"GET", "/api/calls"},
 		{"GET", "/api/calls/export?format=csv"},
 		{"GET", "/api/users"},
@@ -651,6 +652,59 @@ func TestUsageErrors(t *testing.T) {
 	decodeBody(t, rec, &v)
 	if v.RateLimited != 1 || v.ClientError != 1 || v.ServerError != 1 || v.Transport != 1 {
 		t.Errorf("error classes = %+v, want 1 each", v)
+	}
+}
+
+func TestUsageErrorCodes(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	// Seed: gpt-4o with three 429s + one 500; claude with one 503. One 200 (not an
+	// error) must be excluded. Expected top codes: 429×3, 500×1, 503×1.
+	seed := []struct {
+		st    int
+		model string
+	}{
+		{200, "gpt-4o"}, // success — excluded
+		{429, "gpt-4o"},
+		{429, "gpt-4o"},
+		{429, "gpt-4o"},
+		{500, "gpt-4o"},
+		{503, "claude-opus-4-8"},
+	}
+	for i, c := range seed {
+		if _, err := s.AppendCall(calls.Entry{TS: now.Add(-time.Duration(i+1) * time.Hour), Vendor: "openai", Model: c.model, Status: c.st}); err != nil {
+			t.Fatalf("AppendCall[%d]: %v", i, err)
+		}
+	}
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret", Now: func() time.Time { return now }})
+
+	// Unscoped: ranked by count desc, 200 excluded.
+	rec := do(h, "GET", "/api/usage/error-codes", "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("error-codes: code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var v errorCodesView
+	decodeBody(t, rec, &v)
+	if len(v.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3 (%+v)", len(v.Rows), v.Rows)
+	}
+	if v.Rows[0].Status != 429 || v.Rows[0].Count != 3 {
+		t.Errorf("top row = %+v, want status 429 count 3", v.Rows[0])
+	}
+
+	// Scoped to one service (model dimension): only gpt-4o's errors.
+	rec = do(h, "GET", "/api/usage/error-codes?dimension=model&key=gpt-4o", "secret", nil)
+	var scoped errorCodesView
+	decodeBody(t, rec, &scoped)
+	total := 0
+	for _, r := range scoped.Rows {
+		total += r.Count
+		if r.Status == 503 {
+			t.Errorf("scoped rows leaked claude's 503: %+v", scoped.Rows)
+		}
+	}
+	if total != 4 {
+		t.Errorf("scoped total = %d, want 4 (%+v)", total, scoped.Rows)
 	}
 }
 
