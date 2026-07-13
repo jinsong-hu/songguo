@@ -60,15 +60,19 @@ export interface SessionStats {
   with_subagents: number;
   total_turns: number;
   total_tokens: number;
+  total_tool_calls: number;
   avg_turns: number;
   avg_tokens: number;
   avg_duration: number;
+  avg_tool_calls: number;
   turns_p50: number;
   turns_p95: number;
   tokens_p50: number;
   tokens_p95: number;
   duration_p50: number;
   duration_p95: number;
+  tool_calls_p50: number;
+  tool_calls_p95: number;
 }
 
 export interface SeriesPoint {

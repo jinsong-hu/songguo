@@ -36,19 +36,23 @@ type SessionStats struct {
 	WithSubagents int
 
 	// Totals and means for headline cards.
-	TotalTurns  int
-	TotalTokens float64
-	AvgTurns    float64
-	AvgTokens   float64
-	AvgDuration float64 // seconds
+	TotalTurns     int
+	TotalTokens    float64
+	TotalToolCalls int
+	AvgTurns       float64
+	AvgTokens      float64
+	AvgDuration    float64 // seconds
+	AvgToolCalls   float64
 
 	// Per-session distributions (nearest-rank percentiles).
-	TurnsP50    int64
-	TurnsP95    int64
-	TokensP50   int64
-	TokensP95   int64
-	DurationP50 int64 // seconds
-	DurationP95 int64 // seconds
+	TurnsP50     int64
+	TurnsP95     int64
+	TokensP50    int64
+	TokensP95    int64
+	DurationP50  int64 // seconds
+	DurationP95  int64 // seconds
+	ToolCallsP50 int64
+	ToolCallsP95 int64
 }
 
 // SessionStats aggregates coding-agent sessions over the optional [since, until)
@@ -78,7 +82,7 @@ func (s *Store) SessionStats(since, until *time.Time) (SessionStats, error) {
 	}
 
 	rows, err := s.db.Query(
-		`SELECT first_ts, last_ts, turns, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, last_status, has_subagents
+		`SELECT first_ts, last_ts, turns, tool_calls, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, last_status, has_subagents
 		   FROM sessions`+clause, args...,
 	)
 	if err != nil {
@@ -88,6 +92,7 @@ func (s *Store) SessionStats(since, until *time.Time) (SessionStats, error) {
 
 	type agg struct {
 		turns       int
+		toolCalls   int
 		tokens      float64
 		firstMs     int64
 		lastMs      int64
@@ -102,7 +107,7 @@ func (s *Store) SessionStats(since, until *time.Time) (SessionStats, error) {
 			cacheReadTok, cacheCreationTok float64
 			hasSub                         int
 		)
-		if err := rows.Scan(&a.firstMs, &a.lastMs, &a.turns, &inTok, &outTok, &cacheReadTok, &cacheCreationTok, &a.lastStatus, &hasSub); err != nil {
+		if err := rows.Scan(&a.firstMs, &a.lastMs, &a.turns, &a.toolCalls, &inTok, &outTok, &cacheReadTok, &cacheCreationTok, &a.lastStatus, &hasSub); err != nil {
 			return SessionStats{}, fmt.Errorf("store: scan session stats: %w", err)
 		}
 		// Total tokens = the disjoint input parts + output (thinking is a subset of
@@ -117,9 +122,10 @@ func (s *Store) SessionStats(since, until *time.Time) (SessionStats, error) {
 
 	out := SessionStats{Sessions: len(aggs)}
 	var (
-		turnsVals    = make([]int64, 0, len(aggs))
-		tokensVals   = make([]int64, 0, len(aggs))
-		durationVals = make([]int64, 0, len(aggs))
+		turnsVals     = make([]int64, 0, len(aggs))
+		tokensVals    = make([]int64, 0, len(aggs))
+		durationVals  = make([]int64, 0, len(aggs))
+		toolCallsVals = make([]int64, 0, len(aggs))
 	)
 	for _, agg := range aggs {
 		switch {
@@ -139,17 +145,20 @@ func (s *Store) SessionStats(since, until *time.Time) (SessionStats, error) {
 
 		out.TotalTurns += agg.turns
 		out.TotalTokens += agg.tokens
+		out.TotalToolCalls += agg.toolCalls
 
 		durSec := (agg.lastMs - agg.firstMs) / 1000
 		turnsVals = append(turnsVals, int64(agg.turns))
 		tokensVals = append(tokensVals, int64(agg.tokens))
 		durationVals = append(durationVals, durSec)
+		toolCallsVals = append(toolCallsVals, int64(agg.toolCalls))
 	}
 
 	if out.Sessions > 0 {
 		n := float64(out.Sessions)
 		out.AvgTurns = float64(out.TotalTurns) / n
 		out.AvgTokens = out.TotalTokens / n
+		out.AvgToolCalls = float64(out.TotalToolCalls) / n
 		var totalDur int64
 		for _, d := range durationVals {
 			totalDur += d
@@ -160,12 +169,15 @@ func (s *Store) SessionStats(since, until *time.Time) (SessionStats, error) {
 	sort.Slice(turnsVals, func(i, j int) bool { return turnsVals[i] < turnsVals[j] })
 	sort.Slice(tokensVals, func(i, j int) bool { return tokensVals[i] < tokensVals[j] })
 	sort.Slice(durationVals, func(i, j int) bool { return durationVals[i] < durationVals[j] })
+	sort.Slice(toolCallsVals, func(i, j int) bool { return toolCallsVals[i] < toolCallsVals[j] })
 	out.TurnsP50 = percentileNearestRank(turnsVals, 50)
 	out.TurnsP95 = percentileNearestRank(turnsVals, 95)
 	out.TokensP50 = percentileNearestRank(tokensVals, 50)
 	out.TokensP95 = percentileNearestRank(tokensVals, 95)
 	out.DurationP50 = percentileNearestRank(durationVals, 50)
 	out.DurationP95 = percentileNearestRank(durationVals, 95)
+	out.ToolCallsP50 = percentileNearestRank(toolCallsVals, 50)
+	out.ToolCallsP95 = percentileNearestRank(toolCallsVals, 95)
 
 	return out, nil
 }

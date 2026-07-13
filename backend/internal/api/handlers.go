@@ -220,8 +220,8 @@ func (a *api) overviewData(since, until time.Time) (overviewView, error) {
 
 // handleSessionsOverview returns aggregate stats over coding-agent sessions in
 // the window (default last 30d): count, inferred outcomes, subagent fan-out, and
-// turns/tokens/duration totals and percentiles. It powers the Sessions section
-// of the overview dashboard.
+// turns/tokens/duration/tool-call totals and percentiles. It powers the
+// Behavioral section of the overview dashboard.
 func (a *api) handleSessionsOverview(w http.ResponseWriter, r *http.Request) {
 	now := a.now().UTC()
 	since := now.AddDate(0, 0, -30)
@@ -244,18 +244,22 @@ func (a *api) handleSessionsOverview(w http.ResponseWriter, r *http.Request) {
 		Completed:     st.Completed,
 		Errored:       st.Errored,
 		Interrupted:   st.Interrupted,
-		WithSubagents: st.WithSubagents,
-		TotalTurns:    st.TotalTurns,
-		TotalTokens:   st.TotalTokens,
-		AvgTurns:      st.AvgTurns,
-		AvgTokens:     st.AvgTokens,
-		AvgDuration:   st.AvgDuration,
-		TurnsP50:      st.TurnsP50,
-		TurnsP95:      st.TurnsP95,
-		TokensP50:     st.TokensP50,
-		TokensP95:     st.TokensP95,
-		DurationP50:   st.DurationP50,
-		DurationP95:   st.DurationP95,
+		WithSubagents:  st.WithSubagents,
+		TotalTurns:     st.TotalTurns,
+		TotalTokens:    st.TotalTokens,
+		TotalToolCalls: st.TotalToolCalls,
+		AvgTurns:       st.AvgTurns,
+		AvgTokens:      st.AvgTokens,
+		AvgDuration:    st.AvgDuration,
+		AvgToolCalls:   st.AvgToolCalls,
+		TurnsP50:       st.TurnsP50,
+		TurnsP95:       st.TurnsP95,
+		TokensP50:      st.TokensP50,
+		TokensP95:      st.TokensP95,
+		DurationP50:    st.DurationP50,
+		DurationP95:    st.DurationP95,
+		ToolCallsP50:   st.ToolCallsP50,
+		ToolCallsP95:   st.ToolCallsP95,
 	})
 }
 

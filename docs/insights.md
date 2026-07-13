@@ -23,8 +23,8 @@ Candidate sections, mapped to what the overview already renders:
 - **Reliability** — success rate over time; errors by class; error rate by
   vendor.
 - **Modality mix** — breakdown by modality and by user.
-- **Sessions** — session count, turns/session, duration/session, tokens/session,
-  outcome mix; the recent-activity feed.
+- **Behavioral** — session count, turns/session, duration/session,
+  tokens/session, tools/session; the recent-activity feed.
 
 For each, once written: the question it answers, the source table (`calls` vs
 `sessions`), the exact aggregation, and the read endpoint.

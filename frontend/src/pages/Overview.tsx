@@ -8,7 +8,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Activity, Clock, Coins, DatabaseZap, DollarSign, GitBranch, MessageSquare, ShieldCheck, Users } from 'lucide-react';
+import { Activity, Clock, Coins, DatabaseZap, DollarSign, GitBranch, MessageSquare, ShieldCheck, Users, Wrench } from 'lucide-react';
 import { api } from '../api/client';
 import type { Bucket, UsageDimension } from '../api/types';
 import { ContextSunburst, ContextDistributionCard } from '../components/ContextSunburst';
@@ -601,8 +601,8 @@ export function OverviewPage() {
         </Frame>
       </Panel>
 
-      {/* Sessions */}
-      <SectionTitle name="Sessions" hint="Agent runs — outcome inferred from each session's last call" />
+      {/* Behavioral */}
+      <SectionTitle name="Behavioral" hint="How agent runs behave — per-session turns, duration, tokens, and tool use" />
       <div className={styles.kpiGrid}>
         <Kpi
           icon={<GitBranch size={14} />}
@@ -632,16 +632,13 @@ export function OverviewPage() {
           value={ss ? compact(ss.avg_tokens) : '—'}
           sub={ss ? `p50 ${compact(ss.tokens_p50)} · p95 ${compact(ss.tokens_p95)}` : undefined}
         />
-      </div>
-      <div className={`card ${styles.panel}`}>
-        <div className={styles.panelHead}>
-          <span className={styles.panelTitle}>Outcomes</span>
-        </div>
-        <Frame r={sessions} height="" empty={!ss || ss.sessions === 0}>
-          {ss ? (
-            <OutcomeBar completed={ss.completed} interrupted={ss.interrupted} errored={ss.errored} />
-          ) : null}
-        </Frame>
+        <Kpi
+          icon={<Wrench size={14} />}
+          label="Tools / session"
+          loading={sessions.initialLoading}
+          value={ss ? ss.avg_tool_calls.toFixed(1) : '—'}
+          sub={ss ? `p50 ${int(ss.tool_calls_p50)} · p95 ${int(ss.tool_calls_p95)}` : undefined}
+        />
       </div>
 
       {/* Recent activity */}
@@ -807,57 +804,4 @@ function compact(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return `${Math.round(n)}`;
-}
-
-// Inferred session outcomes, in bar/legend order.
-const OUTCOMES = [
-  { key: 'completed', label: 'Completed', color: 'var(--chart-1)' },
-  { key: 'interrupted', label: 'Interrupted', color: 'var(--chart-3)' },
-  { key: 'errored', label: 'Errored', color: 'var(--danger)' },
-] as const;
-
-/** Stacked proportion bar + legend for a session's completed/interrupted/errored mix. */
-function OutcomeBar({
-  completed,
-  interrupted,
-  errored,
-}: {
-  completed: number;
-  interrupted: number;
-  errored: number;
-}) {
-  const counts = { completed, interrupted, errored };
-  const total = completed + interrupted + errored;
-  return (
-    <div className={styles.outcome}>
-      <div className={styles.outcomeBar}>
-        {OUTCOMES.map((o) => {
-          const v = counts[o.key];
-          if (v === 0 || total === 0) return null;
-          return (
-            <div
-              key={o.key}
-              className={styles.outcomeSeg}
-              style={{ width: `${(v / total) * 100}%`, background: o.color }}
-              title={`${o.label}: ${v}`}
-            />
-          );
-        })}
-      </div>
-      <div className={styles.outcomeLegend}>
-        {OUTCOMES.map((o) => {
-          const v = counts[o.key];
-          const pct = total > 0 ? (v / total) * 100 : 0;
-          return (
-            <div key={o.key} className={styles.outcomeItem}>
-              <span className={styles.outcomeDot} style={{ background: o.color }} />
-              <span className={styles.outcomeLabel}>{o.label}</span>
-              <span className={styles.outcomeCount}>{int(v)}</span>
-              <span className={styles.outcomePct}>{pct.toFixed(0)}%</span>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
 }

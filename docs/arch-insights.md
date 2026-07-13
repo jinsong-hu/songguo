@@ -116,8 +116,10 @@ but not finalized) reads as in-flight until that call finalizes or is pruned.
 - **Overview aggregate charts** (requests/spend/tokens over time, breakdowns by
   model/vendor/user/modality, error classes, latency percentiles) — read
   `calls`, call-grained, windowed. All traffic appears.
-- **Session cards** (session count, turns/session, duration/session,
-  tokens/session, outcome mix) — read the materialized `sessions` table.
+- **Behavioral cards** (session count, turns/session, duration/session,
+  tokens/session, tools/session) — read the materialized `sessions` table. The
+  section shows agent-run behavior, not outcome; the inferred outcome the
+  rollup still stores drives the activity feed, not these cards.
 - **Recent activity feed** — blends both: coding-agent sessions surface as
   session rows (from `sessions`), standalone calls surface as request rows (from
   `calls`). Ordered by last activity.
