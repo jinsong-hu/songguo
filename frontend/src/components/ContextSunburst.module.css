@@ -237,7 +237,8 @@
 .sourceLegend {
   grid-area: legend;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr); /* equal columns, allowed to shrink so all fit on one row */
   gap: 8px 16px;
 }
 

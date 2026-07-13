@@ -126,13 +126,6 @@ function connectorPath(
   return `M ${startX} ${startY} C ${radialX} ${radialY}, ${approachX} ${targetY}, ${endX} ${targetY}`;
 }
 
-function pushBalanced(cols: { left: SourceSlice[]; right: SourceSlice[] }, side: 'left' | 'right', s: SourceSlice) {
-  const preferred = cols[side];
-  const other = side === 'left' ? cols.right : cols.left;
-  if (preferred.length < 2) preferred.push(s);
-  else other.push(s);
-}
-
 function breakoutColumns(
   mode: LayoutMode,
   breakouts: SourceSlice[],
@@ -152,7 +145,13 @@ function breakoutColumns(
     }
     return cols;
   }
-  for (const s of breakouts) pushBalanced(cols, naturalSide(s, angles), s);
+  // four mode: place by size rank, not sector geometry, so the order is stable.
+  // breakouts is already sorted largest-first by chooseBreakouts — the right
+  // column leads (#1 top, #2 bottom), then the left column (#3 top, #4 bottom).
+  if (breakouts[0]) cols.right.push(breakouts[0]);
+  if (breakouts[1]) cols.right.push(breakouts[1]);
+  if (breakouts[2]) cols.left.push(breakouts[2]);
+  if (breakouts[3]) cols.left.push(breakouts[3]);
   return cols;
 }
 
