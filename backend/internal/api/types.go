@@ -302,6 +302,23 @@ type successByModelView struct {
 	Points []successByModelPoint `json:"points"`
 }
 
+// cacheByModelPoint is one bucket in the GET /api/usage/cache-by-model response:
+// cache-read and total-input token sums keyed by dimension key. CacheRead and Input
+// carry the same key set; the client derives the cache-hit ratio as CacheRead/Input.
+type cacheByModelPoint struct {
+	TS        string             `json:"ts"`
+	CacheRead map[string]float64 `json:"cache_read"`
+	Input     map[string]float64 `json:"input"`
+}
+
+// cacheByModelView is the GET /api/usage/cache-by-model response: the ordered key
+// set (top N by total input + "Other") and per-bucket cache-read/input points.
+type cacheByModelView struct {
+	Bucket string              `json:"bucket"`
+	Models []string            `json:"models"`
+	Points []cacheByModelPoint `json:"points"`
+}
+
 // breakdownRow is one group's aggregates in the GET /api/usage/breakdown response.
 type breakdownRow struct {
 	Key                 string  `json:"key"`

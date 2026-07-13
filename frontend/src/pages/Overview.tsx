@@ -8,7 +8,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Activity, Clock, Coins, DollarSign, GitBranch, MessageSquare, ShieldCheck, Users } from 'lucide-react';
+import { Activity, Clock, Coins, DatabaseZap, DollarSign, GitBranch, MessageSquare, ShieldCheck, Users } from 'lucide-react';
 import { api } from '../api/client';
 import type { Bucket, UsageDimension } from '../api/types';
 import { ContextSunburst, ContextDistributionCard } from '../components/ContextSunburst';
@@ -60,6 +60,7 @@ export function OverviewPage() {
   const [usageDim, setUsageDim] = useState<UsageDimension>('model');
   const [perfDim, setPerfDim] = useState<UsageDimension>('model');
   const [successDim, setSuccessDim] = useState<UsageDimension>('model');
+  const [cacheDim, setCacheDim] = useState<UsageDimension>('model');
   const tick = useLiveTick(REFRESH_MS);
   const range = RANGES.find((r) => r.key === rangeKey) ?? RANGES[0];
 
@@ -88,12 +89,26 @@ export function OverviewPage() {
     [since, until, range.bucket, successDim],
     opts,
   );
+  const cacheSeries = useFetch(
+    () => api.cacheByModel(since, until, range.bucket, cacheDim),
+    [since, until, range.bucket, cacheDim],
+    opts,
+  );
   // Resolve user-id series keys to display names for the by-user views.
   const usersList = useFetch(() => api.users(), [], opts);
   const composition = useFetch(() => api.contextComposition(since, until), [since, until], opts);
 
   const ov = overview.data;
   const ss = sessions.data;
+
+  // Overall cache-hit ratio: cache reads / total input (fresh + cache read + cache
+  // write). Null when there was no input in range, so the KPI shows "—" rather than
+  // a misleading 0%.
+  const cacheHit = useMemo(() => {
+    if (!ov) return null;
+    const totalInput = ov.tokens.input + ov.tokens.cached + ov.tokens.cache_creation;
+    return totalInput > 0 ? ov.tokens.cached / totalInput : null;
+  }, [ov]);
 
   // Tokens-by-model chart: one row per bucket with a numeric column per model.
   // Bars stack the model columns. Models come pre-ranked from the backend
@@ -211,6 +226,43 @@ export function OverviewPage() {
     [successModels, successDim],
   );
 
+  // Cache-hit %-over-time chart: one row per bucket with a per-key cache-hit rate
+  // (cache reads / total input tokens, as a %). Null when the key had no input in
+  // that bucket, so the line breaks rather than dropping to 0%. Keys come pre-ranked
+  // by total input from the backend (top N + "Other").
+  const { cacheModels, cachePoints } = useMemo(() => {
+    const data = cacheSeries.data;
+    const keys = data?.models ?? [];
+    const bucket = data?.bucket ?? range.bucket;
+    const rows: Record<string, number | string | null>[] = [];
+    for (const p of data?.points ?? []) {
+      const row: Record<string, number | string | null> = { label: bucketLabel(p.ts, bucket) };
+      for (const k of keys) {
+        const input = p.input[k] ?? 0;
+        const cacheRead = p.cache_read[k] ?? 0;
+        row[k] = input > 0 ? (cacheRead / input) * 100 : null;
+      }
+      rows.push(row);
+    }
+    return { cacheModels: keys, cachePoints: rows };
+  }, [cacheSeries.data, range.bucket]);
+  const cacheEmpty = cacheModels.length === 0;
+  const cacheSeriesLabel = useMemo(() => {
+    const names = new Map((usersList.data ?? []).map((u) => [u.id, u.name]));
+    return (key: string) => (cacheDim === 'user' ? names.get(key) ?? key : key);
+  }, [usersList.data, cacheDim]);
+  const cacheConfig = useMemo<ChartConfig>(() => {
+    const c: ChartConfig = {};
+    cacheModels.forEach((m) => {
+      c[m] = { label: cacheSeriesLabel(m) };
+    });
+    return c;
+  }, [cacheModels, cacheSeriesLabel]);
+  const cacheColors = useMemo(
+    () => assignSeriesColors(cacheModels, cacheDim),
+    [cacheModels, cacheDim],
+  );
+
   const rangeSwitch = (
     <div className={styles.seg} role="tablist" aria-label="Time range">
       {RANGES.map((r) => (
@@ -276,6 +328,12 @@ export function OverviewPage() {
           loading={overview.initialLoading}
           value={ov ? percent(1 - ov.error_rate) : '—'}
           danger={ov != null && ov.error_rate > 0.05}
+        />
+        <Kpi
+          icon={<DatabaseZap size={14} />}
+          label="Cache hit"
+          loading={overview.initialLoading}
+          value={cacheHit == null ? '—' : percent(cacheHit)}
         />
       </div>
 
@@ -472,6 +530,67 @@ export function OverviewPage() {
                   dataKey={m}
                   type="monotone"
                   stroke={successColors[m]}
+                  strokeWidth={2}
+                  dot={false}
+                  connectNulls
+                />
+              ))}
+            </LineChart>
+          </ChartContainer>
+        </Frame>
+      </Panel>
+
+      {/* Cache */}
+      <SectionTitle
+        name="Cache"
+        control={
+          <div className={styles.seg} role="tablist" aria-label="Cache breakdown dimension">
+            {USAGE_DIMS.map((d) => (
+              <button
+                key={d.key}
+                role="tab"
+                aria-selected={d.key === cacheDim}
+                className={`${styles.segBtn} ${d.key === cacheDim ? styles.segActive : ''}`}
+                onClick={() => setCacheDim(d.key)}
+              >
+                {d.label}
+              </button>
+            ))}
+          </div>
+        }
+      />
+      <Panel title="Cache hit rate">
+        <Frame r={cacheSeries} height={styles.chartSm} empty={cacheEmpty}>
+          <ChartContainer config={cacheConfig} className={CHART_CLS}>
+            <LineChart data={cachePoints} margin={{ top: 6, right: 8, left: -16, bottom: 0 }}>
+              <CartesianGrid vertical={false} />
+              <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
+              <YAxis tickLine={false} axisLine={false} width={40} domain={[0, 100]} tickFormatter={(v: number) => `${v}%`} />
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent
+                    formatter={(value, name, item) => (
+                      <div className={styles.costTip}>
+                        <span
+                          className={styles.costTipDot}
+                          style={{ background: (item?.color as string) ?? 'var(--text-muted)' }}
+                        />
+                        <span className={styles.costTipName}>{cacheSeriesLabel(String(name))}</span>
+                        <span className={styles.costTipVal}>
+                          {value == null ? '—' : `${Number(value).toFixed(1)}%`}
+                        </span>
+                      </div>
+                    )}
+                  />
+                }
+              />
+              <ChartLegend content={<ChartLegendContent />} />
+              {cacheModels.map((m) => (
+                <Line
+                  key={m}
+                  dataKey={m}
+                  type="monotone"
+                  stroke={cacheColors[m]}
                   strokeWidth={2}
                   dot={false}
                   connectNulls

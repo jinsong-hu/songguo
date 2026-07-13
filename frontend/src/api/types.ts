@@ -135,6 +135,24 @@ export interface SuccessByModelSeries {
   points: SuccessByModelPoint[];
 }
 
+// One bucket of the cache-by-model series: cache-read and total-input token sums
+// keyed by dimension key. `cache_read` and `input` carry the same key set; the
+// cache-hit ratio is derived as cache_read / input (total input = fresh + cache
+// read + cache creation).
+export interface CacheByModelPoint {
+  ts: string;
+  cache_read: Record<string, number>;
+  input: Record<string, number>;
+}
+
+export interface CacheByModelSeries {
+  bucket: Bucket;
+  // Series keys for the current dimension (top-N by total input + "Other").
+  // Named `models` to mirror TokensByModelSeries.
+  models: string[];
+  points: CacheByModelPoint[];
+}
+
 export type BreakdownDimension = 'model' | 'vendor' | 'user' | 'modality';
 
 export interface BreakdownRow {

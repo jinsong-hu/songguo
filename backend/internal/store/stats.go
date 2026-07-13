@@ -916,6 +916,170 @@ func (s *Store) SuccessByModelSeries(dim BreakdownDimension, since, until time.T
 	return models, out, nil
 }
 
+// CacheByModelBucket is one time bucket of the cache-hit series: the bucket start
+// (UTC) and the cache-read and total-input token sums per dimension key. CacheRead
+// and Input carry the same key set (top N by total input + "Other"). Callers derive
+// the per-key cache-hit ratio as CacheRead/Input, where total input is fresh input +
+// cache read + cache creation (the three disjoint input buckets).
+type CacheByModelBucket struct {
+	Bucket    time.Time
+	CacheRead map[string]float64
+	Input     map[string]float64
+}
+
+// CacheByModelSeries returns, for each fixed time bucket across [since, until), the
+// cache-read and total-input token sums broken down by the given dimension (model,
+// vendor, or user). Cache read is the ratio's numerator; total input (fresh input +
+// cache read + cache creation) is its denominator — both are summed raw here so the
+// caller can divide after folding, keeping the "Other" group's ratio correct. The
+// top tokensByModelTopN keys by total input over the whole range are kept as distinct
+// series; every other key is summed into "Other". Every bucket in the range is
+// present (gaps filled with zeroes), and every bucket's maps carry the same key set.
+// The returned slice is that key set, ordered descending by total input with "Other"
+// (when present) last. Bucket timestamps are UTC. Empty key values are reported as
+// "unknown". An unrecognized dimension returns ErrBadDimension.
+func (s *Store) CacheByModelSeries(dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []CacheByModelBucket, error) {
+	col, ok := breakdownColumn(dim)
+	if !ok {
+		return nil, nil, ErrBadDimension
+	}
+	if bucket <= 0 {
+		return nil, nil, fmt.Errorf("store: cache by model series: bucket must be positive")
+	}
+	bucketMs := bucket.Milliseconds()
+	if bucketMs <= 0 {
+		return nil, nil, fmt.Errorf("store: cache by model series: bucket too small")
+	}
+
+	sinceMs := since.UnixMilli()
+	untilMs := until.UnixMilli()
+	startMs := (sinceMs / bucketMs) * bucketMs
+	if untilMs <= startMs {
+		return []string{}, []CacheByModelBucket{}, nil
+	}
+	count := (untilMs-startMs-1)/bucketMs + 1
+	if count > maxSeriesBuckets {
+		return nil, nil, fmt.Errorf("%w: %d exceeds limit of %d", ErrTooManyBuckets, count, maxSeriesBuckets)
+	}
+
+	// col comes from the breakdownColumn whitelist, so it is safe to interpolate
+	// (column names cannot be bound as query parameters).
+	rows, err := s.db.Query(
+		fmt.Sprintf(`SELECT (ts / ?) * ? AS bucket_start,
+		        %s,
+		        COALESCE(SUM(cache_read_input_tokens), 0),
+		        COALESCE(SUM(input_tokens + cache_read_input_tokens + cache_creation_input_tokens), 0)
+		   FROM calls
+		  WHERE ts >= ? AND ts < ?
+		  GROUP BY bucket_start, %s`, col, col),
+		bucketMs, bucketMs, sinceMs, untilMs,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("store: cache by model series: %w", err)
+	}
+	defer rows.Close()
+
+	type cell struct {
+		bucket    int64
+		model     string
+		cacheRead float64
+		input     float64
+	}
+	var cells []cell
+	modelTotals := make(map[string]float64)
+	for rows.Next() {
+		var (
+			b         int64
+			model     string
+			cacheRead float64
+			input     float64
+		)
+		if err := rows.Scan(&b, &model, &cacheRead, &input); err != nil {
+			return nil, nil, fmt.Errorf("store: scan cache by model series: %w", err)
+		}
+		if model == "" {
+			model = "unknown"
+		}
+		cells = append(cells, cell{bucket: b, model: model, cacheRead: cacheRead, input: input})
+		modelTotals[model] += input
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("store: cache by model series: %w", err)
+	}
+
+	// Rank models by total input (desc), tie-break by name (asc); keep top N.
+	ranked := make([]string, 0, len(modelTotals))
+	for m := range modelTotals {
+		ranked = append(ranked, m)
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		if modelTotals[ranked[i]] != modelTotals[ranked[j]] {
+			return modelTotals[ranked[i]] > modelTotals[ranked[j]]
+		}
+		return ranked[i] < ranked[j]
+	})
+
+	top := make(map[string]bool)
+	models := make([]string, 0, tokensByModelTopN+1)
+	for _, m := range ranked {
+		if len(models) >= tokensByModelTopN {
+			break
+		}
+		top[m] = true
+		models = append(models, m)
+	}
+	hasOther := len(ranked) > len(models)
+
+	// Fold each cell into its bucket, remapping non-top models to "Other".
+	// CacheRead and Input are folded in parallel so they share the same key set.
+	perBucketCache := make(map[int64]map[string]float64)
+	perBucketInput := make(map[int64]map[string]float64)
+	for _, c := range cells {
+		key := c.model
+		if !top[key] {
+			key = otherModelKey
+		}
+		mc := perBucketCache[c.bucket]
+		if mc == nil {
+			mc = make(map[string]float64)
+			perBucketCache[c.bucket] = mc
+		}
+		mc[key] += c.cacheRead
+		mi := perBucketInput[c.bucket]
+		if mi == nil {
+			mi = make(map[string]float64)
+			perBucketInput[c.bucket] = mi
+		}
+		mi[key] += c.input
+	}
+	if hasOther {
+		models = append(models, otherModelKey)
+	}
+
+	out := make([]CacheByModelBucket, 0, count)
+	for i := int64(0); i < count; i++ {
+		bs := startMs + i*bucketMs
+		cacheRead := make(map[string]float64, len(models))
+		input := make(map[string]float64, len(models))
+		for _, m := range models {
+			cacheRead[m] = 0
+			input[m] = 0
+		}
+		for m, v := range perBucketCache[bs] {
+			cacheRead[m] += v
+		}
+		for m, v := range perBucketInput[bs] {
+			input[m] += v
+		}
+		out = append(out, CacheByModelBucket{
+			Bucket:    time.UnixMilli(bs).UTC(),
+			CacheRead: cacheRead,
+			Input:     input,
+		})
+	}
+	return models, out, nil
+}
+
 // isErrorStatus reports whether a recorded upstream status counts as an error:
 // 0 (transport failure / no response) or any 4xx/5xx.
 func isErrorStatus(status int) bool {
