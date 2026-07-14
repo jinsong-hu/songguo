@@ -69,7 +69,7 @@ const MAIN_OUTER_R = MAIN_CENTER * 0.78;
 const CONNECTOR_W = 54;
 const BREAKOUT_LIMIT = 4;
 
-type LayoutMode = 'one' | 'two' | 'four';
+type LayoutMode = 'one' | 'two' | 'three' | 'four';
 
 function sideRows(n: number): number[] {
   return Array.from({ length: n }, (_, i) => (MAIN_SIZE * (i + 0.5)) / n);
@@ -88,6 +88,11 @@ function chooseBreakouts(sources: SourceSlice[], total: number): { mode: LayoutM
   }
   if (candidates.length <= 2 || share(2) < 0.1) {
     return { mode: 'two', breakouts: candidates.slice(0, 2) };
+  }
+  // When the biggest sector dominates (>50%), show three breakouts instead of
+  // four — the top three buckets. Takes priority over the four-breakout default.
+  if (share(0) > 0.5) {
+    return { mode: 'three', breakouts: candidates.slice(0, 3) };
   }
   return { mode: 'four', breakouts: candidates.slice(0, BREAKOUT_LIMIT) };
 }
@@ -132,6 +137,11 @@ function breakoutColumns(
   angles: Map<string, number>,
 ): { left: SourceSlice[]; right: SourceSlice[] } {
   const cols = { left: [] as SourceSlice[], right: [] as SourceSlice[] };
+  // Order the rows within a column by the donut sector's vertical position
+  // (higher sector = top row) so the connector lines never cross.
+  const bySectorHeight = (a: SourceSlice, b: SourceSlice) =>
+    Math.sin(((angles.get(b.key) ?? 0) * Math.PI) / 180) -
+    Math.sin(((angles.get(a.key) ?? 0) * Math.PI) / 180);
   if (mode === 'one') {
     const s = breakouts[0];
     if (s) cols[naturalSide(s, angles)].push(s);
@@ -145,18 +155,22 @@ function breakoutColumns(
     }
     return cols;
   }
+  if (mode === 'three') {
+    // three mode: the biggest bucket alone on the right, the next two on the
+    // left. breakouts is already sorted largest-first by chooseBreakouts.
+    if (breakouts[0]) cols.right.push(breakouts[0]);
+    if (breakouts[1]) cols.left.push(breakouts[1]);
+    if (breakouts[2]) cols.left.push(breakouts[2]);
+    cols.left.sort(bySectorHeight);
+    return cols;
+  }
   // four mode: assign columns by size rank (right column gets the two largest,
   // left the next two) so the biggest buckets read top-right. breakouts is
-  // already sorted largest-first by chooseBreakouts. Within each column, order
-  // the rows by the donut sector's vertical position (higher sector = top row)
-  // so the connector lines never cross.
+  // already sorted largest-first by chooseBreakouts.
   if (breakouts[0]) cols.right.push(breakouts[0]);
   if (breakouts[1]) cols.right.push(breakouts[1]);
   if (breakouts[2]) cols.left.push(breakouts[2]);
   if (breakouts[3]) cols.left.push(breakouts[3]);
-  const bySectorHeight = (a: SourceSlice, b: SourceSlice) =>
-    Math.sin(((angles.get(b.key) ?? 0) * Math.PI) / 180) -
-    Math.sin(((angles.get(a.key) ?? 0) * Math.PI) / 180);
   cols.left.sort(bySectorHeight);
   cols.right.sort(bySectorHeight);
   return cols;
@@ -201,7 +215,9 @@ export function ContextSunburst({
       : styles.modeOneRight
     : mode === 'two'
       ? styles.modeTwo
-      : styles.modeFour;
+      : mode === 'three'
+        ? styles.modeThree
+        : styles.modeFour;
 
   const pct = (n: number) => `${Math.round((n / total) * 100)}%`;
   const isActive = (source: string, producer?: string) =>
