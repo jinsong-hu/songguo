@@ -106,6 +106,12 @@ type Entry struct {
 	SessionID     string
 	AgentID       string
 	ParentAgentID string
+	// Entrypoint labels why the call was made — a visible main-loop turn vs a
+	// harness utility call (monitor, count_tokens, title/compaction). Classified
+	// read-only from the request path + body at request-start (see
+	// ClassifyEntrypoint). Empty on legacy rows is treated as main. Read-only
+	// tag; never a routing input.
+	Entrypoint Entrypoint
 }
 
 // ClientInfo is a normalized caller client parsed from User-Agent. Names match

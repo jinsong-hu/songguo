@@ -206,7 +206,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// rate rejections, the forwarded attempt — finalizes THIS row (phase 2) by
 	// id, so an incomplete call stays visible as pending. See docs/arch-gateway.md.
 	callID := uuid.NewString()
-	h.createCall(callID, user.ID, r)
+	h.createCall(callID, user.ID, r, body)
 
 	// 3. Resolve the route: match the wire by path suffix and select the
 	// provider (X-Songguo-Provider header, else body model, else default).
@@ -380,9 +380,15 @@ func resolveWires(targets []router.Target, method, path string) (kept []router.T
 // knows the resolved values. A failure here is logged, not surfaced: the forward
 // still proceeds, and the missing row just means this call won't appear in the
 // ledger. See docs/arch-gateway.md.
-func (h *handler) createCall(callID, userID string, r *http.Request) {
+func (h *handler) createCall(callID, userID string, r *http.Request, body []byte) {
 	attr := extractAttribution(r.Header)
 	client := calls.ParseClientInfo(r.UserAgent(), r.Header.Get("X-Stainless-Os"))
+	// Read-only entrypoint classification: label harness utility calls (monitor,
+	// count_tokens, title/compaction) apart from visible main-loop turns. The
+	// buffered body may be content-encoded; decode a copy for the sniff only —
+	// the original bytes are still forwarded verbatim.
+	entryBody := bodyForMeter(body, r.Header.Get("Content-Encoding"), h.logger)
+	entrypoint := calls.ClassifyEntrypoint(r.URL.Path, entryBody)
 	if err := h.store.CreateCall(calls.Entry{
 		ID:            callID,
 		TS:            h.now(),
@@ -390,6 +396,7 @@ func (h *handler) createCall(callID, userID string, r *http.Request) {
 		SessionID:     attr.session,
 		AgentID:       attr.agent,
 		ParentAgentID: attr.parentAgent,
+		Entrypoint:    entrypoint,
 		ClientName:    client.Name,
 		ClientVersion: client.Version,
 		// Caller OS, read-only from headers (X-Stainless-Os, else codex UA comment).
@@ -883,6 +890,10 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		SessionID:           attr.session,
 		AgentID:       attr.agent,
 		ParentAgentID: attr.parentAgent,
+		// Entrypoint is authoritatively persisted at createCall (phase 1); recomputed
+		// here from the same request path + body so the insights fork's in-memory
+		// entry carries it into the session rollup without re-reading the row.
+		Entrypoint: calls.ClassifyEntrypoint(r.URL.Path, bodyForMeter(reqBody, r.Header.Get("Content-Encoding"), h.logger)),
 		// Client identity is authoritatively persisted at createCall (phase 1);
 		// carried here too so the insights fork sees a complete entry.
 		ClientName:      client.Name,

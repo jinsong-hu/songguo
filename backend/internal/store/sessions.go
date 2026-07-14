@@ -19,6 +19,15 @@ import (
 // after the current last_ts — advances last_status (which drives the inferred
 // outcome). Ordering by last_ts, not arrival, keeps the outcome correct even if
 // the insights fork processes two of a session's calls out of order.
+//
+// Utility calls (monitor, count_tokens, title/compaction — see Entry.Entrypoint)
+// are folded differently: their tokens and cost still count toward the session's
+// spend (real spend the user paid for but never saw), but they do NOT advance the
+// accretion metrics — turns, tool_calls, tool_tokens — which only mean something
+// for the visible conversation. The utility slice is also broken out into the
+// utility_* columns so the dashboard can show a separate track and subtract it.
+// A utility call still extends the time bounds and can carry the latest status,
+// since it is a real call on the session's timeline.
 func (s *Store) UpsertSessionCall(e calls.Entry, title string) error {
 	if e.SessionID == "" {
 		return nil // session-less traffic lives only in calls
@@ -42,10 +51,26 @@ func (s *Store) UpsertSessionCall(e calls.Entry, title string) error {
 		hasSub = 1
 	}
 
+	// Split the accretion metrics from spend. A utility call contributes 0 turns
+	// and 0 tool activity, and its counts/tokens/cost land in the utility_* slice;
+	// a main call contributes 1 turn, its tool metrics, and 0 to the utility slice.
+	// Either way its tokens/cost flow into the session's spend columns below.
+	turnInc, toolCalls, toolTokens := 1, e.ToolCalls, e.ToolTokens
+	utilCalls := 0
+	var utilIn, utilOut, utilCacheRead, utilCacheCreate, utilCost float64
+	if e.Entrypoint.IsUtility() {
+		turnInc, toolCalls, toolTokens = 0, 0, 0
+		utilCalls = 1
+		utilIn, utilOut = e.InputTokens, e.OutputTokens
+		utilCacheRead, utilCacheCreate = e.CachedTokens, e.CacheCreationTokens
+		utilCost = e.Cost
+	}
+
 	if _, err := s.db.Exec(
 		`INSERT INTO sessions
-		   (id, title, first_ts, last_ts, turns, error_count, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, thinking_tokens, cost, tool_calls, tool_tokens, last_status, has_subagents)
-		 VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		   (id, title, first_ts, last_ts, turns, error_count, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, thinking_tokens, cost, tool_calls, tool_tokens, last_status, has_subagents,
+		    utility_calls, utility_input_tokens, utility_output_tokens, utility_cache_read_input_tokens, utility_cache_creation_input_tokens, utility_cost)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   title         = CASE
 		                     WHEN sessions.title = '' AND excluded.title != '' THEN excluded.title
@@ -53,7 +78,7 @@ func (s *Store) UpsertSessionCall(e calls.Entry, title string) error {
 		                   END,
 		   first_ts                    = MIN(first_ts, excluded.first_ts),
 		   last_ts                     = MAX(last_ts, excluded.last_ts),
-		   turns                       = turns + 1,
+		   turns                       = turns + excluded.turns,
 		   error_count                 = error_count + excluded.error_count,
 		   input_tokens                = input_tokens + excluded.input_tokens,
 		   output_tokens               = output_tokens + excluded.output_tokens,
@@ -63,13 +88,20 @@ func (s *Store) UpsertSessionCall(e calls.Entry, title string) error {
 		   cost                        = cost + excluded.cost,
 		   tool_calls                  = tool_calls + excluded.tool_calls,
 		   tool_tokens                 = tool_tokens + excluded.tool_tokens,
+		   utility_calls                       = utility_calls + excluded.utility_calls,
+		   utility_input_tokens                = utility_input_tokens + excluded.utility_input_tokens,
+		   utility_output_tokens               = utility_output_tokens + excluded.utility_output_tokens,
+		   utility_cache_read_input_tokens     = utility_cache_read_input_tokens + excluded.utility_cache_read_input_tokens,
+		   utility_cache_creation_input_tokens = utility_cache_creation_input_tokens + excluded.utility_cache_creation_input_tokens,
+		   utility_cost                        = utility_cost + excluded.utility_cost,
 		   -- Advance the outcome-bearing status only when this call is the newest
 		   -- seen so far, so out-of-order processing can't regress it.
 		   last_status   = CASE WHEN excluded.last_ts >= last_ts THEN excluded.last_status ELSE last_status END,
 		   has_subagents = MAX(has_subagents, excluded.has_subagents)`,
-		e.SessionID, title, tsMs, tsMs, isErr, e.InputTokens, e.OutputTokens,
+		e.SessionID, title, tsMs, tsMs, turnInc, isErr, e.InputTokens, e.OutputTokens,
 		e.CachedTokens, e.CacheCreationTokens, e.ThinkingTokens, e.Cost,
-		e.ToolCalls, e.ToolTokens, e.Status, hasSub,
+		toolCalls, toolTokens, e.Status, hasSub,
+		utilCalls, utilIn, utilOut, utilCacheRead, utilCacheCreate, utilCost,
 	); err != nil {
 		return fmt.Errorf("store: upsert session call: %w", err)
 	}
@@ -92,6 +124,17 @@ type SessionRow struct {
 	Cost                float64
 	LastStatus          int
 	HasSubagents        bool
+	// Utility-call slice: harness calls (monitor, count_tokens, title/compaction)
+	// that share the wire but are not visible turns. These counts/tokens/cost are
+	// ALSO included in the fields above (spend keeps everything); they are broken
+	// out so a caller can show a separate utility track or subtract to get the
+	// context/turn view. Turns and the tool_* fields already EXCLUDE utility calls.
+	UtilityCalls               int
+	UtilityInputTokens         float64
+	UtilityOutputTokens        float64
+	UtilityCachedTokens        float64 // utility_cache_read_input_tokens
+	UtilityCacheCreationTokens float64
+	UtilityCost                float64
 }
 
 // SessionTitle returns the durable title for a materialized session.

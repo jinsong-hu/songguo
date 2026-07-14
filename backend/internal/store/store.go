@@ -295,6 +295,12 @@ func (s *Store) migrate() error {
 		{"calls", "session_id", "TEXT NOT NULL DEFAULT ''"},
 		{"calls", "agent_id", "TEXT NOT NULL DEFAULT ''"},
 		{"calls", "parent_agent_id", "TEXT NOT NULL DEFAULT ''"},
+		// Why the call was made: a visible main-loop turn ('main') vs a harness
+		// utility call (monitor, count_tokens, title/compaction). Classified
+		// read-only from the request path + body. Empty on legacy rows ⇒ treated as
+		// main. Lets the session rollup keep utility spend while excluding it from
+		// the context/turn accretion metrics.
+		{"calls", "entrypoint", "TEXT NOT NULL DEFAULT ''"},
 		// Normalized client identity parsed from User-Agent. Empty for rows
 		// written before this column existed or for unrecognized clients.
 		{"calls", "client_name", "TEXT NOT NULL DEFAULT ''"},
@@ -317,6 +323,19 @@ func (s *Store) migrate() error {
 		{"sessions", "cache_read_input_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"sessions", "cache_creation_input_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"sessions", "thinking_tokens", "REAL NOT NULL DEFAULT 0"},
+		// Utility-call slice of the session: harness calls (monitor, count_tokens,
+		// title/compaction) that share the wire but are not visible turns. Kept in
+		// the session's spend (the token/cost columns above already include them),
+		// and broken out here so the dashboard can show a separate utility track and
+		// subtract it to get the context/turn view. utility_calls counts them;
+		// utility_tokens/cost sum their spend. Turns and tool_calls above EXCLUDE
+		// utility calls (accretion metrics), so turns is the visible-turn count.
+		{"sessions", "utility_calls", "INTEGER NOT NULL DEFAULT 0"},
+		{"sessions", "utility_input_tokens", "REAL NOT NULL DEFAULT 0"},
+		{"sessions", "utility_output_tokens", "REAL NOT NULL DEFAULT 0"},
+		{"sessions", "utility_cache_read_input_tokens", "REAL NOT NULL DEFAULT 0"},
+		{"sessions", "utility_cache_creation_input_tokens", "REAL NOT NULL DEFAULT 0"},
+		{"sessions", "utility_cost", "REAL NOT NULL DEFAULT 0"},
 		{"providers", "allow_unmatched", "INTEGER NOT NULL DEFAULT 0"},
 		{"providers", "quirks", "TEXT NOT NULL DEFAULT '{}'"},
 		{"providers", "api_key", "TEXT NOT NULL DEFAULT ''"},
@@ -474,13 +493,21 @@ func (s *Store) backfillSessions() error {
 	}
 	// last_status is the status of the newest call per session (max ts, tie-broken
 	// by id). A correlated subquery keeps this to one statement.
+	//
+	// The utility split mirrors UpsertSessionCall: a utility call (entrypoint set
+	// and not 'main') adds 0 turns and 0 tool activity but still counts toward the
+	// session's token/cost spend, and is broken out into the utility_* slice. The
+	// isUtil predicate is `entrypoint != '' AND entrypoint != 'main'`; legacy rows
+	// have entrypoint = '' so they all read as main — matching the "default to
+	// main" classification, which is the only safe read of un-tagged history.
 	if _, err := s.db.Exec(`INSERT INTO sessions
-		(id, first_ts, last_ts, turns, error_count, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, thinking_tokens, cost, tool_calls, tool_tokens, last_status, has_subagents)
+		(id, first_ts, last_ts, turns, error_count, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, thinking_tokens, cost, tool_calls, tool_tokens, last_status, has_subagents,
+		 utility_calls, utility_input_tokens, utility_output_tokens, utility_cache_read_input_tokens, utility_cache_creation_input_tokens, utility_cost)
 		SELECT
 			c.session_id,
 			MIN(c.ts),
 			MAX(COALESCE(c.ts_end, c.ts)),
-			COUNT(*),
+			SUM(CASE WHEN c.entrypoint != '' AND c.entrypoint != 'main' THEN 0 ELSE 1 END),
 			SUM(CASE WHEN c.status = 0 OR c.status >= 400 THEN 1 ELSE 0 END),
 			COALESCE(SUM(c.input_tokens), 0),
 			COALESCE(SUM(c.output_tokens), 0),
@@ -488,12 +515,18 @@ func (s *Store) backfillSessions() error {
 			COALESCE(SUM(c.cache_creation_input_tokens), 0),
 			COALESCE(SUM(c.thinking_tokens), 0),
 			COALESCE(SUM(c.cost), 0),
-			COALESCE(SUM(c.tool_calls), 0),
-			COALESCE(SUM(c.tool_tokens), 0),
+			COALESCE(SUM(CASE WHEN c.entrypoint != '' AND c.entrypoint != 'main' THEN 0 ELSE c.tool_calls END), 0),
+			COALESCE(SUM(CASE WHEN c.entrypoint != '' AND c.entrypoint != 'main' THEN 0 ELSE c.tool_tokens END), 0),
 			(SELECT l.status FROM calls l
 			  WHERE l.session_id = c.session_id
 			  ORDER BY COALESCE(l.ts_end, l.ts) DESC, l.id DESC LIMIT 1),
-			MAX(CASE WHEN c.parent_agent_id != '' THEN 1 ELSE 0 END)
+			MAX(CASE WHEN c.parent_agent_id != '' THEN 1 ELSE 0 END),
+			SUM(CASE WHEN c.entrypoint != '' AND c.entrypoint != 'main' THEN 1 ELSE 0 END),
+			COALESCE(SUM(CASE WHEN c.entrypoint != '' AND c.entrypoint != 'main' THEN c.input_tokens ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN c.entrypoint != '' AND c.entrypoint != 'main' THEN c.output_tokens ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN c.entrypoint != '' AND c.entrypoint != 'main' THEN c.cache_read_input_tokens ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN c.entrypoint != '' AND c.entrypoint != 'main' THEN c.cache_creation_input_tokens ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN c.entrypoint != '' AND c.entrypoint != 'main' THEN c.cost ELSE 0 END), 0)
 		FROM calls c
 		WHERE c.session_id != ''
 		GROUP BY c.session_id`); err != nil {
