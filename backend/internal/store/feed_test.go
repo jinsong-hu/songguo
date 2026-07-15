@@ -109,3 +109,67 @@ func TestFeedGroupsSessions(t *testing.T) {
 		t.Errorf("session duration = %d, want 123000", sess.DurationMS)
 	}
 }
+
+// TestFeedSort checks each whitelisted sort key ranks the feed by the right
+// metric and that "failures" scopes to errored rows only.
+func TestFeedSort(t *testing.T) {
+	s := openTestStore(t)
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	// Three standalone requests, each dominant on a different metric.
+	//   A: newest, cheap, small, fast, ok
+	//   B: middle, most tokens + most cost, slow latency, ok
+	//   C: oldest, longest wall-clock (big latency tail), errored (500)
+	appends := []calls.Entry{
+		{TS: base.Add(20 * time.Minute), Model: "mA", Vendor: "v", Status: 200, Cost: 1, InputTokens: 10, OutputTokens: 5, LatencyMS: 500},
+		{TS: base.Add(10 * time.Minute), Model: "mB", Vendor: "v", Status: 200, Cost: 9, InputTokens: 900, OutputTokens: 100, LatencyMS: 8000},
+		{TS: base.Add(0 * time.Minute), Model: "mC", Vendor: "v", Status: 500, Cost: 2, InputTokens: 50, OutputTokens: 20, LatencyMS: 60000},
+	}
+	for i, e := range appends {
+		if _, err := s.AppendCall(e); err != nil {
+			t.Fatalf("AppendCall[%d]: %v", i, err)
+		}
+	}
+
+	// leadModel returns the model of the first feed row for a given sort.
+	leadModel := func(sort string) (string, int) {
+		rows, total, err := s.Feed(CallFilter{FeedSort: sort})
+		if err != nil {
+			t.Fatalf("Feed(%q): %v", sort, err)
+		}
+		if len(rows) == 0 {
+			t.Fatalf("Feed(%q): no rows", sort)
+		}
+		return rows[0].Model, total
+	}
+
+	cases := []struct {
+		sort string
+		want string
+	}{
+		{"", "mA"},         // default: recent-first → newest is A
+		{"recent", "mA"},   // A is newest
+		{"tokens", "mB"},   // B has the most total tokens (1000)
+		{"cost", "mB"},     // B costs the most (9)
+		{"duration", "mC"}, // C has the longest wall-clock (60s latency tail)
+		{"slow", "mC"},     // C has the worst single-call latency (60000)
+		{"turns", "mA"},    // all single-call; tiebreak MAX(ts) DESC → A newest
+	}
+	for _, c := range cases {
+		if got, _ := leadModel(c.sort); got != c.want {
+			t.Errorf("Feed(sort=%q) lead model = %q, want %q", c.sort, got, c.want)
+		}
+	}
+
+	// failures: only C errored, so exactly one row and it is C.
+	rows, total, err := s.Feed(CallFilter{FeedSort: "failures"})
+	if err != nil {
+		t.Fatalf("Feed(failures): %v", err)
+	}
+	if total != 1 || len(rows) != 1 {
+		t.Fatalf("failures total/rows = %d/%d, want 1/1", total, len(rows))
+	}
+	if rows[0].Model != "mC" {
+		t.Errorf("failures lead model = %q, want mC", rows[0].Model)
+	}
+}

@@ -1,8 +1,8 @@
 import { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { api } from '../api/client';
-import type { CallsFilters, FeedRow } from '../api/types';
+import type { CallsFilters, FeedRow, FeedSort } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Skeleton } from '../components/Skeleton';
@@ -12,6 +12,15 @@ import styles from './Overview.module.css';
 
 const PAGE_SIZE = 25;
 const REFRESH_MS = LIVE_REFRESH_MS;
+
+// The "Top ▾" dropdown picks a ranking metric; these are its options.
+const TOP_SORTS: { key: FeedSort; label: string }[] = [
+  { key: 'tokens', label: 'Tokens' },
+  { key: 'cost', label: 'Cost' },
+  { key: 'duration', label: 'Duration' },
+  { key: 'turns', label: 'Turns' },
+];
+const TOP_KEYS = TOP_SORTS.map((t) => t.key);
 
 interface ActivityFeedProps {
   since: number;
@@ -23,21 +32,34 @@ interface ActivityFeedProps {
  * aggregated coding-agent session or a standalone request; clicking a row opens
  * the matching detail page. It replaces the old inline-expand calls table — the
  * captured trace now lives on the request page.
+ *
+ * The title row carries sort tabs — Recent (default) · Top ▾ · Slow · Failures —
+ * that re-rank the whole window server-side (see FeedSort). Changing the sort
+ * resets to the first page.
  */
 export function ActivityFeed({ since, until }: ActivityFeedProps) {
   const [offset, setOffset] = useState(0);
+  const [sort, setSort] = useState<FeedSort>('recent');
   const navigate = useNavigate();
+
+  // Changing the sort must restart pagination, else offset can point past the
+  // end of the newly-ranked list.
+  const changeSort = useCallback((next: FeedSort) => {
+    setSort(next);
+    setOffset(0);
+  }, []);
 
   const filters: CallsFilters = {
     since,
     until,
+    sort,
     limit: PAGE_SIZE,
     offset,
   };
 
   const { data, error, initialLoading, refetch } = useFetch(
     () => api.feed(filters),
-    [since, until, offset],
+    [since, until, sort, offset],
     { intervalMs: REFRESH_MS },
   );
 
@@ -58,8 +80,13 @@ export function ActivityFeed({ since, until }: ActivityFeedProps) {
   const origin = window.location.origin;
 
   return (
-    <div className={`card ${styles.callsPanel}`}>
-      {error ? (
+    <>
+      <div className={styles.sectionTitle}>
+        <span className={styles.sectionName}>Recent activity</span>
+        <FeedTabs sort={sort} onChange={changeSort} />
+      </div>
+      <div className={`card ${styles.callsPanel}`}>
+        {error ? (
         <div style={{ padding: 16 }}>
           <ErrorBanner message={error} onRetry={refetch} />
         </div>
@@ -70,15 +97,19 @@ export function ActivityFeed({ since, until }: ActivityFeedProps) {
           ))}
         </div>
       ) : !data || data.rows.length === 0 ? (
-        <EmptyState
-          title="No activity yet"
-          hint={
-            <>
-              Point an SDK at <code>{origin}/v1</code> using a Songguo user key as the API
-              key to start logging usage.
-            </>
-          }
-        />
+        sort === 'failures' ? (
+          <EmptyState title="No failures in this range" hint="Every request in this window succeeded." />
+        ) : (
+          <EmptyState
+            title="No activity yet"
+            hint={
+              <>
+                Point an SDK at <code>{origin}/v1</code> using a Songguo user key as the API
+                key to start logging usage.
+              </>
+            }
+          />
+        )
       ) : (
         <>
           <div className={styles.tableScroll}>
@@ -124,6 +155,69 @@ export function ActivityFeed({ since, until }: ActivityFeedProps) {
           </div>
         </>
       )}
+      </div>
+    </>
+  );
+}
+
+/**
+ * FeedTabs is the sort control on the Recent-activity title row: a segmented
+ * bar of Recent · Top ▾ · Slow · Failures. Recent/Slow/Failures set the sort
+ * directly; the Top segment is a native <select> overlaid transparently on the
+ * button (zero deps, keyboard-accessible) that picks the ranking metric — it
+ * reads active when any of the four top* sorts is selected.
+ */
+function FeedTabs({ sort, onChange }: { sort: FeedSort; onChange: (s: FeedSort) => void }) {
+  const topActive = TOP_KEYS.includes(sort);
+  const topLabel = TOP_SORTS.find((t) => t.key === sort)?.label ?? 'Tokens';
+  // The metric the dropdown shows/uses when Top isn't the active tab yet: keep
+  // the last-picked top metric, else default to Tokens.
+  const topValue: FeedSort = topActive ? sort : 'tokens';
+
+  return (
+    <div className={styles.seg} role="tablist" aria-label="Activity sort">
+      <button
+        role="tab"
+        aria-selected={sort === 'recent'}
+        className={`${styles.segBtn} ${sort === 'recent' ? styles.segActive : ''}`}
+        onClick={() => onChange('recent')}
+      >
+        Recent
+      </button>
+
+      <div className={`${styles.segBtn} ${styles.segSelect} ${topActive ? styles.segActive : ''}`}>
+        <span>Top · {topLabel}</span>
+        <ChevronDown size={13} aria-hidden="true" />
+        <select
+          className={styles.segSelectInput}
+          aria-label="Top ranking metric"
+          value={topValue}
+          onChange={(e) => onChange(e.target.value as FeedSort)}
+        >
+          {TOP_SORTS.map((t) => (
+            <option key={t.key} value={t.key}>
+              Top {t.label.toLowerCase()}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <button
+        role="tab"
+        aria-selected={sort === 'slow'}
+        className={`${styles.segBtn} ${sort === 'slow' ? styles.segActive : ''}`}
+        onClick={() => onChange('slow')}
+      >
+        Slow
+      </button>
+      <button
+        role="tab"
+        aria-selected={sort === 'failures'}
+        className={`${styles.segBtn} ${sort === 'failures' ? styles.segActive : ''}`}
+        onClick={() => onChange('failures')}
+      >
+        Failures
+      </button>
     </div>
   );
 }

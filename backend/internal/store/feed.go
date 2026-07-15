@@ -59,11 +59,48 @@ const feedGroupKey = `CASE WHEN session_id != '' THEN session_id ELSE 'req:' || 
 // a 4xx/5xx status.
 const feedErrorExpr = `SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END)`
 
-// Feed returns the activity feed ordered by last activity (newest first) and the
-// total group count for pagination. The filter's model/vendor/status conditions
-// apply per-call before grouping, so a session surfaces when any of its calls
-// match — its rolled-up totals then cover only the matching calls. Limit
-// defaults to 100 and is capped at 1000.
+// feedTotalTokensExpr is the row's total token count across all input-side parts
+// plus output — the "tokens" sort key. Mirrors the frontend's usage total.
+const feedTotalTokensExpr = `(COALESCE(SUM(input_tokens),0) + COALESCE(SUM(output_tokens),0) + COALESCE(SUM(cache_read_input_tokens),0) + COALESCE(SUM(cache_creation_input_tokens),0))`
+
+// feedOrder maps a whitelisted sort key to its ORDER BY clause. The values are
+// fixed SQL — the caller's raw sort string only ever selects a key, it is never
+// interpolated — so this is injection-safe. Every clause tiebreaks on
+// MAX(ts) DESC, req_id DESC so paging stays deterministic. Unknown/empty keys
+// fall back to recent-first via feedOrderClause.
+var feedOrder = map[string]string{
+	"recent":   `MAX(ts) DESC, req_id DESC`,
+	"tokens":   feedTotalTokensExpr + ` DESC, MAX(ts) DESC, req_id DESC`,
+	"cost":     `COALESCE(SUM(cost),0) DESC, MAX(ts) DESC, req_id DESC`,
+	"duration": `COALESCE(MAX(ts + latency_ms) - MIN(ts), 0) DESC, MAX(ts) DESC, req_id DESC`,
+	"turns":    `COUNT(*) DESC, MAX(ts) DESC, req_id DESC`,
+	"slow":     `MAX(latency_ms) DESC, MAX(ts) DESC, req_id DESC`,
+	"failures": feedErrorExpr + ` DESC, MAX(ts) DESC, req_id DESC`,
+}
+
+// feedOrderClause resolves a sort key to its ORDER BY clause (recent-first for
+// empty/unknown) and the HAVING clause that scopes the grouped rows. Only
+// "failures" scopes — it drops groups with no errored calls; every other sort
+// keeps them all. Both count and page queries apply the same HAVING so totals
+// and pages stay consistent.
+func feedOrderClause(sort string) (order, having string) {
+	order, ok := feedOrder[sort]
+	if !ok {
+		order = feedOrder["recent"]
+	}
+	if sort == "failures" {
+		having = " HAVING " + feedErrorExpr + " > 0"
+	}
+	return order, having
+}
+
+// Feed returns the activity feed and the total group count for pagination. The
+// ordering is selected by f.FeedSort (recent-first by default; see feedOrder);
+// the "failures" sort additionally scopes to groups with at least one errored
+// call. The filter's model/vendor/status conditions apply per-call before
+// grouping, so a session surfaces when any of its calls match — its rolled-up
+// totals then cover only the matching calls. Limit defaults to 100 and is
+// capped at 1000.
 func (s *Store) Feed(f CallFilter) ([]FeedRow, int, error) {
 	limit := f.Limit
 	if limit <= 0 {
@@ -78,9 +115,10 @@ func (s *Store) Feed(f CallFilter) ([]FeedRow, int, error) {
 	}
 
 	clause, args := f.where()
+	order, having := feedOrderClause(f.FeedSort)
 
 	var total int
-	countQuery := `SELECT COUNT(*) FROM (SELECT 1 FROM calls` + clause + ` GROUP BY ` + feedGroupKey + `)`
+	countQuery := `SELECT COUNT(*) FROM (SELECT 1 FROM calls` + clause + ` GROUP BY ` + feedGroupKey + having + `)`
 	if err := s.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("store: feed count: %w", err)
 	}
@@ -116,8 +154,8 @@ func (s *Store) Feed(f CallFilter) ([]FeedRow, int, error) {
 		MAX(latency_ms) AS latency_ms,
 		MAX(stream) AS stream
 	FROM calls` + clause + `
-	GROUP BY gkey
-	ORDER BY last_ts DESC, req_id DESC
+	GROUP BY gkey` + having + `
+	ORDER BY ` + order + `
 	LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)
 

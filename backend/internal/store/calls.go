@@ -140,8 +140,11 @@ type CallFilter struct {
 	Vendor    string
 	Status    *int
 	SessionID string
-	Limit     int
-	Offset    int
+	// FeedSort selects the feed ordering (and, for "failures", filters to errored
+	// rows). Empty or unknown falls back to recent-first. Ignored by QueryCalls.
+	FeedSort string
+	Limit    int
+	Offset   int
 }
 
 // where builds the shared WHERE clause and its positional arguments.

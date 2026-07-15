@@ -690,6 +690,14 @@ export interface PricingRow {
 
 export type StatusGroup = 'all' | 'ok' | 'error';
 
+/**
+ * Activity-feed ordering. 'recent' (default) is newest-first; the four 'top*'
+ * keys rank the whole window by a metric; 'slow' ranks by worst single-call
+ * latency; 'failures' scopes to errored rows, most errors first. Ignored by
+ * the flat /calls endpoint.
+ */
+export type FeedSort = 'recent' | 'tokens' | 'cost' | 'duration' | 'turns' | 'slow' | 'failures';
+
 export interface CallsFilters {
   since?: number;
   until?: number;
@@ -697,6 +705,7 @@ export interface CallsFilters {
   model?: string;
   vendor?: string;
   status?: StatusGroup;
+  sort?: FeedSort;
   limit?: number;
   offset?: number;
 }

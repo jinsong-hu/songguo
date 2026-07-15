@@ -682,8 +682,7 @@ export function OverviewPage() {
         />
       </div>
 
-      {/* Recent activity */}
-      <SectionTitle name="Recent activity" />
+      {/* Recent activity — ActivityFeed renders its own title row + sort tabs. */}
       <ActivityFeed since={since} until={until} />
     </Page>
   );

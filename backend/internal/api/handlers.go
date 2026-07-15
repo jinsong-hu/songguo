@@ -60,9 +60,10 @@ func parseIntDefault(r *http.Request, key string, def int) int {
 // applying the given default and cap to the limit.
 func callFilterFromQuery(r *http.Request, defLimit, capLimit int) store.CallFilter {
 	f := store.CallFilter{
-		UserID: r.URL.Query().Get("user_id"),
-		Model:  r.URL.Query().Get("model"),
-		Vendor: r.URL.Query().Get("vendor"),
+		UserID:   r.URL.Query().Get("user_id"),
+		Model:    r.URL.Query().Get("model"),
+		Vendor:   r.URL.Query().Get("vendor"),
+		FeedSort: r.URL.Query().Get("sort"),
 	}
 	if since, ok := parseUnixTime(r, "since"); ok {
 		f.Since = since

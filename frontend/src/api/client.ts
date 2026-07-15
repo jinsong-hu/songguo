@@ -141,6 +141,7 @@ function callsQuery(f: CallsFilters): string {
     model: f.model,
     vendor: f.vendor,
     status: f.status && f.status !== 'all' ? f.status : undefined,
+    sort: f.sort && f.sort !== 'recent' ? f.sort : undefined,
     limit: f.limit,
     offset: f.offset,
   });

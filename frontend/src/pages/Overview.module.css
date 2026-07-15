@@ -217,6 +217,29 @@
   color: var(--accent);
 }
 
+/* "Top ▾" segment: a segBtn whose face shows label + chevron, with a
+   transparent native <select> stretched over it to open the OS menu on click. */
+.segSelect {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.segSelectInput {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  opacity: 0;
+  cursor: pointer;
+  /* Sit above the label so the whole segment is the click target. */
+  appearance: none;
+}
+
 /* Calls */
 .callsPanel {
   padding: 0;
