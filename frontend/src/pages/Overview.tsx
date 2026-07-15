@@ -527,7 +527,10 @@ export function OverviewPage() {
         }
       />
       <div className={styles.grid2}>
-        <Panel title={successDim === 'vendor' ? 'By provider' : successDim === 'user' ? 'By user' : 'By service'}>
+        <Panel
+          title={successDim === 'vendor' ? 'By provider' : successDim === 'user' ? 'By user' : 'By service'}
+          caption="bar height = volume · color = success rate"
+        >
           <Frame r={successSeries} height="" empty={successEmpty}>
             <div className={styles.svcTable} role="list">
               {successRows.map((row) => {
@@ -724,11 +727,20 @@ function SectionTitle({ name, hint, info, control }: { name: string; hint?: stri
   );
 }
 
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+function Panel({
+  title,
+  caption,
+  children,
+}: {
+  title: string;
+  caption?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <div className={`card ${styles.panel}`}>
       <div className={styles.panelHead}>
         <span className={styles.panelTitle}>{title}</span>
+        {caption ? <span className={styles.sectionHint}>{caption}</span> : null}
       </div>
       {children}
     </div>
@@ -882,7 +894,7 @@ function BarStrip({ bars, maxReq }: { bars: SuccessBar[]; maxReq: number }) {
               title={
                 b.rate == null
                   ? `${b.label}: no requests`
-                  : `${b.label}: ${b.req} req · ${Math.round(b.rate * 100)}% ok`
+                  : `${b.label}: ${b.req} req (bar height) · ${Math.round(b.rate * 100)}% ok (color)`
               }
             />
           </div>
