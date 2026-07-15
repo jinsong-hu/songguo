@@ -242,6 +242,8 @@ export interface CallEntry {
   session_id: string;
   agent_id: string;
   parent_agent_id: string;
+  /** Why the call was made: "main" or a harness utility kind (monitor | count_tokens | utility). Empty legacy rows = main. */
+  entrypoint: string;
   /** Whether a captured request/response payload exists for this call. */
   has_trace: boolean;
   /** Single-request context-window composition, present when the request was decomposable. */

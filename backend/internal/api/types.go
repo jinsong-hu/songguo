@@ -100,6 +100,9 @@ type entryView struct {
 	SessionID     string               `json:"session_id"`
 	AgentID       string               `json:"agent_id"`
 	ParentAgentID string               `json:"parent_agent_id"`
+	// Why the call was made: "main" (a visible turn) or a harness utility kind
+	// (monitor | count_tokens | utility). Empty on legacy rows ⇒ treated as main.
+	Entrypoint    string               `json:"entrypoint"`
 	HasTrace      bool                 `json:"has_trace"`
 	Composition   *compose.Composition `json:"composition,omitempty"`
 }
@@ -156,6 +159,7 @@ func newEntryView(e calls.Entry) entryView {
 		SessionID:     e.SessionID,
 		AgentID:       e.AgentID,
 		ParentAgentID: e.ParentAgentID,
+		Entrypoint:    string(e.Entrypoint),
 	}
 }
 

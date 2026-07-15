@@ -80,6 +80,19 @@ export function SessionDetailPage() {
   const spanMs = data ? new Date(data.last_ts).getTime() - new Date(data.first_ts).getTime() : 0;
   const sessionClient = useMemo(() => dominantClient(data?.entries ?? []), [data]);
   const mainPromptEntries = useMemo(() => data?.entries.filter(isMainPromptEntry) ?? [], [data]);
+  // Utility ("side-track") calls — monitor, count_tokens, title/compaction — are
+  // hidden by default; the toggle mixes them back into the chronological list,
+  // marked distinctly. The backend already returns every call oldest-first, so
+  // this is a client-side filter, no refetch or sort.
+  const [includeUtility, setIncludeUtility] = useState(false);
+  const utilityCount = useMemo(
+    () => data?.entries.filter(isUtilityEntry).length ?? 0,
+    [data],
+  );
+  const callRows = useMemo(() => {
+    const entries = data?.entries ?? [];
+    return includeUtility ? entries : entries.filter((e) => !isUtilityEntry(e));
+  }, [data, includeUtility]);
   const sessionTitle = data?.title || ctx.data?.title || '';
   const sessionMessages = useFetch(() => api.sessionMessages(id), [id], { enabled: id !== '' });
   const prompt = useMemo(
@@ -229,42 +242,71 @@ export function SessionDetailPage() {
             {data.entries.length === 0 ? (
               <EmptyState title="No calls in this session" />
             ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Time</th>
-                      <th>Wire</th>
-                      <th>Model</th>
-                      <th className="num">Tokens</th>
-                      <th className="num">Cost</th>
-                      <th className="num">Duration</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.entries.map((e) => (
-                      <tr
-                        key={e.id}
-                        className={styles.clickRow}
-                        onClick={() => navigate(`/calls/${encodeURIComponent(e.id)}`)}
+              <>
+                <div className={styles.callsHeader}>
+                  <div className={styles.callsTitle}>
+                    Calls <span className={styles.callsCount}>{callRows.length}</span>
+                  </div>
+                  {utilityCount > 0 ? (
+                    <div className={styles.seg} role="group" aria-label="Utility calls">
+                      <button
+                        type="button"
+                        aria-pressed={includeUtility}
+                        className={`${styles.segBtn} ${includeUtility ? styles.segActive : ''}`}
+                        onClick={() => setIncludeUtility((v) => !v)}
+                        title="Harness utility calls: monitor, count-tokens, title/compaction"
                       >
-                        <td className="mono" style={{ color: 'var(--text-muted)' }}>
-                          {dateTime(e.ts)}
-                        </td>
-                        <td className="mono">{e.wire || '—'}</td>
-                        <td className="mono">{e.model || '—'}</td>
-                        <td className="num">{int(e.input_tokens + e.cache_read_input_tokens + e.cache_creation_input_tokens + e.output_tokens)}</td>
-                        <td className="num">{money(e.cost)}</td>
-                        <td className="num">{duration(e.latency_ms / 1000)}</td>
-                        <td>
-                          <StatusPill status={e.status} />
-                        </td>
+                        Include utility ({utilityCount})
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        <th>Wire</th>
+                        <th>Model</th>
+                        <th className="num">Tokens</th>
+                        <th className="num">Cost</th>
+                        <th className="num">Duration</th>
+                        <th>Status</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {callRows.map((e) => {
+                        const util = isUtilityEntry(e);
+                        return (
+                          <tr
+                            key={e.id}
+                            className={`${styles.clickRow} ${util ? styles.utilityRow : ''}`}
+                            onClick={() => navigate(`/calls/${encodeURIComponent(e.id)}`)}
+                          >
+                            <td className="mono" style={{ color: 'var(--text-muted)' }}>
+                              {dateTime(e.ts)}
+                            </td>
+                            <td className="mono">
+                              {util ? (
+                                <span className={styles.utilityChip}>{utilityLabel(e.entrypoint)}</span>
+                              ) : (
+                                e.wire || '—'
+                              )}
+                            </td>
+                            <td className="mono">{e.model || '—'}</td>
+                            <td className="num">{int(e.input_tokens + e.cache_read_input_tokens + e.cache_creation_input_tokens + e.output_tokens)}</td>
+                            <td className="num">{money(e.cost)}</td>
+                            <td className="num">{duration(e.latency_ms / 1000)}</td>
+                            <td>
+                              <StatusPill status={e.status} />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
         </div>
@@ -779,6 +821,25 @@ type MessagePart =
 
 function isMainPromptEntry(entry: CallEntry): boolean {
   return entry.has_trace && entry.wire !== 'anthropic/count_tokens';
+}
+
+// isUtilityEntry reports whether a call is a harness utility call (monitor,
+// count_tokens, title/compaction) rather than a visible main-loop turn. Mirrors
+// the backend calls.Entrypoint.IsUtility(): empty (legacy) reads as main.
+function isUtilityEntry(entry: CallEntry): boolean {
+  return entry.entrypoint !== '' && entry.entrypoint !== 'main';
+}
+
+// utilityLabel is the short chip text for a utility call's kind.
+function utilityLabel(entrypoint: string): string {
+  switch (entrypoint) {
+    case 'monitor':
+      return 'monitor';
+    case 'count_tokens':
+      return 'count tokens';
+    default:
+      return 'utility';
+  }
 }
 
 function parsePromptReconstruction(source: SessionMessages): PromptReconstruction {
