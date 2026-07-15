@@ -192,16 +192,15 @@ export function OverviewPage() {
 
   // Success bar-table: one entry per series key (pre-ranked by request volume by
   // the backend, top N + "Other"), each carrying a per-bucket bar (request volume
-  // + success rate) and an overall success %. Bar height ∝ requests / maxReq (the
-  // busiest bucket across all shown series), color ∝ the bucket's success band.
-  // Buckets with no requests carry rate=null (rendered as an empty spacer so bars
-  // stay time-aligned across rows).
-  const { successRows, successMaxReq } = useMemo(() => {
+  // + success rate) and an overall success %. Bar height AND color both encode the
+  // bucket's success rate, so a short bar always means a bad bucket regardless of
+  // the current view. Buckets with no requests carry rate=null (rendered as a flat
+  // baseline tick so bars stay time-aligned across rows).
+  const { successRows } = useMemo(() => {
     const data = successSeries.data;
     const keys = data?.models ?? [];
     const bucket = data?.bucket ?? range.bucket;
     const points = data?.points ?? [];
-    let maxReq = 0;
     const rows = keys.map((k) => {
       let totReq = 0;
       let totErr = 0;
@@ -210,12 +209,11 @@ export function OverviewPage() {
         const err = p.errors[k] ?? 0;
         totReq += req;
         totErr += err;
-        if (req > maxReq) maxReq = req;
         return { req, rate: req > 0 ? (req - err) / req : null, label: bucketLabel(p.ts, bucket) };
       });
       return { key: k, bars, requests: totReq, overall: totReq > 0 ? (totReq - totErr) / totReq : null };
     });
-    return { successRows: rows, successMaxReq: maxReq };
+    return { successRows: rows };
   }, [successSeries.data, range.bucket]);
   const successEmpty = successRows.length === 0;
   // Series-key -> display label for the Success dimension (user ids resolve to
@@ -529,7 +527,7 @@ export function OverviewPage() {
       <div className={styles.grid2}>
         <Panel
           title={successDim === 'vendor' ? 'By provider' : successDim === 'user' ? 'By user' : 'By service'}
-          caption="bar height = volume · color = success rate"
+          caption="bar height & color = success rate"
         >
           <Frame r={successSeries} height="" empty={successEmpty}>
             <div className={styles.svcTable} role="list">
@@ -555,7 +553,7 @@ export function OverviewPage() {
                       ) : null}
                       <span className={styles.svcLabel}>{successSeriesLabel(row.key)}</span>
                     </span>
-                    <BarStrip bars={row.bars} maxReq={successMaxReq} />
+                    <BarStrip bars={row.bars} />
                     <span className={styles.rowPct} style={{ color: bandColor(row.overall) }}>
                       {row.overall == null ? '—' : `${Math.round(row.overall * 100)}%`}
                     </span>
@@ -877,15 +875,17 @@ interface SuccessBar {
 
 /**
  * A compact strip of vertical bars, one per time bucket (same buckets as the old
- * line chart). Height ∝ request volume relative to the busiest bucket across all
- * shown rows; color ∝ that bucket's success band. Empty buckets render a flat
- * baseline tick so bars stay time-aligned across rows.
+ * line chart). Height AND color both encode the bucket's success rate on a fixed
+ * 0–100% scale — a short bar always means a bad bucket, regardless of the current
+ * view or traffic. No-traffic buckets (rate=null) render a flat baseline tick so
+ * bars stay time-aligned across rows; a genuinely-failing bucket keeps a small
+ * floor so a 0%-ok bar stays a visible red sliver, distinct from the null tick.
  */
-function BarStrip({ bars, maxReq }: { bars: SuccessBar[]; maxReq: number }) {
+function BarStrip({ bars }: { bars: SuccessBar[] }) {
   return (
     <div className={styles.barStrip} aria-hidden="true">
       {bars.map((b, i) => {
-        const h = maxReq > 0 && b.req > 0 ? Math.max(8, (b.req / maxReq) * 100) : 0;
+        const h = b.rate == null ? 0 : Math.max(6, b.rate * 100);
         return (
           <div key={i} className={styles.barSlot}>
             <div
@@ -894,7 +894,7 @@ function BarStrip({ bars, maxReq }: { bars: SuccessBar[]; maxReq: number }) {
               title={
                 b.rate == null
                   ? `${b.label}: no requests`
-                  : `${b.label}: ${b.req} req (bar height) · ${Math.round(b.rate * 100)}% ok (color)`
+                  : `${b.label}: ${Math.round(b.rate * 100)}% ok · ${b.req} req`
               }
             />
           </div>
