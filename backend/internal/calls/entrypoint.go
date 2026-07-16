@@ -30,9 +30,11 @@ const (
 	// harness fires around a main action. Recognized by its </block> stop
 	// sequence; one-shot and stateless.
 	EntrypointMonitor Entrypoint = "monitor"
-	// EntrypointUtility is a non-main harness call recognized only by a generic
-	// SDK/utility billing entrypoint (cc_entrypoint), without a more specific
-	// signal — e.g. title/summary or compaction calls.
+	// EntrypointUtility is a non-main harness call — title/summary, compaction,
+	// topic detection, background/memory maintenance — recognized by a per-call
+	// cc_workload marker in the billing header. Not to be confused with
+	// cc_entrypoint, which is a fixed per-process launch tag and says nothing
+	// about why an individual call was made.
 	EntrypointUtility Entrypoint = "utility"
 )
 
@@ -48,13 +50,23 @@ func (e Entrypoint) IsUtility() bool {
 //
 //  1. path ending in /count_tokens — structural, unambiguous.
 //  2. a </block> stop sequence — the auto-mode monitor's signature.
-//  3. a non-interactive cc_entrypoint billing marker (e.g. sdk-ts) — a generic
-//     harness/utility call with no finer signal.
+//  3. a cc_workload marker in the billing header — a per-call tag the harness
+//     stamps on non-conversation work (compact, title, topic, cron, memory,
+//     background). Its mere presence flips the call to utility.
 //
 // Anything else is EntrypointMain. Signals 2–3 are heuristics on client-shaped
 // fields, so the default deliberately favors Main: over-excluding would drop a
 // real turn from the user's context history, which is worse than leaving a
 // stray harness call on the chart.
+//
+// NOTE: we key on cc_workload, NOT cc_entrypoint. cc_entrypoint is
+// process.env.CLAUDE_CODE_ENTRYPOINT — a fixed per-process launch tag ("cli",
+// "sdk-cli", "sdk-ts", …) stamped identically onto every request the process
+// makes, main turns included. An SDK/IDE-launched session (e.g. the VS Code
+// extension, which uses "sdk-cli") therefore carries an SDK marker on 100% of
+// its calls; keying utility off it mislabeled entire conversations. cc_workload
+// is the per-call signal: the client wraps only background/harness operations in
+// it, so a main-loop turn carries no cc_workload at all.
 func ClassifyEntrypoint(path string, body []byte) Entrypoint {
 	if p := strings.TrimRight(path, "/"); strings.HasSuffix(p, "/count_tokens") {
 		return EntrypointCountTokens
@@ -77,39 +89,26 @@ func ClassifyEntrypoint(path string, body []byte) Entrypoint {
 		}
 	}
 
-	// cc_entrypoint is stamped by the Anthropic client into a system text block
-	// (x-anthropic-billing-header), e.g. "cc_entrypoint=sdk-ts". Only a KNOWN
-	// SDK/utility marker flips the call to utility; any other value (including
-	// "cli" and anything unrecognized) stays main. This favors main on ambiguity —
-	// over-excluding would drop a real turn from the context history, which is
-	// worse than leaving a stray harness call on the chart.
-	if isUtilityEntrypointMarker(ccEntrypoint(env.System)) {
+	// A cc_workload marker names a non-conversation harness operation. Any value
+	// (compact, title, topic, cron, memory, background, …) flips the call to
+	// utility; a visible main-loop turn carries none, so absence stays main.
+	if billingField(env.System, "cc_workload") != "" {
 		return EntrypointUtility
 	}
 
 	return EntrypointMain
 }
 
-// isUtilityEntrypointMarker reports whether a cc_entrypoint value names a known
-// SDK/utility harness path (vs the interactive CLI or an unknown value). Kept as
-// a small allowlist so an unfamiliar entrypoint defaults to main.
-func isUtilityEntrypointMarker(ep string) bool {
-	switch ep {
-	case "sdk-ts", "sdk-py", "sdk-cli":
-		return true
-	}
-	return false
-}
-
-// ccEntrypoint extracts the cc_entrypoint value from an Anthropic request's
-// `system` field, which may be a plain string or an array of content blocks.
-// The billing header is a text block shaped like
-// "x-anthropic-billing-header: cc_version=…; cc_entrypoint=sdk-ts;". Returns ""
-// when no such marker is present.
-func ccEntrypoint(system any) string {
+// billingField extracts a "key=value" token from the Anthropic
+// x-anthropic-billing-header, which the client stows in the request's `system`
+// field — a plain string or an array of content blocks. The header is a text
+// block shaped like
+// "x-anthropic-billing-header: cc_version=…; cc_entrypoint=sdk-cli; cc_workload=compact;".
+// Returns the value of the first matching key, or "" when absent.
+func billingField(system any, key string) string {
 	switch v := system.(type) {
 	case string:
-		return parseCCEntrypoint(v)
+		return parseBillingField(v, key)
 	case []any:
 		for _, blk := range v {
 			m, ok := blk.(map[string]any)
@@ -117,8 +116,8 @@ func ccEntrypoint(system any) string {
 				continue
 			}
 			if txt, _ := m["text"].(string); txt != "" {
-				if ep := parseCCEntrypoint(txt); ep != "" {
-					return ep
+				if val := parseBillingField(txt, key); val != "" {
+					return val
 				}
 			}
 		}
@@ -126,15 +125,16 @@ func ccEntrypoint(system any) string {
 	return ""
 }
 
-// parseCCEntrypoint pulls the cc_entrypoint token out of a billing-header text
-// blob, tolerant of surrounding "key=value;" pairs and whitespace.
-func parseCCEntrypoint(s string) string {
-	const key = "cc_entrypoint="
-	i := strings.Index(s, key)
+// parseBillingField pulls the value for `key` out of a billing-header text blob,
+// tolerant of surrounding "key=value;" pairs and whitespace. `key` is matched
+// bare (e.g. "cc_workload"); the "=" is appended here.
+func parseBillingField(s, key string) string {
+	marker := key + "="
+	i := strings.Index(s, marker)
 	if i < 0 {
 		return ""
 	}
-	rest := s[i+len(key):]
+	rest := s[i+len(marker):]
 	// Value runs to the next ';', whitespace, or end of string.
 	end := strings.IndexAny(rest, "; \t\r\n")
 	if end >= 0 {

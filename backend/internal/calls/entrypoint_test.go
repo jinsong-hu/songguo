@@ -28,16 +28,22 @@ func TestClassifyEntrypoint(t *testing.T) {
 			want: EntrypointMonitor,
 		},
 		{
-			name: "utility by cc_entrypoint in system blocks",
+			name: "utility by cc_workload in system blocks",
 			path: "/v1/messages",
-			body: `{"model":"claude-opus-4-8","system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.198.e45; cc_entrypoint=sdk-ts;"}],"messages":[]}`,
+			body: `{"model":"claude-opus-4-8","system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.211; cc_entrypoint=sdk-cli; cc_workload=compact;"}],"messages":[]}`,
 			want: EntrypointUtility,
 		},
 		{
-			name: "utility by cc_entrypoint in system string",
+			name: "utility by cc_workload in system string",
 			path: "/v1/messages",
-			body: `{"system":"foo cc_entrypoint=sdk-ts; bar"}`,
+			body: `{"system":"foo cc_entrypoint=sdk-cli; cc_workload=title; bar"}`,
 			want: EntrypointUtility,
+		},
+		{
+			name: "sdk-cli launch without cc_workload stays main",
+			path: "/v1/messages",
+			body: `{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.211; cc_entrypoint=sdk-cli;"}]}`,
+			want: EntrypointMain,
 		},
 		{
 			name: "interactive cc_entrypoint=cli stays main",
