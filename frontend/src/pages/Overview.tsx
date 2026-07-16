@@ -453,7 +453,7 @@ export function OverviewPage() {
       {/* Context distribution */}
       <ContextDistributionCard>
         <Frame r={composition} height="" empty={(composition.data?.sources.length ?? 0) === 0}>
-          {composition.data ? <ContextSunburst data={composition.data} /> : null}
+          {composition.data ? <ContextSunburst data={composition.data} centerLabel="across windows" /> : null}
         </Frame>
       </ContextDistributionCard>
 

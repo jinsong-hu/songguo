@@ -153,6 +153,7 @@ func openAIChatToolTurn(body []byte) (int, int64) {
 // calls are the *_call items immediately preceding that run.
 func responsesToolTurn(body []byte) (int, int64) {
 	var req struct {
+		Model string            `json:"model"`
 		Input []json.RawMessage `json:"input"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil || len(req.Input) == 0 {
@@ -171,7 +172,8 @@ func responsesToolTurn(body []byte) (int, int64) {
 	nResults := 0
 	for ; i >= 0 && isResponsesOutput(typeOf(req.Input[i])); i-- {
 		nResults++
-		tokens += countTokensLocal(responsesOutputText(req.Input[i]))
+		text, visual := responsesOutputWeight(req.Input[i], req.Model)
+		tokens += countTokensLocal(text) + visual
 	}
 	if nResults == 0 {
 		return 0, 0

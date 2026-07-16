@@ -1288,16 +1288,23 @@ func sourceLabel(source string) string {
 	switch source {
 	case "tool_results":
 		return "Tool results"
+	case "tool_calls":
+		return "Tool calls"
 	case "tool_schemas":
 		return "Tool schemas"
 	case "system":
 		return "System & instructions"
+	case "assistant":
+		return "Assistant turns"
+	case "user":
+		return "User turns"
+	case "other":
+		return "Other"
+	// Legacy source keys, kept so historical rows still label.
 	case "reasoning":
 		return "Assistant reasoning"
 	case "actions":
 		return "Assistant actions"
-	case "user":
-		return "User turns"
 	case "attachments":
 		return "Attachments"
 	default:
@@ -1307,6 +1314,17 @@ func sourceLabel(source string) string {
 
 func producerLabel(producer string) string {
 	switch producer {
+	// Synthetic producer keys within the user/assistant buckets.
+	case "text":
+		return "Text"
+	case "reasoning":
+		return "Reasoning"
+	case "attachments":
+		return "Attachments"
+	case "unknown":
+		return "unknown"
+	// Legacy normalized keys, kept so historical rows still label; new rows
+	// carry the request's verbatim tool name, which falls through unchanged.
 	case "read":
 		return "Read"
 	case "bash":
@@ -1321,8 +1339,6 @@ func producerLabel(producer string) string {
 		return "Web"
 	case "builtin":
 		return "built-in"
-	case "unknown":
-		return "unknown"
 	default:
 		return strings.TrimPrefix(producer, "mcp:")
 	}

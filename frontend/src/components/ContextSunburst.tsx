@@ -14,11 +14,15 @@ const CHART_CLS = 'aspect-auto h-full w-full';
 /** Source-bucket labels + colors, shared by the sunburst and its legend. */
 export const SRC_META: Record<string, { label: string; color: string }> = {
   tool_results: { label: 'Tool results', color: 'var(--chart-1)' },
+  tool_calls: { label: 'Tool calls', color: 'var(--chart-8)' },
   tool_schemas: { label: 'Tool schemas', color: 'var(--chart-2)' },
   system: { label: 'System & instructions', color: 'var(--chart-6)' },
+  assistant: { label: 'Assistant turns', color: 'var(--chart-5)' },
+  user: { label: 'User turns', color: 'var(--chart-3)' },
+  other: { label: 'Other', color: 'var(--text-muted)' },
+  // Legacy source keys — historical rows only; new data never emits these.
   reasoning: { label: 'Assistant reasoning', color: 'var(--chart-4)' },
   actions: { label: 'Assistant actions', color: 'var(--chart-5)' },
-  user: { label: 'User turns', color: 'var(--chart-3)' },
   attachments: { label: 'Attachments', color: 'var(--chart-7)' },
   unattributed: { label: 'Unattributed', color: 'var(--text-muted)' },
 };
@@ -37,13 +41,17 @@ export function srcLabel(key: string): string {
 }
 
 export function prodLabel(key: string): string {
-  if (key.startsWith('mcp:')) return key.slice(4);
   const m: Record<string, string> = {
+    // Synthetic keys within the user/assistant buckets.
+    text: 'Text', reasoning: 'Reasoning', attachments: 'Attachments', unknown: 'unknown',
+    // Legacy normalized keys — historical rows only; new data carries the
+    // request's verbatim tool name, which passes through unchanged.
     read: 'Read', bash: 'Bash', grep: 'Grep', glob: 'Glob', task: 'Task',
-    skill: 'Skill', builtin: 'built-in', base: 'base prompt',
-    claude_md: 'CLAUDE.md', memory: 'memory', web: 'Web', unknown: 'unknown',
+    builtin: 'built-in', web: 'Web',
   };
-  return m[key] ?? key;
+  if (m[key]) return m[key];
+  if (key.startsWith('mcp:')) return key.slice(4); // legacy mcp:<server> keys
+  return key;
 }
 
 /** Compact token count for the center label, e.g. 12.3k, 4.5M. */
@@ -54,7 +62,6 @@ function compact(n: number): string {
 }
 
 interface SunburstData {
-  avg_total: number;
   sources: SourceSlice[];
 }
 
@@ -196,11 +203,19 @@ export function ContextSunburst({
   const sources = data.sources;
   const total = sources.reduce((a, s) => a + s.tokens, 0) || 1;
 
-  // Stable color per producer child, reused by both the ring and the legend.
+  // Producers displayed per source: all of them up to four; beyond that the
+  // top three plus an aggregated "other" tail (flat verbatim producers can run
+  // to dozens — silently hiding the tail would misread as full coverage).
+  const shownKids = (s: SourceSlice) => {
+    const children = s.children ?? [];
+    return children.length > 4 ? children.slice(0, 3) : children;
+  };
+
+  // Stable color per displayed producer child, reused by ring and legend.
   const kidColor = new Map<string, string>();
   let pi = 0;
   for (const s of sources) {
-    for (const c of s.children ?? []) kidColor.set(`${s.key}/${c.key}`, PROD_PALETTE[pi++ % PROD_PALETTE.length]);
+    for (const c of shownKids(s)) kidColor.set(`${s.key}/${c.key}`, PROD_PALETTE[pi++ % PROD_PALETTE.length]);
   }
 
   const inner = sources.map((s) => ({ key: s.key, name: srcLabel(s.key), tokens: s.tokens, color: srcColor(s.key) }));
@@ -229,24 +244,39 @@ export function ContextSunburst({
     const children = s.children ?? [];
     const hasKids = children.length > 0;
     const childTotal = children.reduce((a, c) => a + c.tokens, 0) || 1;
+    const shown = shownKids(s);
+    const rest = children.slice(shown.length);
+    const restTokens = rest.reduce((a, c) => a + c.tokens, 0);
     // Ring segments: producer children when the bucket has a drill-down,
     // otherwise the whole bucket as one solid ring (same chrome, no breakdown).
     const segments = hasKids
-      ? children.map((c) => ({
-          key: c.key,
-          name: prodLabel(c.key),
-          tokens: c.tokens,
-          color: kidColor.get(`${s.key}/${c.key}`)!,
-          selected: isActive(s.key, c.key),
-          onClick: () => selectProducer(s.key, c.key),
-        }))
+      ? [
+          ...shown.map((c) => ({
+            key: c.key,
+            name: prodLabel(c.key),
+            tokens: c.tokens,
+            color: kidColor.get(`${s.key}/${c.key}`)!,
+            selected: isActive(s.key, c.key),
+            onClick: (() => selectProducer(s.key, c.key)) as (() => void) | undefined,
+          })),
+          ...(restTokens > 0
+            ? [{
+                key: '__rest',
+                name: `other (${rest.length})`,
+                tokens: restTokens,
+                color: 'var(--text-muted)',
+                selected: false,
+                onClick: undefined as (() => void) | undefined,
+              }]
+            : []),
+        ]
       : [{
           key: s.key,
           name: srcLabel(s.key),
           tokens: s.tokens,
           color: srcColor(s.key),
           selected: isActive(s.key),
-          onClick: () => selectSource(s.key),
+          onClick: (() => selectSource(s.key)) as (() => void) | undefined,
         }];
     return (
       <div key={s.key} className={`${styles.breakout} ${side === 'left' ? styles.breakoutLeft : styles.breakoutRight}`}>
@@ -270,7 +300,7 @@ export function ContextSunburst({
                   <Cell
                     key={seg.key}
                     fill={seg.color}
-                    cursor={onSelect ? 'pointer' : undefined}
+                    cursor={onSelect && seg.onClick ? 'pointer' : undefined}
                     opacity={active && !seg.selected ? 0.5 : 1}
                     onClick={seg.onClick}
                   />
@@ -292,7 +322,7 @@ export function ContextSunburst({
           </button>
           {hasKids ? (
             <div className={styles.breakoutKids}>
-              {children.slice(0, 4).map((c) => (
+              {shown.map((c) => (
                 <button
                   type="button"
                   key={c.key}
@@ -304,6 +334,12 @@ export function ContextSunburst({
                   {prodLabel(c.key)} <span className="mono">{Math.round((c.tokens / childTotal) * 100)}%</span>
                 </button>
               ))}
+              {restTokens > 0 ? (
+                <button type="button" className={styles.kidPick} disabled>
+                  <span className={styles.nlDot} style={{ background: 'var(--text-muted)' }} />
+                  other ({rest.length}) <span className="mono">{Math.round((restTokens / childTotal) * 100)}%</span>
+                </button>
+              ) : null}
             </div>
           ) : (
             <div className={styles.breakoutKids}>

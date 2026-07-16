@@ -138,7 +138,7 @@ export function RequestDetailPage() {
                   }
                 />
               </div>
-              <ContextSunburst data={{ avg_total: data.composition.total, sources: data.composition.sources }} centerLabel="window" />
+              <ContextSunburst data={{ sources: data.composition.sources }} centerLabel="window" />
             </div>
           )}
 

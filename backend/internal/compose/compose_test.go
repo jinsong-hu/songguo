@@ -175,6 +175,21 @@ func TestComposeDeterministic(t *testing.T) {
 	}
 }
 
+// childTokens returns the token count of one producer child, or 0.
+func childTokens(comp Composition, srcKey, prodKey string) int64 {
+	for _, s := range comp.Sources {
+		if s.Key != srcKey {
+			continue
+		}
+		for _, p := range s.Children {
+			if p.Key == prodKey {
+				return p.Tokens
+			}
+		}
+	}
+	return 0
+}
+
 func TestComposeAnthropicSources(t *testing.T) {
 	comp, ok := Compose("anthropic-messages", []byte(sampleAnthropic), 0)
 	if !ok {
@@ -182,7 +197,7 @@ func TestComposeAnthropicSources(t *testing.T) {
 	}
 	want := map[string]bool{
 		"system": true, "tool_schemas": true, "user": true,
-		"reasoning": true, "actions": true, "tool_results": true, "attachments": true,
+		"assistant": true, "tool_calls": true, "tool_results": true,
 	}
 	got := map[string]bool{}
 	for _, s := range comp.Sources {
@@ -193,18 +208,28 @@ func TestComposeAnthropicSources(t *testing.T) {
 			t.Errorf("missing expected source %q", k)
 		}
 	}
-	// tool_schemas must carry a builtin (Read) and an MCP (mcp:github) producer.
-	for _, s := range comp.Sources {
-		if s.Key != "tool_schemas" {
-			continue
-		}
-		prods := map[string]bool{}
-		for _, p := range s.Children {
-			prods[p.Key] = true
-		}
-		if !prods["builtin"] || !prods["mcp:github"] {
-			t.Errorf("tool_schemas producers = %v, want builtin + mcp:github", prods)
-		}
+	// Producers are the verbatim tool names — no builtin lump, no mcp: split.
+	if childTokens(comp, "tool_schemas", "Read") <= 0 {
+		t.Error("tool_schemas missing verbatim producer Read")
+	}
+	if childTokens(comp, "tool_schemas", "mcp__github__list_prs") <= 0 {
+		t.Error("tool_schemas missing verbatim producer mcp__github__list_prs")
+	}
+	if childTokens(comp, "tool_calls", "Read") <= 0 {
+		t.Error("tool_calls missing verbatim producer Read")
+	}
+	if childTokens(comp, "tool_results", "Read") <= 0 {
+		t.Error("tool_results missing verbatim producer Read")
+	}
+	// Thinking is a child of assistant; the image is a child of user.
+	if childTokens(comp, "assistant", "reasoning") <= 0 {
+		t.Error("assistant missing reasoning child")
+	}
+	if childTokens(comp, "assistant", "text") <= 0 {
+		t.Error("assistant missing text child")
+	}
+	if childTokens(comp, "user", "attachments") <= 0 {
+		t.Error("user missing attachments child")
 	}
 }
 
@@ -222,10 +247,8 @@ func TestComposeAnthropicThinkingSignatureIgnored(t *testing.T) {
 	if !ok {
 		t.Fatal("ok=false")
 	}
-	for _, s := range comp.Sources {
-		if s.Key == "reasoning" {
-			t.Fatalf("signature-only thinking produced reasoning tokens: %+v", s)
-		}
+	if got := childTokens(comp, "assistant", "reasoning"); got != 0 {
+		t.Fatalf("signature-only thinking produced reasoning tokens: %d", got)
 	}
 
 	withThinking := `{
@@ -241,13 +264,7 @@ func TestComposeAnthropicThinkingSignatureIgnored(t *testing.T) {
 	if !ok {
 		t.Fatal("ok=false")
 	}
-	var reasoning int64
-	for _, s := range comp.Sources {
-		if s.Key == "reasoning" {
-			reasoning = s.Tokens
-		}
-	}
-	if reasoning <= 0 {
+	if childTokens(comp, "assistant", "reasoning") <= 0 {
 		t.Fatal("thinking text did not produce reasoning tokens")
 	}
 }
@@ -296,19 +313,8 @@ func TestComposeAnthropicImageUsesVisualTokensNotBase64(t *testing.T) {
 	if !ok {
 		t.Fatal("ok=false")
 	}
-	var readToolResults int64
-	for _, src := range comp.Sources {
-		if src.Key != "tool_results" {
-			continue
-		}
-		for _, child := range src.Children {
-			if child.Key == "read" {
-				readToolResults = child.Tokens
-			}
-		}
-	}
-	if readToolResults != 64 {
-		t.Fatalf("read tool result tokens = %d, want 64 visual tokens", readToolResults)
+	if got := childTokens(comp, "tool_results", "Read"); got != 64 {
+		t.Fatalf("Read tool result tokens = %d, want 64 visual tokens", got)
 	}
 }
 
@@ -336,15 +342,10 @@ func TestComposeOpenAIPatchImageUsesVisualTokensNotBase64(t *testing.T) {
 	if !ok {
 		t.Fatal("ok=false")
 	}
-	var attachments int64
-	for _, src := range comp.Sources {
-		if src.Key == "attachments" {
-			attachments = src.Tokens
-		}
-	}
-	// 1024 patches * gpt-5-mini's 1.62 multiplier, rounded up.
-	if attachments != 1659 {
-		t.Fatalf("attachment tokens = %d, want 1659", attachments)
+	// 1024 patches * gpt-5-mini's 1.62 multiplier, rounded up. The image is a
+	// child of the carrying user turn, not a separate source.
+	if got := childTokens(comp, "user", "attachments"); got != 1659 {
+		t.Fatalf("user attachment tokens = %d, want 1659", got)
 	}
 }
 
@@ -396,7 +397,7 @@ func TestComposeOpenAIResponsesSources(t *testing.T) {
 	}
 	want := map[string]bool{
 		"system": true, "tool_schemas": true, "user": true,
-		"reasoning": true, "actions": true, "tool_results": true,
+		"assistant": true, "tool_calls": true, "tool_results": true,
 	}
 	got := map[string]bool{}
 	for _, s := range comp.Sources {
@@ -408,21 +409,20 @@ func TestComposeOpenAIResponsesSources(t *testing.T) {
 		}
 	}
 
-	for _, s := range comp.Sources {
-		switch s.Key {
-		case "tool_schemas":
-			prods := map[string]bool{}
-			for _, p := range s.Children {
-				prods[p.Key] = true
-			}
-			if !prods["builtin"] || !prods["mcp:github"] {
-				t.Errorf("tool_schemas producers = %v, want builtin + mcp:github", prods)
-			}
-		case "tool_results":
-			if len(s.Children) != 1 || s.Children[0].Key != "exec_command" {
-				t.Errorf("tool_results producers = %+v, want exec_command", s.Children)
-			}
-		}
+	if childTokens(comp, "tool_schemas", "exec_command") <= 0 {
+		t.Error("tool_schemas missing verbatim producer exec_command")
+	}
+	if childTokens(comp, "tool_schemas", "mcp__github__list_prs") <= 0 {
+		t.Error("tool_schemas missing verbatim producer mcp__github__list_prs")
+	}
+	if childTokens(comp, "tool_calls", "exec_command") <= 0 {
+		t.Error("tool_calls missing producer exec_command")
+	}
+	if childTokens(comp, "tool_results", "exec_command") <= 0 {
+		t.Error("tool_results missing producer exec_command")
+	}
+	if childTokens(comp, "assistant", "reasoning") <= 0 {
+		t.Error("assistant missing reasoning child")
 	}
 }
 
@@ -438,10 +438,239 @@ func TestComposeOpenAIResponsesEncryptedReasoningIgnored(t *testing.T) {
 	if !ok {
 		t.Fatal("ok=false")
 	}
+	if got := childTokens(comp, "assistant", "reasoning"); got != 0 {
+		t.Fatalf("encrypted-only reasoning produced reasoning tokens: %d", got)
+	}
+}
+
+// TestComposeOpenAIResponsesCustomToolAttribution is the fix for the dominant
+// 'unknown 51%' bucket: custom_tool_call (and other non-function call items)
+// register in the call-id map, so their outputs attribute to the verbatim
+// tool name.
+func TestComposeOpenAIResponsesCustomToolAttribution(t *testing.T) {
+	body := `{
+	  "model": "gpt-x",
+	  "input": [
+	    {"type": "custom_tool_call", "name": "exec", "input": "ls", "call_id": "ctc_1"},
+	    {"type": "custom_tool_call_output", "call_id": "ctc_1", "output": "main.go README.md"},
+	    {"type": "local_shell_call", "call_id": "lsc_1", "action": {"command": ["pwd"]}},
+	    {"type": "local_shell_call_output", "call_id": "lsc_1", "output": "/repo"}
+	  ]
+	}`
+	comp, ok := Compose("openai/responses", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	if childTokens(comp, "tool_results", "exec") <= 0 {
+		t.Error("custom_tool_call_output not attributed to exec")
+	}
+	// A name-less call attributes as its type — the identifier the request has.
+	if childTokens(comp, "tool_results", "local_shell_call") <= 0 {
+		t.Error("local_shell_call_output not attributed to local_shell_call")
+	}
+	if childTokens(comp, "tool_results", "unknown") != 0 {
+		t.Error("attributable outputs still landed in unknown")
+	}
+}
+
+// additional_tools items carry tool schemas; they weigh as tool_schemas per
+// verbatim tool name, not as an opaque assistant action.
+func TestComposeOpenAIResponsesAdditionalTools(t *testing.T) {
+	body := `{
+	  "model": "gpt-x",
+	  "input": [
+	    {"type": "additional_tools", "role": "developer", "tools": [
+	      {"name": "exec", "description": "Run a command", "parameters": {"type": "object"}},
+	      {"name": "wait", "description": "Wait", "parameters": {"type": "object"}}
+	    ]},
+	    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+	  ]
+	}`
+	comp, ok := Compose("openai/responses", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	if childTokens(comp, "tool_schemas", "exec") <= 0 || childTokens(comp, "tool_schemas", "wait") <= 0 {
+		t.Errorf("additional_tools not attributed as tool_schemas: %+v", comp.Sources)
+	}
+}
+
+// Typeless shorthand message items ({role, content} with no type) route by
+// role, and images weigh visually even for models without a published spec
+// (fail-open default tile spec) — never as base64 text.
+func TestComposeOpenAIResponsesTypelessMessageAndUnknownModelImage(t *testing.T) {
+	body := fmt.Sprintf(`{
+	  "model": "gpt-5.6-sol",
+	  "input": [
+	    {"role": "user", "content": [
+	      {"type": "input_text", "text": "what is this?"},
+	      {"type": "input_image", "image_url": %q}
+	    ]}
+	  ]
+	}`, testPNGDataURL(t, 1024, 1024))
+	comp, ok := Compose("openai/responses", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	got := childTokens(comp, "user", "attachments")
+	if got <= 0 {
+		t.Fatal("unknown-model image was dropped from the taxonomy")
+	}
+	// Far below what base64-as-text would produce (a 1024px PNG is >1KB of
+	// base64 per few tokens); the default tile spec caps this in the hundreds.
+	if got > 10000 {
+		t.Fatalf("image weight %d looks like tokenized base64, not a visual estimate", got)
+	}
+}
+
+// image_generation_call items weigh their base64 result visually, never as
+// base64 text.
+func TestComposeOpenAIResponsesImageGenerationCall(t *testing.T) {
+	png := base64.StdEncoding.EncodeToString(testPNG(t, 200, 200))
+	body := fmt.Sprintf(`{
+	  "model": "gpt-image-2",
+	  "input": [
+	    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "draw a cat"}]},
+	    {"type": "image_generation_call", "id": "ig_1", "result": %q}
+	  ]
+	}`, png)
+	comp, ok := Compose("openai/responses", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	got := childTokens(comp, "tool_results", "image_generation_call")
+	if got <= 0 {
+		t.Fatal("image_generation_call result not weighed")
+	}
+	if got > 10000 {
+		t.Fatalf("result weight %d looks like tokenized base64, not a visual estimate", got)
+	}
+}
+
+// Developer-role and legacy function-role chat messages must not vanish.
+func TestComposeOpenAIChatDeveloperAndFunctionRoles(t *testing.T) {
+	body := `{
+	  "model": "gpt-x",
+	  "messages": [
+	    {"role": "developer", "content": "Follow the house style."},
+	    {"role": "user", "content": "hi"},
+	    {"role": "assistant", "content": "calling", "tool_calls": [
+	      {"id": "c1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":\"SF\"}"}}
+	    ]},
+	    {"role": "function", "name": "get_weather", "content": "sunny"}
+	  ]
+	}`
+	comp, ok := Compose("openai-chat", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	var system int64
 	for _, s := range comp.Sources {
-		if s.Key == "reasoning" {
-			t.Fatalf("encrypted-only reasoning produced reasoning tokens: %+v", s)
+		if s.Key == "system" {
+			system = s.Tokens
 		}
+	}
+	if system <= 0 {
+		t.Error("developer message did not weigh as system")
+	}
+	if childTokens(comp, "tool_results", "get_weather") <= 0 {
+		t.Error("legacy function-role result not attributed via its name field")
+	}
+	if childTokens(comp, "tool_calls", "get_weather") <= 0 {
+		t.Error("assistant tool_calls not attributed to tool_calls bucket")
+	}
+}
+
+// Anthropic base64 PDF documents weigh per page, never as base64 text.
+func TestComposeAnthropicDocumentWeighsPagesNotBase64(t *testing.T) {
+	pdf := "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R >>\nendobj\n4 0 obj\n<< /Type /Page /Parent 2 0 R >>\nendobj\n%%EOF"
+	body := fmt.Sprintf(`{
+	  "model": "claude-x",
+	  "messages": [
+	    {"role": "user", "content": [
+	      {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": %q}},
+	      {"type": "text", "text": "summarize"}
+	    ]}
+	  ]
+	}`, base64.StdEncoding.EncodeToString([]byte(pdf)))
+	comp, ok := Compose("anthropic-messages", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	if got := childTokens(comp, "user", "attachments"); got != 2*2250 {
+		t.Fatalf("document tokens = %d, want 2 pages x 2250", got)
+	}
+}
+
+// Array-form system prompts weigh per block so the drill-down can itemize a
+// multi-part prompt; text blocks weigh their text, without JSON framing.
+func TestComposeAnthropicSystemArraySplitsBlocks(t *testing.T) {
+	body := `{
+	  "model": "claude-x",
+	  "system": [
+	    {"type": "text", "text": "Base prompt.", "cache_control": {"type": "ephemeral"}},
+	    {"type": "text", "text": "Project instructions."}
+	  ],
+	  "messages": [{"role": "user", "content": "hi"}]
+	}`
+	comp, ok := Compose("anthropic-messages", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	var systemBlocks int
+	for _, b := range comp.Blocks {
+		if b.Source == "system" {
+			systemBlocks++
+		}
+	}
+	if systemBlocks != 2 {
+		t.Fatalf("system blocks = %d, want 2", systemBlocks)
+	}
+}
+
+// Unrecognized block types land in the explicit "other" bucket, not a guessed
+// role bucket.
+func TestComposeAnthropicUnknownTypeGoesToOther(t *testing.T) {
+	body := `{
+	  "model": "claude-x",
+	  "messages": [
+	    {"role": "user", "content": [
+	      {"type": "container_upload", "file_id": "file_abc"},
+	      {"type": "text", "text": "use the file"}
+	    ]}
+	  ]
+	}`
+	comp, ok := Compose("anthropic-messages", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	var other int64
+	for _, s := range comp.Sources {
+		if s.Key == "other" {
+			other = s.Tokens
+		}
+	}
+	if other <= 0 {
+		t.Fatal("unknown block type did not land in other")
+	}
+}
+
+// Chat tool messages fall back to their legacy name field for attribution
+// when the tool_call_id lookup misses.
+func TestComposeOpenAIChatToolNameFallback(t *testing.T) {
+	body := `{
+	  "model": "gpt-x",
+	  "messages": [
+	    {"role": "user", "content": "hi"},
+	    {"role": "tool", "tool_call_id": "missing", "name": "search_docs", "content": "found 3 results"}
+	  ]
+	}`
+	comp, ok := Compose("openai-chat", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	if childTokens(comp, "tool_results", "search_docs") <= 0 {
+		t.Error("tool message name field not used as attribution fallback")
 	}
 }
 

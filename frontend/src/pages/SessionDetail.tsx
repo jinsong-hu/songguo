@@ -27,7 +27,11 @@ import { useFetch } from '../lib/useFetch';
 import { dateTime, duration, int, money } from '../lib/format';
 import styles from './Detail.module.css';
 
-const SRC_ORDER = ['tool_results', 'tool_schemas', 'system', 'reasoning', 'actions', 'user', 'attachments', 'unattributed'];
+const SRC_ORDER = [
+  'tool_results', 'tool_calls', 'tool_schemas', 'system', 'assistant', 'user', 'other',
+  // Legacy source keys — historical rows only.
+  'reasoning', 'actions', 'attachments', 'unattributed',
+];
 
 export function SessionDetailPage() {
   const { id = '' } = useParams();
@@ -571,7 +575,7 @@ function contextBlockType(block: ContextBlock, promptBlock?: PromptBlock): strin
   if (block.type === 'Text block') {
     if (block.source === 'system') return 'System text';
     if (block.source === 'user') return 'User text';
-    if (block.source === 'actions') return 'Assistant text';
+    if (block.source === 'assistant' || block.source === 'actions') return 'Assistant text';
   }
   return promptBlock?.title ?? block.type;
 }
@@ -864,7 +868,7 @@ function parsePromptReconstruction(source: SessionMessages): PromptReconstructio
     );
   }
   const tools = mergeUnique([] as ToolInfo[], toolInfos(source.tools), (tool) =>
-    compositionBlockHash('tool_schemas', schemaProducer(tool.name), tool.name || 'Tool schema', tool.hashText),
+    compositionBlockHash('tool_schemas', tool.name || 'unknown', tool.name || 'Tool schema', tool.hashText),
   );
   const messages = source.messages.map(promptMessage).filter((message) => message.parts.length > 0);
 
@@ -912,7 +916,7 @@ function promptBlocks(prompt: Omit<PromptReconstruction, 'blocks'>): PromptBlock
 
   prompt.tools.forEach((tool, i) => {
     const text = toolBlockText(tool);
-    const producer = schemaProducer(tool.name);
+    const producer = tool.name || 'unknown';
     const title = tool.name || `Tool schema ${i + 1}`;
     const detail = 'Tool schema';
     out.push({
@@ -949,7 +953,8 @@ function collectPartBlocks(
   const baseId = messagePartDomId(messageIndex, path);
   const baseDetail = `${role} message`;
   if (part.kind === 'tool_result') {
-    const producer = toolProducer(toolNames.get(part.toolUseId) ?? '');
+    // Producer is the request's verbatim tool name, mirroring the backend.
+    const producer = toolNames.get(part.toolUseId) || 'unknown';
     const text = part.parts.map(messagePartSnippetText).join('\n');
     const title = part.toolUseId ? `Tool result ${part.toolUseId}` : 'Tool result';
     out.push({
@@ -966,13 +971,15 @@ function collectPartBlocks(
   }
   if (part.kind === 'tool_use') {
     const text = messagePartCopyText(part);
+    const producer = part.name || 'unknown';
     const hashLabel = part.hashLabel || part.name || 'Tool use';
     const title = part.name || hashLabel;
     out.push({
       id: part.id ? toolPartDomId('use', part.id) : baseId,
-      source: 'actions',
+      source: 'tool_calls',
+      producer,
       tokens: estimateTokens(text),
-      hash: compositionBlockHash('actions', '', hashLabel, part.hashText || text),
+      hash: compositionBlockHash('tool_calls', producer, hashLabel, part.hashText || text),
       title,
       detail: baseDetail,
       snippet: text,
@@ -983,11 +990,13 @@ function collectPartBlocks(
     const text = messagePartSnippetText(part);
     const title = part.label;
     const hashLabel = part.hashLabel || (part.kind === 'image' ? 'Attachment' : 'Image');
+    const source = role === 'assistant' ? 'assistant' : 'user';
     out.push({
       id: baseId,
-      source: 'attachments',
+      source,
+      producer: 'attachments',
       tokens: estimateMessagePartTokens(part, model),
-      hash: compositionBlockHash('attachments', '', hashLabel, part.hashText || ''),
+      hash: compositionBlockHash(source, 'attachments', hashLabel, part.hashText || ''),
       title,
       detail: baseDetail,
       snippet: text,
@@ -1000,24 +1009,42 @@ function collectPartBlocks(
     const title = part.label;
     out.push({
       id: baseId,
-      source: 'reasoning',
+      source: 'assistant',
+      producer: 'reasoning',
       tokens: estimateTokens(text),
-      hash: compositionBlockHash('reasoning', '', 'Reasoning', text),
+      hash: compositionBlockHash('assistant', 'reasoning', 'Reasoning', text),
       title,
       detail: baseDetail,
       snippet: text,
     });
     return;
   }
+  if (part.kind === 'raw') {
+    // Unrecognized block types land in the explicit "other" bucket.
+    const title = partTitle(part);
+    const text = compactJson(part.raw);
+    out.push({
+      id: baseId,
+      source: 'other',
+      tokens: estimateTokens(text),
+      hash: compositionBlockHash('other', '', title, text),
+      title,
+      detail: baseDetail,
+      snippet: messagePartCopyText(part),
+    });
+    return;
+  }
 
-  const source = role === 'assistant' ? 'actions' : role === 'system' || role === 'developer' ? 'system' : 'user';
+  const source = role === 'assistant' ? 'assistant' : role === 'system' || role === 'developer' ? 'system' : 'user';
+  const producer = source === 'system' ? '' : 'text';
   const text = messagePartCopyText(part);
   const title = partTitle(part);
   out.push({
     id: baseId,
     source,
+    producer: producer || undefined,
     tokens: estimateTokens(text),
-    hash: compositionBlockHash(source, '', title, text),
+    hash: compositionBlockHash(source, producer, title, text),
     title,
     detail: baseDetail,
     snippet: text,
@@ -1385,12 +1412,14 @@ function messagePart(raw: unknown): MessagePart | MessagePart[] {
 
   const type = typeof raw.type === 'string' ? raw.type : '';
   if (type === 'tool_use') {
+    const name = typeof raw.name === 'string' ? raw.name : '';
     return {
       kind: 'tool_use',
       id: typeof raw.id === 'string' ? raw.id : '',
-      name: typeof raw.name === 'string' ? raw.name : '',
+      name,
       input: stripCacheControl(raw.input ?? {}),
-      hashLabel: 'Tool use',
+      // Mirrors the backend block label: the verbatim tool name when present.
+      hashLabel: name || 'Tool use',
       hashText: compactJson(raw),
     };
   }
@@ -1442,7 +1471,9 @@ function functionCallPart(raw: unknown): MessagePart {
     id,
     name,
     input: parseJsonMaybe(input),
-    hashLabel: stringField(record.type) === 'function_call' ? 'Function call' : name || 'Tool use',
+    // Mirrors the backend block label: the verbatim tool name, falling back to
+    // the item type for name-less Responses call items.
+    hashLabel: name || (stringField(record.type) === 'function_call' ? 'function_call' : 'Tool use'),
     hashText: compactJson(record),
   };
 }
@@ -1604,9 +1635,21 @@ function isSingleLineText(text: string): boolean {
   return !text.includes('\n') && text.length <= 160;
 }
 
+// systemBlocks mirrors the backend's systemUnits: one block for the plain
+// string form, one per element for the structured (array) form — text blocks
+// weigh their text, anything else its compact JSON.
 function systemBlocks(system: unknown): string[] {
   if (typeof system === 'string') return [system];
   if (system == null) return [];
+  if (Array.isArray(system)) {
+    return system
+      .map((block) =>
+        isRecord(block) && block.type === 'text' && typeof block.text === 'string' && block.text !== ''
+          ? block.text
+          : compactJson(block),
+      )
+      .filter((s) => s !== '');
+  }
   return [compactJson(system)];
 }
 
@@ -1640,40 +1683,6 @@ function toolInfo(tool: unknown): ToolInfo {
     tools: nestedTools,
     hashText: compactJson(tool),
   };
-}
-
-function toolProducer(name: string): string {
-  switch (name) {
-    case 'Read':
-      return 'read';
-    case 'Bash':
-      return 'bash';
-    case 'Grep':
-      return 'grep';
-    case 'Glob':
-      return 'glob';
-    case 'Task':
-      return 'task';
-    case 'WebFetch':
-    case 'WebSearch':
-      return 'web';
-    default:
-      break;
-  }
-  const server = mcpServer(name);
-  if (server) return `mcp:${server}`;
-  return name ? name.toLowerCase() : 'unknown';
-}
-
-function schemaProducer(name: string): string {
-  const server = mcpServer(name);
-  return server ? `mcp:${server}` : 'builtin';
-}
-
-function mcpServer(name: string): string {
-  if (!name.startsWith('mcp__')) return '';
-  const parts = name.split('__');
-  return parts[1] || 'mcp';
 }
 
 function SchemaView({ schema }: { schema: unknown }) {

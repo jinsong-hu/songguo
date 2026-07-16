@@ -378,19 +378,28 @@ export interface SessionMessages {
 
 /** A producer sub-slice of a source bucket (e.g. Read under tool results). */
 export interface ProducerSlice {
-  /** e.g. "read" | "bash" | "grep" | "mcp:chrome" | "task" | "skill" | "builtin" | "claude_md". */
+  /**
+   * The request's verbatim tool name (e.g. "Read", "exec_command",
+   * "mcp__github__list_prs"), or a synthetic key: "text" | "reasoning" |
+   * "attachments" | "unknown". Legacy rows carry normalized keys ("read",
+   * "builtin", "mcp:chrome").
+   */
   key: string;
   tokens: number;
 }
 
 /** One top-level source bucket of the context window. */
 export interface SourceSlice {
-  /** "tool_results" | "tool_schemas" | "system" | "reasoning" | "actions" | "user" | "attachments". */
+  /**
+   * "system" | "tool_schemas" | "user" | "assistant" | "tool_calls" |
+   * "tool_results" | "other". Legacy rows may carry "reasoning" | "actions" |
+   * "attachments".
+   */
   key: string;
   tokens: number;
   /** Portion of this slice served from cache (cache_read) — for the cache cross-cut. */
   cached: number;
-  /** Producer drill-down; present for tool_results and tool_schemas. */
+  /** Producer drill-down; present for all buckets except system and other. */
   children?: ProducerSlice[];
 }
 
