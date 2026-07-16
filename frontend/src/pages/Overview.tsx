@@ -328,11 +328,15 @@ export function OverviewPage() {
           icon={<Coins size={14} />}
           label="Tokens"
           loading={overview.initialLoading}
-          value={ov ? int(ov.tokens.input + ov.tokens.output) : '—'}
+          value={
+            ov
+              ? int(ov.tokens.input + ov.tokens.cached + ov.tokens.cache_creation + ov.tokens.output)
+              : '—'
+          }
           sub={
             ov ? (
               <span className={styles.kpiSubSplit}>
-                <span>{int(ov.tokens.input)} in</span>
+                <span>{int(ov.tokens.input + ov.tokens.cached + ov.tokens.cache_creation)} in</span>
                 <span>{int(ov.tokens.output)} out</span>
               </span>
             ) : undefined
