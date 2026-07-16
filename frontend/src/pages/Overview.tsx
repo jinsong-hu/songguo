@@ -877,20 +877,23 @@ interface SuccessBar {
  * A compact strip of vertical bars, one per time bucket (same buckets as the old
  * line chart). Height AND color both encode the bucket's success rate on a fixed
  * 0–100% scale — a short bar always means a bad bucket, regardless of the current
- * view or traffic. No-traffic buckets (rate=null) render a flat baseline tick so
- * bars stay time-aligned across rows; a genuinely-failing bucket keeps a small
- * floor so a 0%-ok bar stays a visible red sliver, distinct from the null tick.
+ * view or traffic. No-traffic buckets (rate=null) count as a clean 100% — nothing
+ * failed — so they render a full-height green bar rather than a gap; a genuinely-
+ * failing bucket keeps a small floor so a 0%-ok bar stays a visible red sliver.
  */
 function BarStrip({ bars }: { bars: SuccessBar[] }) {
   return (
     <div className={styles.barStrip} aria-hidden="true">
       {bars.map((b, i) => {
-        const h = b.rate == null ? 0 : Math.max(6, b.rate * 100);
+        // No traffic → nothing failed, so render a clean full-height 100% bar
+        // rather than a baseline tick that reads like a gap or a problem.
+        const rate = b.rate == null ? 1 : b.rate;
+        const h = Math.max(6, rate * 100);
         return (
           <div key={i} className={styles.barSlot}>
             <div
               className={styles.bar}
-              style={{ height: `${h}%`, background: bandColor(b.rate) }}
+              style={{ height: `${h}%`, background: bandColor(rate) }}
               title={
                 b.rate == null
                   ? `${b.label}: no requests`
