@@ -145,10 +145,6 @@ blind-pipes to an arbitrary origin.
 | `docs/admin-api.md` | Admin/config API |
 | `README.md` | Build & run |
 
-## Build / test
-
-No Go on the local box — build and test on the Mac mini (`ssh macmini`).
-
 ## Git workflow
 
 - Work in a fresh git worktree for each task; do not edit the primary checkout directly.
