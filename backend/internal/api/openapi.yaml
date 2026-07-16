@@ -185,6 +185,27 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/UsageErrors" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/usage/error-codes:
+    get:
+      tags: [usage]
+      summary: Top error rows grouped by upstream status code over a window
+      operationId: getUsageErrorCodes
+      parameters:
+        - name: dimension
+          in: query
+          schema: { type: string, enum: [model, vendor, user], default: model }
+          description: Series dimension the optional key filter applies to.
+        - { name: key, in: query, schema: { type: string }, description: "Scope to one series (e.g. one model); empty means all traffic." }
+        - $ref: "#/components/parameters/Since"
+        - $ref: "#/components/parameters/Until"
+      responses:
+        "200":
+          description: Error counts by upstream status code, ranked by count (top 8)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UsageErrorCodes" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /api/feed:
     get:
       tags: [calls]
@@ -874,6 +895,17 @@ components:
         client_error: { type: integer, description: Other 4xx }
         server_error: { type: integer, description: 5xx }
         transport: { type: integer, description: status 0 (no response) }
+    UsageErrorCodes:
+      type: object
+      properties:
+        range: { $ref: "#/components/schemas/Range" }
+        rows:
+          type: array
+          items:
+            type: object
+            properties:
+              status: { type: integer, description: Upstream HTTP status (0 = transport error) }
+              count: { type: integer }
     Call:
       type: object
       properties:

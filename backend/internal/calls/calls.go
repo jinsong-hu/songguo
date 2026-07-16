@@ -75,13 +75,13 @@ type Entry struct {
 	// Seconds is billed audio duration (ASR, per_second); Chars is billed text
 	// length (TTS, per_char). Both 0 for token-metered traffic. Images stays in
 	// the raw `Usage` JSON only — no wire meters it into a column yet.
-	Seconds float64
-	Chars   float64
-	Cost                float64 // computed cost in USD (0 if unknown/free)
-	LatencyMS           int64   // full upstream request duration through response body completion
-	TTFTMS              int64   // upstream request start to first generated stream delta; 0 when unavailable
-	GenerationMS        int64   // first generated stream delta to stream completion; 0 when unavailable
-	Stream        bool
+	Seconds      float64
+	Chars        float64
+	Cost         float64 // computed cost in USD (0 if unknown/free)
+	LatencyMS    int64   // full upstream request duration through response body completion
+	TTFTMS       int64   // upstream request start to first generated stream delta; 0 when unavailable
+	GenerationMS int64   // first generated stream delta to stream completion; 0 when unavailable
+	Stream       bool
 	// Tool-use metrics for the just-completed tool round-trip this call carries
 	// (see compose.ToolTurn): the number of tool calls the assistant issued that
 	// turn and a LOCAL o200k token estimate of the results that came back. Read

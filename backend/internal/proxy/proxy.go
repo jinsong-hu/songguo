@@ -861,16 +861,16 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	}
 
 	entry := calls.Entry{
-		ID:            callID,
-		TSEnd:         endedAt,
-		UserID:        userID,
-		Model:         model,
-		Modality:      modality,
-		Vendor:        t.Vendor.Name,
-		CredentialID:  t.Credential.ID,
-		Wire:          wireName,
-		Confidence:    ext.Confidence,
-		Status:        resp.StatusCode,
+		ID:                  callID,
+		TSEnd:               endedAt,
+		UserID:              userID,
+		Model:               model,
+		Modality:            modality,
+		Vendor:              t.Vendor.Name,
+		CredentialID:        t.Credential.ID,
+		Wire:                wireName,
+		Confidence:          ext.Confidence,
+		Status:              resp.StatusCode,
 		Usage:               ext.Raw,
 		InputTokens:         ext.Norm.InputTokens,
 		OutputTokens:        ext.Norm.OutputTokens,
@@ -888,8 +888,8 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		Stream:              stream,
 		Tags:                tags,
 		SessionID:           attr.session,
-		AgentID:       attr.agent,
-		ParentAgentID: attr.parentAgent,
+		AgentID:             attr.agent,
+		ParentAgentID:       attr.parentAgent,
 		// Entrypoint is authoritatively persisted at createCall (phase 1); recomputed
 		// here from the same request path + body so the insights fork's in-memory
 		// entry carries it into the session rollup without re-reading the row.

@@ -62,20 +62,20 @@ func newUserView(u store.User, spent float64) userView {
 
 // entryView is the JSON representation of a call entry.
 type entryView struct {
-	ID            string            `json:"id"`
-	TS            string            `json:"ts"`
-	TSEnd         string            `json:"ts_end,omitempty"` // empty while the call is in flight (pending)
-	Pending       bool              `json:"pending"`          // true when created but not yet finalized
-	UserID        string            `json:"user_id"`
-	Model         string            `json:"model"`
-	Modality      string            `json:"modality"`
-	Vendor        string            `json:"vendor"`
-	CredentialID  string            `json:"credential_id"`
-	Wire          string            `json:"wire"`
-	Confidence    string            `json:"confidence"`
-	Status        int               `json:"status"`
-	Err           string            `json:"err"`
-	Usage         map[string]any    `json:"usage"`
+	ID                  string            `json:"id"`
+	TS                  string            `json:"ts"`
+	TSEnd               string            `json:"ts_end,omitempty"` // empty while the call is in flight (pending)
+	Pending             bool              `json:"pending"`          // true when created but not yet finalized
+	UserID              string            `json:"user_id"`
+	Model               string            `json:"model"`
+	Modality            string            `json:"modality"`
+	Vendor              string            `json:"vendor"`
+	CredentialID        string            `json:"credential_id"`
+	Wire                string            `json:"wire"`
+	Confidence          string            `json:"confidence"`
+	Status              int               `json:"status"`
+	Err                 string            `json:"err"`
+	Usage               map[string]any    `json:"usage"`
 	Cost                float64           `json:"cost"`
 	InputTokens         float64           `json:"input_tokens"`
 	OutputTokens        float64           `json:"output_tokens"`
@@ -88,23 +88,23 @@ type entryView struct {
 	TTFTMS              int64             `json:"ttft_ms"`
 	GenerationMS        int64             `json:"generation_ms"`
 	OutputTPS           float64           `json:"output_tokens_per_second"`
-	Stream        bool              `json:"stream"`
-	Tags          map[string]string `json:"tags"`
-	ClientName    string            `json:"client_name"`
-	ClientVersion string            `json:"client_version"`
+	Stream              bool              `json:"stream"`
+	Tags                map[string]string `json:"tags"`
+	ClientName          string            `json:"client_name"`
+	ClientVersion       string            `json:"client_version"`
 	// Best-effort caller OS (normalized family, e.g. MacOS) and version; empty
 	// when unavailable.
 	ClientOS        string `json:"client_os"`
 	ClientOSVersion string `json:"client_os_version"`
 	// Coding-agent attribution (empty for ordinary API traffic).
-	SessionID     string               `json:"session_id"`
-	AgentID       string               `json:"agent_id"`
-	ParentAgentID string               `json:"parent_agent_id"`
+	SessionID     string `json:"session_id"`
+	AgentID       string `json:"agent_id"`
+	ParentAgentID string `json:"parent_agent_id"`
 	// Why the call was made: "main" (a visible turn) or a harness utility kind
 	// (monitor | count_tokens | utility). Empty on legacy rows ⇒ treated as main.
-	Entrypoint    string               `json:"entrypoint"`
-	HasTrace      bool                 `json:"has_trace"`
-	Composition   *compose.Composition `json:"composition,omitempty"`
+	Entrypoint  string               `json:"entrypoint"`
+	HasTrace    bool                 `json:"has_trace"`
+	Composition *compose.Composition `json:"composition,omitempty"`
 }
 
 // newEntryView converts a calls.Entry into its JSON view.
@@ -122,20 +122,20 @@ func newEntryView(e calls.Entry) entryView {
 		tsEnd = e.TSEnd.UTC().Format(time.RFC3339)
 	}
 	return entryView{
-		ID:            e.ID,
-		TS:            e.TS.UTC().Format(time.RFC3339),
-		TSEnd:         tsEnd,
-		Pending:       e.Status == calls.StatusPending,
-		UserID:        e.UserID,
-		Model:         e.Model,
-		Modality:      string(e.Modality),
-		Vendor:        e.Vendor,
-		CredentialID:  e.CredentialID,
-		Wire:          e.Wire,
-		Confidence:    string(e.Confidence),
-		Status:        e.Status,
-		Err:           e.Err,
-		Usage:         usage,
+		ID:                  e.ID,
+		TS:                  e.TS.UTC().Format(time.RFC3339),
+		TSEnd:               tsEnd,
+		Pending:             e.Status == calls.StatusPending,
+		UserID:              e.UserID,
+		Model:               e.Model,
+		Modality:            string(e.Modality),
+		Vendor:              e.Vendor,
+		CredentialID:        e.CredentialID,
+		Wire:                e.Wire,
+		Confidence:          string(e.Confidence),
+		Status:              e.Status,
+		Err:                 e.Err,
+		Usage:               usage,
 		Cost:                e.Cost,
 		InputTokens:         e.InputTokens,
 		OutputTokens:        e.OutputTokens,
@@ -148,10 +148,10 @@ func newEntryView(e calls.Entry) entryView {
 		TTFTMS:              e.TTFTMS,
 		GenerationMS:        e.GenerationMS,
 		OutputTPS:           outputTokensPerSecond(e.OutputTokens, e.GenerationMS),
-		Stream:        e.Stream,
-		Tags:          tags,
-		ClientName:    e.ClientName,
-		ClientVersion: e.ClientVersion,
+		Stream:              e.Stream,
+		Tags:                tags,
+		ClientName:          e.ClientName,
+		ClientVersion:       e.ClientVersion,
 		// Caller OS, read-only from headers (X-Stainless-Os, else codex UA comment).
 		ClientOS:        e.ClientOS,
 		ClientOSVersion: e.ClientOSVersion,
@@ -381,28 +381,28 @@ type callsView struct {
 // feedRowView is one row of the activity feed: an aggregated session or a
 // standalone request (see kind). Fields not relevant to a kind are zero-valued.
 type feedRowView struct {
-	Kind         string   `json:"kind"` // "session" | "request"
-	SessionID    string   `json:"session_id,omitempty"`
-	Title        string   `json:"title,omitempty"`
-	RequestID    string   `json:"request_id,omitempty"`
-	Calls               int      `json:"calls"`
-	Cost                float64  `json:"cost"`
-	InputTokens         float64  `json:"input_tokens"`
-	OutputTokens        float64  `json:"output_tokens"`
-	CachedTokens        float64  `json:"cache_read_input_tokens"`
-	CacheCreationTokens float64  `json:"cache_creation_input_tokens"`
+	Kind                string  `json:"kind"` // "session" | "request"
+	SessionID           string  `json:"session_id,omitempty"`
+	Title               string  `json:"title,omitempty"`
+	RequestID           string  `json:"request_id,omitempty"`
+	Calls               int     `json:"calls"`
+	Cost                float64 `json:"cost"`
+	InputTokens         float64 `json:"input_tokens"`
+	OutputTokens        float64 `json:"output_tokens"`
+	CachedTokens        float64 `json:"cache_read_input_tokens"`
+	CacheCreationTokens float64 `json:"cache_creation_input_tokens"`
 	// Non-token metered units: seconds (ASR audio duration), chars (TTS text).
-	Seconds             float64  `json:"seconds"`
-	Chars               float64  `json:"chars"`
-	ToolCalls           int      `json:"tool_calls"`
-	ToolTokens          float64  `json:"tool_tokens"`
-	FirstTS             string   `json:"first_ts"`
-	LastTS              string   `json:"last_ts"`
-	DurationMS          int64    `json:"duration_ms"`
-	ErrorCount   int      `json:"error_count"`
-	MajorModel   string   `json:"major_model,omitempty"`
-	Models       []string `json:"models"`
-	Vendors      []string `json:"vendors"`
+	Seconds    float64  `json:"seconds"`
+	Chars      float64  `json:"chars"`
+	ToolCalls  int      `json:"tool_calls"`
+	ToolTokens float64  `json:"tool_tokens"`
+	FirstTS    string   `json:"first_ts"`
+	LastTS     string   `json:"last_ts"`
+	DurationMS int64    `json:"duration_ms"`
+	ErrorCount int      `json:"error_count"`
+	MajorModel string   `json:"major_model,omitempty"`
+	Models     []string `json:"models"`
+	Vendors    []string `json:"vendors"`
 	// Single-call fields, populated only for request rows.
 	Model      string `json:"model,omitempty"`
 	Vendor     string `json:"vendor,omitempty"`
@@ -425,10 +425,10 @@ func newFeedRowView(r store.FeedRow) feedRowView {
 		vendors = []string{}
 	}
 	return feedRowView{
-		Kind:         r.Kind,
-		SessionID:    r.SessionID,
-		Title:        r.Title,
-		RequestID:    r.RequestID,
+		Kind:                r.Kind,
+		SessionID:           r.SessionID,
+		Title:               r.Title,
+		RequestID:           r.RequestID,
 		Calls:               r.Calls,
 		Cost:                r.Cost,
 		InputTokens:         r.InputTokens,
@@ -440,20 +440,20 @@ func newFeedRowView(r store.FeedRow) feedRowView {
 		ToolCalls:           r.ToolCalls,
 		ToolTokens:          r.ToolTokens,
 		FirstTS:             r.FirstTS.UTC().Format(time.RFC3339),
-		LastTS:       r.LastTS.UTC().Format(time.RFC3339),
-		DurationMS:   r.DurationMS,
-		ErrorCount:   r.ErrorCount,
-		MajorModel:   r.MajorModel,
-		Models:       models,
-		Vendors:      vendors,
-		Model:        r.Model,
-		Vendor:       r.Vendor,
-		Wire:         r.Wire,
-		Confidence:   string(r.Confidence),
-		Modality:     string(r.Modality),
-		Status:       r.Status,
-		LatencyMS:    r.LatencyMS,
-		Stream:       r.Stream,
+		LastTS:              r.LastTS.UTC().Format(time.RFC3339),
+		DurationMS:          r.DurationMS,
+		ErrorCount:          r.ErrorCount,
+		MajorModel:          r.MajorModel,
+		Models:              models,
+		Vendors:             vendors,
+		Model:               r.Model,
+		Vendor:              r.Vendor,
+		Wire:                r.Wire,
+		Confidence:          string(r.Confidence),
+		Modality:            string(r.Modality),
+		Status:              r.Status,
+		LatencyMS:           r.LatencyMS,
+		Stream:              r.Stream,
 	}
 }
 
@@ -496,8 +496,8 @@ type sessionView struct {
 	LastTS              string          `json:"last_ts"`
 	Models              []string        `json:"models"`
 	Vendors             []string        `json:"vendors"`
-	Agents       []agentNodeView `json:"agents"`
-	Entries      []entryView     `json:"entries"`
+	Agents              []agentNodeView `json:"agents"`
+	Entries             []entryView     `json:"entries"`
 }
 
 // credentialView is a credential with its key masked. The raw key is NEVER

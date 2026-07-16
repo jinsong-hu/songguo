@@ -14,12 +14,12 @@ import (
 // (Kind == "request"). Calls sharing a captured session id collapse into a
 // single session row; every other call is its own request row.
 type FeedRow struct {
-	Kind         string // "session" | "request"
-	SessionID    string // set when Kind == "session"
-	Title        string // durable captured-session title
-	RequestID    string // the call id (UUID) to link to when Kind == "request"
-	Calls        int    // number of calls in the group (1 for a request row)
-	Cost         float64
+	Kind      string // "session" | "request"
+	SessionID string // set when Kind == "session"
+	Title     string // durable captured-session title
+	RequestID string // the call id (UUID) to link to when Kind == "request"
+	Calls     int    // number of calls in the group (1 for a request row)
+	Cost      float64
 	// Disjoint input-side token parts (InputTokens is fresh/uncached) plus output;
 	// a total is input + cache_read + cache_creation + output.
 	InputTokens         float64
@@ -28,17 +28,17 @@ type FeedRow struct {
 	CacheCreationTokens float64
 	// Non-token metered units: Seconds is billed audio duration (ASR wires),
 	// Chars is billed text length (TTS wires). Both 0 for token-metered rows.
-	Seconds             float64
-	Chars               float64
-	ToolCalls           int     // tool calls issued across the group's turns
-	ToolTokens          float64 // local o200k estimate of tool-result tokens (see compose.ToolTurn)
-	FirstTS             time.Time
-	LastTS       time.Time // ordering key + "last activity" display
-	DurationMS   int64     // max(request start + latency) - first request start
-	ErrorCount   int       // calls with status 0 or >= 400
-	MajorModel   string    // model with the most calls in the group
-	Models       []string  // distinct models touched (session rows)
-	Vendors      []string  // distinct vendors touched (session rows)
+	Seconds    float64
+	Chars      float64
+	ToolCalls  int     // tool calls issued across the group's turns
+	ToolTokens float64 // local o200k estimate of tool-result tokens (see compose.ToolTurn)
+	FirstTS    time.Time
+	LastTS     time.Time // ordering key + "last activity" display
+	DurationMS int64     // max(request start + latency) - first request start
+	ErrorCount int       // calls with status 0 or >= 400
+	MajorModel string    // model with the most calls in the group
+	Models     []string  // distinct models touched (session rows)
+	Vendors    []string  // distinct vendors touched (session rows)
 
 	// Single-call fields, meaningful only for request rows.
 	Model      string
