@@ -211,7 +211,9 @@ export function OverviewPage() {
         totErr += err;
         return { req, rate: req > 0 ? (req - err) / req : null, label: bucketLabel(p.ts, bucket) };
       });
-      return { key: k, bars, requests: totReq, overall: totReq > 0 ? (totReq - totErr) / totReq : null };
+      // Zero volume → nothing failed, so show a clean 100% rather than an
+      // empty "—" that reads like a problem.
+      return { key: k, bars, requests: totReq, overall: totReq > 0 ? (totReq - totErr) / totReq : 1 };
     });
     return { successRows: rows };
   }, [successSeries.data, range.bucket]);
@@ -527,7 +529,6 @@ export function OverviewPage() {
       <div className={styles.grid2}>
         <Panel
           title={successDim === 'vendor' ? 'By provider' : successDim === 'user' ? 'By user' : 'By service'}
-          caption="bar height & color = success rate"
         >
           <Frame r={successSeries} height="" empty={successEmpty}>
             <div className={styles.svcTable} role="list">
