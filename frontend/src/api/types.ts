@@ -229,6 +229,8 @@ export interface CallEntry {
   cache_creation_input_tokens: number;
   /** Reasoning/thinking tokens (subset of output_tokens). */
   thinking_tokens: number;
+  /** Tool-use blocks the assistant emitted in this call's response. */
+  tool_calls: number;
   latency_ms: number;
   ttft_ms: number;
   generation_ms: number;

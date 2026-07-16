@@ -12,6 +12,7 @@ import { CopyButton } from '../components/CopyButton';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
+import { SessionTimeline } from '../components/SessionTimeline';
 import { Skeleton } from '../components/Skeleton';
 import { StatusPill } from '../components/StatusPill';
 import {
@@ -152,6 +153,19 @@ export function SessionDetailPage() {
               footValue={int(turns.length)}
             />
           </div>
+
+          {data.entries.length > 0 && (
+            <div className="card" style={{ padding: 16 }}>
+              <div
+                className={styles.fieldLabel}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 14 }}
+              >
+                Timeline
+                <InfoHint text="Every proxied call on a shared clock. The top lane is the main session; each sub-agent gets its own lane. Bar colour is the call's kind (tool/text turn, monitor, count-tokens, utility, failure); grey fills the idle stretches where no request is in flight. Hover for detail." />
+              </div>
+              <SessionTimeline entries={data.entries} />
+            </div>
+          )}
 
           {distribution && distribution.sources.length > 0 && (
             <ContextDistributionCard
