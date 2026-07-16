@@ -906,8 +906,9 @@ function promptBlocks(prompt: Omit<PromptReconstruction, 'blocks'>): PromptBlock
     out.push({
       id: systemBlockDomId(i),
       source: 'system',
+      producer: 'base',
       tokens: estimateTokens(block),
-      hash: compositionBlockHash('system', '', 'System prompt', block),
+      hash: compositionBlockHash('system', 'base', 'System prompt', block),
       title,
       detail,
       snippet: snippet(block),
@@ -1036,14 +1037,24 @@ function collectPartBlocks(
   }
 
   // Unknown roles mirror the backend's explicit residual, not a guessed bucket.
-  const source =
+  let source =
     role === 'assistant' ? 'assistant'
     : role === 'system' || role === 'developer' ? 'system'
     : role === 'user' ? 'user'
     : 'other';
-  const producer = source === 'user' || source === 'assistant' ? 'text' : '';
+  let producer = source === 'system' ? 'base' : source === 'user' || source === 'assistant' ? 'text' : '';
+  let title = partTitle(part);
   const text = messagePartCopyText(part);
-  const title = partTitle(part);
+  if (source === 'user' && part.kind === 'text') {
+    // Whole-block <system-reminder> wrappers are harness-injected system
+    // weight, mirroring the backend's userTextUnit.
+    const reminder = reminderProducer(part.text);
+    if (reminder) {
+      source = 'system';
+      producer = reminder;
+      title = 'System reminder';
+    }
+  }
   out.push({
     id: baseId,
     source,
@@ -1054,6 +1065,16 @@ function collectPartBlocks(
     detail: baseDetail,
     snippet: text,
   });
+}
+
+// Mirrors the backend's reminderProducer: a block that is wholly a
+// <system-reminder> wrapper classifies as system, by content heuristic.
+function reminderProducer(text: string): string | null {
+  const t = text.trim();
+  if (!t.startsWith('<system-reminder>') || !t.endsWith('</system-reminder>')) return null;
+  if (t.includes('CLAUDE.md')) return 'claude_md';
+  if (t.includes('MEMORY.md')) return 'memory';
+  return 'reminder';
 }
 
 function toolUseNames(messages: PromptMessage[]): Map<string, string> {

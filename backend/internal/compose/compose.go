@@ -424,9 +424,38 @@ func anthTextUnit(role, text string) unit {
 	case "assistant":
 		return unit{src: "assistant", prod: "text", label: "Text block", text: text}
 	case "system", "developer":
-		return unit{src: "system", label: "Text block", text: text}
+		return unit{src: "system", prod: "base", label: "Text block", text: text}
 	default:
-		return unit{src: "user", prod: "text", label: "Text block", text: text}
+		return userTextUnit(text)
+	}
+}
+
+// userTextUnit routes a user-role text block. A block that is wholly a
+// <system-reminder> wrapper is harness-injected instruction weight, not human
+// input — it counts as system, attributed by a content heuristic. Everything
+// else is genuine user text.
+func userTextUnit(text string) unit {
+	if prod, ok := reminderProducer(text); ok {
+		return unit{src: "system", prod: prod, label: "System reminder", text: text}
+	}
+	return unit{src: "user", prod: "text", label: "Text block", text: text}
+}
+
+// reminderProducer classifies a whole-block <system-reminder> wrapper.
+// Mixed blocks (reminder plus real user text) stay user text — read-only
+// sniffing never splits a block it can't attribute cleanly.
+func reminderProducer(text string) (string, bool) {
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "<system-reminder>") || !strings.HasSuffix(t, "</system-reminder>") {
+		return "", false
+	}
+	switch {
+	case strings.Contains(t, "CLAUDE.md"):
+		return "claude_md", true
+	case strings.Contains(t, "MEMORY.md"):
+		return "memory", true
+	default:
+		return "reminder", true
 	}
 }
 
@@ -447,10 +476,10 @@ func anthBlockUnit(role string, raw json.RawMessage, model string, idToName map[
 		// Instruction-role blocks are system weight whatever their type —
 		// mirrors the plain-string form.
 		if b.Type == "text" {
-			return unit{src: "system", label: "Text block", text: b.Text}, b.Text != ""
+			return unit{src: "system", prod: "base", label: "Text block", text: b.Text}, b.Text != ""
 		}
 		if s := compactStr(raw); s != "" {
-			return unit{src: "system", label: blockTypeLabel(b.Type), text: s}, true
+			return unit{src: "system", prod: "base", label: blockTypeLabel(b.Type), text: s}, true
 		}
 		return unit{}, false
 	}
@@ -467,7 +496,13 @@ func anthBlockUnit(role string, raw json.RawMessage, model string, idToName map[
 
 	switch b.Type {
 	case "text":
-		return unit{src: roleSrc, prod: "text", label: "Text block", text: b.Text}, b.Text != ""
+		if b.Text == "" {
+			return unit{}, false
+		}
+		if roleSrc == "user" {
+			return userTextUnit(b.Text), true
+		}
+		return unit{src: roleSrc, prod: "text", label: "Text block", text: b.Text}, true
 	case "thinking":
 		return unit{src: "assistant", prod: "reasoning", label: "Reasoning", text: b.Thinking}, b.Thinking != ""
 	case "redacted_thinking":
@@ -743,12 +778,12 @@ func systemUnits(raw json.RawMessage) []unit {
 		if s == "" {
 			return nil
 		}
-		return []unit{{src: "system", label: "System prompt", text: s}}
+		return []unit{{src: "system", prod: "base", label: "System prompt", text: s}}
 	}
 	blocks := anthBlocks(raw)
 	if blocks == nil {
 		if s := compactStr(raw); s != "" {
-			return []unit{{src: "system", label: "System prompt", text: s}}
+			return []unit{{src: "system", prod: "base", label: "System prompt", text: s}}
 		}
 		return nil
 	}
@@ -764,7 +799,7 @@ func systemUnits(raw json.RawMessage) []unit {
 			text = compactStr(block)
 		}
 		if text != "" {
-			units = append(units, unit{src: "system", label: "System prompt", text: text})
+			units = append(units, unit{src: "system", prod: "base", label: "System prompt", text: text})
 		}
 	}
 	return units
@@ -858,7 +893,7 @@ func parseOpenAI(body []byte) []unit {
 	for _, m := range req.Messages {
 		switch m.Role {
 		case "system", "developer":
-			units = append(units, openAIContentUnits(m.Content, req.Model, "system", "")...)
+			units = append(units, openAIContentUnits(m.Content, req.Model, "system", "base")...)
 		case "user":
 			units = append(units, openAIContentUnits(m.Content, req.Model, "user", "text")...)
 		case "assistant":
@@ -916,6 +951,9 @@ func openAIContentUnits(raw json.RawMessage, model, src, textProd string) []unit
 		if s == "" {
 			return nil
 		}
+		if src == "user" {
+			return []unit{userTextUnit(s)}
+		}
 		return []unit{{src: src, prod: textProd, label: "Text block", text: s}}
 	}
 	var blocks []json.RawMessage
@@ -939,7 +977,13 @@ func openAIContentBlockUnit(raw json.RawMessage, model, src, textProd string) (u
 	_ = json.Unmarshal(raw, &b)
 	switch b.Type {
 	case "text", "input_text", "output_text":
-		return unit{src: src, prod: textProd, label: "Text block", text: b.Text}, b.Text != ""
+		if b.Text == "" {
+			return unit{}, false
+		}
+		if src == "user" {
+			return userTextUnit(b.Text), true
+		}
+		return unit{src: src, prod: textProd, label: "Text block", text: b.Text}, true
 	case "image_url", "input_image":
 		tokens := openAIImageTokens(raw, model)
 		return unit{src: src, prod: "attachments", label: "Image", tokens: tokens}, tokens > 0
@@ -1322,7 +1366,7 @@ func parseOpenAIResponses(body []byte) []unit {
 func responsesRoleSource(role string) (src, textProd string) {
 	switch role {
 	case "system", "developer":
-		return "system", ""
+		return "system", "base"
 	case "user":
 		return "user", "text"
 	case "assistant":

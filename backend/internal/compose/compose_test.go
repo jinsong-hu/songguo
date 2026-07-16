@@ -733,6 +733,49 @@ func TestComposeAnthropicSystemRoleBlockContent(t *testing.T) {
 	}
 }
 
+// System weight carries a producer breakdown: the system field itself is
+// `base`; whole-block <system-reminder> wrappers in user turns are
+// harness-injected system weight, attributed by content heuristic. Genuine
+// user text stays user/text; mixed blocks are never split.
+func TestComposeSystemBreakdown(t *testing.T) {
+	body := `{
+	  "model": "claude-x",
+	  "system": [{"type": "text", "text": "You are a careful assistant."}],
+	  "messages": [
+	    {"role": "user", "content": [
+	      {"type": "text", "text": "<system-reminder>\nContents of /repo/CLAUDE.md (project instructions):\nrules here\n</system-reminder>"},
+	      {"type": "text", "text": "<system-reminder>\nContents of MEMORY.md (user's auto-memory):\n- a fact\n</system-reminder>"},
+	      {"type": "text", "text": "<system-reminder>The TodoWrite tool has not been used recently.</system-reminder>"},
+	      {"type": "text", "text": "please fix the bug"},
+	      {"type": "text", "text": "prefix text <system-reminder>not a whole block</system-reminder>"}
+	    ]}
+	  ]
+	}`
+	comp, ok := Compose("anthropic-messages", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	for _, prod := range []string{"base", "claude_md", "memory", "reminder"} {
+		if childTokens(comp, "system", prod) <= 0 {
+			t.Errorf("system missing producer %s", prod)
+		}
+	}
+	if childTokens(comp, "user", "text") <= 0 {
+		t.Error("genuine user text vanished")
+	}
+	// The mixed block and the plain text stay user; only the three whole-block
+	// reminders move to system.
+	var userTexts int
+	for _, b := range comp.Blocks {
+		if b.Source == "user" {
+			userTexts++
+		}
+	}
+	if userTexts != 2 {
+		t.Errorf("user blocks = %d, want 2 (plain + mixed)", userTexts)
+	}
+}
+
 // pdfPages counts exactly /Page dictionaries — not /Pages, and not /PageLabel
 // or other names that /Page merely prefixes.
 func TestPDFPagesExactNameMatch(t *testing.T) {

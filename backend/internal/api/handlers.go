@@ -240,11 +240,11 @@ func (a *api) handleSessionsOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, sessionStatsView{
-		Range:         rangeView{Since: since.Unix(), Until: until.Unix()},
-		Sessions:      st.Sessions,
-		Completed:     st.Completed,
-		Errored:       st.Errored,
-		Interrupted:   st.Interrupted,
+		Range:          rangeView{Since: since.Unix(), Until: until.Unix()},
+		Sessions:       st.Sessions,
+		Completed:      st.Completed,
+		Errored:        st.Errored,
+		Interrupted:    st.Interrupted,
 		WithSubagents:  st.WithSubagents,
 		TotalTurns:     st.TotalTurns,
 		TotalTokens:    st.TotalTokens,
@@ -807,14 +807,14 @@ func (a *api) sessionData(id string) (sessionView, error) {
 	}
 
 	var (
-		cost, in, out                float64
+		cost, in, out                 float64
 		cacheRead, cacheCreate, think float64
-		errCount                     int
-		modelsSet                    = map[string]struct{}{}
-		vendorsSet                   = map[string]struct{}{}
-		first                        = entries[0].TS
-		last                         = entries[0].TS
-		ids                          = make([]string, 0, len(entries))
+		errCount                      int
+		modelsSet                     = map[string]struct{}{}
+		vendorsSet                    = map[string]struct{}{}
+		first                         = entries[0].TS
+		last                          = entries[0].TS
+		ids                           = make([]string, 0, len(entries))
 	)
 	for _, e := range entries {
 		cost += e.Cost
@@ -868,7 +868,7 @@ func (a *api) sessionData(id string) (sessionView, error) {
 		Models:              sortedStringSet(modelsSet),
 		Vendors:             sortedStringSet(vendorsSet),
 		Agents:              buildAgentTree(entries),
-		Entries:      entViews,
+		Entries:             entViews,
 	}, nil
 }
 
@@ -1323,6 +1323,15 @@ func producerLabel(producer string) string {
 		return "Attachments"
 	case "unknown":
 		return "unknown"
+	// System-bucket producers.
+	case "base":
+		return "Base prompt"
+	case "claude_md":
+		return "CLAUDE.md"
+	case "memory":
+		return "Memory"
+	case "reminder":
+		return "Reminders"
 	// Legacy normalized keys, kept so historical rows still label; new rows
 	// carry the request's verbatim tool name, which falls through unchanged.
 	case "read":

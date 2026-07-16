@@ -44,6 +44,8 @@ export function prodLabel(key: string): string {
   const m: Record<string, string> = {
     // Synthetic keys within the user/assistant buckets.
     text: 'Text', reasoning: 'Reasoning', attachments: 'Attachments', unknown: 'unknown',
+    // System-bucket producers.
+    base: 'Base prompt', claude_md: 'CLAUDE.md', memory: 'Memory', reminder: 'Reminders',
     // Legacy normalized keys — historical rows only; new data carries the
     // request's verbatim tool name, which passes through unchanged.
     read: 'Read', bash: 'Bash', grep: 'Grep', glob: 'Glob', task: 'Task',
