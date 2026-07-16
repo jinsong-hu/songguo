@@ -186,18 +186,12 @@ func responsesToolTurn(body []byte) (int, int64) {
 	return calls, tokens
 }
 
+// isResponsesOutput / isResponsesCall mirror Compose's generalized item-type
+// rules: any *_output item is a tool result, any *_call item invokes a tool.
 func isResponsesOutput(t string) bool {
-	switch t {
-	case "function_call_output", "custom_tool_call_output", "computer_call_output", "local_shell_call_output":
-		return true
-	}
-	return false
+	return strings.HasSuffix(t, "_output")
 }
 
 func isResponsesCall(t string) bool {
-	switch t {
-	case "function_call", "custom_tool_call", "web_search_call", "computer_call", "local_shell_call":
-		return true
-	}
-	return false
+	return strings.HasSuffix(t, "_call")
 }

@@ -1035,8 +1035,13 @@ function collectPartBlocks(
     return;
   }
 
-  const source = role === 'assistant' ? 'assistant' : role === 'system' || role === 'developer' ? 'system' : 'user';
-  const producer = source === 'system' ? '' : 'text';
+  // Unknown roles mirror the backend's explicit residual, not a guessed bucket.
+  const source =
+    role === 'assistant' ? 'assistant'
+    : role === 'system' || role === 'developer' ? 'system'
+    : role === 'user' ? 'user'
+    : 'other';
+  const producer = source === 'user' || source === 'assistant' ? 'text' : '';
   const text = messagePartCopyText(part);
   const title = partTitle(part);
   out.push({
@@ -1150,11 +1155,21 @@ function imageMeta(src: string): ImageMeta {
   };
 }
 
+// DEFAULT_OPENAI_TILE mirrors the backend's fail-open tile spec for
+// uncatalogued OpenAI models.
+const DEFAULT_OPENAI_TILE: OpenAITileSpec = { base: 70, tile: 140 };
+
+function looksOpenAIModel(model: string): boolean {
+  const name = model.toLowerCase();
+  return name.includes('gpt') || /^o\d/.test(name) || name.includes('codex');
+}
+
 function imageTokensForModel(width: number, height: number, model: string, detail?: string): number {
   const patch = openAIPatchSpec(model);
   if (patch) return Math.ceil(openAIPatchCount(width, height, patch.patchBudget) * patch.multiplier);
   const tile = openAITileSpec(model);
   if (tile) return openAITileTokens(width, height, tile, detail);
+  if (looksOpenAIModel(model)) return openAITileTokens(width, height, DEFAULT_OPENAI_TILE, detail);
   return visualTokensForSize(width, height, claudeImageTier(model));
 }
 
@@ -1162,6 +1177,7 @@ function unknownSizeImageTokensForModel(model: string): number {
   const tile = openAITileSpec(model);
   if (tile) return tile.base;
   if (openAIPatchSpec(model)) return 0;
+  if (looksOpenAIModel(model)) return DEFAULT_OPENAI_TILE.base;
   return 0;
 }
 
@@ -1320,7 +1336,14 @@ function readU32BE(bytes: Uint8Array, offset: number): number {
 
 function claudeImageTier(model: string): ImageTier {
   const name = model.toLowerCase();
-  const highModels = ['fable-5', 'fable 5', 'mythos-5', 'mythos 5', 'opus-4.8', 'opus 4.8', 'opus-4.7', 'opus 4.7', 'sonnet-5', 'sonnet 5'];
+  // Dash forms match real model ids (claude-opus-4-8); dot/space forms cover
+  // display names. Mirrors the backend list.
+  const highModels = [
+    'fable-5', 'fable 5', 'mythos-5', 'mythos 5',
+    'opus-4-8', 'opus-4.8', 'opus 4.8',
+    'opus-4-7', 'opus-4.7', 'opus 4.7',
+    'sonnet-5', 'sonnet 5',
+  ];
   return highModels.some((high) => name.includes(high)) ? HIGH_IMAGE_TIER : STANDARD_IMAGE_TIER;
 }
 
@@ -1411,7 +1434,7 @@ function messagePart(raw: unknown): MessagePart | MessagePart[] {
   if (!isRecord(raw)) return { kind: 'raw', label: 'value', raw: stripCacheControl(raw) };
 
   const type = typeof raw.type === 'string' ? raw.type : '';
-  if (type === 'tool_use') {
+  if (type === 'tool_use' || type === 'server_tool_use' || type === 'mcp_tool_use') {
     const name = typeof raw.name === 'string' ? raw.name : '';
     return {
       kind: 'tool_use',

@@ -47,7 +47,7 @@ export function prodLabel(key: string): string {
     // Legacy normalized keys — historical rows only; new data carries the
     // request's verbatim tool name, which passes through unchanged.
     read: 'Read', bash: 'Bash', grep: 'Grep', glob: 'Glob', task: 'Task',
-    builtin: 'built-in', web: 'Web',
+    skill: 'Skill', builtin: 'built-in', web: 'Web',
   };
   if (m[key]) return m[key];
   if (key.startsWith('mcp:')) return key.slice(4); // legacy mcp:<server> keys

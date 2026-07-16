@@ -655,6 +655,93 @@ func TestComposeAnthropicUnknownTypeGoesToOther(t *testing.T) {
 	}
 }
 
+// Chat custom tools (type:"custom") carry their name under custom, not
+// function — schema, call, and result must all attribute to it.
+func TestComposeOpenAIChatCustomToolAttribution(t *testing.T) {
+	body := `{
+	  "model": "gpt-x",
+	  "tools": [{"type": "custom", "custom": {"name": "exec_shell", "description": "Run a command"}}],
+	  "messages": [
+	    {"role": "user", "content": "list files"},
+	    {"role": "assistant", "content": "", "tool_calls": [
+	      {"id": "c1", "type": "custom", "custom": {"name": "exec_shell", "input": "ls"}}
+	    ]},
+	    {"role": "tool", "tool_call_id": "c1", "content": "main.go README.md"}
+	  ]
+	}`
+	comp, ok := Compose("openai-chat", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	for _, src := range []string{"tool_schemas", "tool_calls", "tool_results"} {
+		if childTokens(comp, src, "exec_shell") <= 0 {
+			t.Errorf("%s missing custom-tool producer exec_shell", src)
+		}
+		if childTokens(comp, src, "unknown") != 0 {
+			t.Errorf("%s attributed a named custom tool to unknown", src)
+		}
+	}
+}
+
+// Legacy single function_call assistant fields weigh as tool_calls.
+func TestComposeOpenAIChatLegacyFunctionCall(t *testing.T) {
+	body := `{
+	  "model": "gpt-x",
+	  "messages": [
+	    {"role": "user", "content": "weather?"},
+	    {"role": "assistant", "content": "", "function_call": {"name": "get_weather", "arguments": "{\"city\":\"SF\"}"}},
+	    {"role": "function", "name": "get_weather", "content": "sunny"}
+	  ]
+	}`
+	comp, ok := Compose("openai-chat", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	if childTokens(comp, "tool_calls", "get_weather") <= 0 {
+		t.Error("legacy function_call arguments not weighed as tool_calls")
+	}
+}
+
+// System/developer-role messages weigh as system whether their content is a
+// plain string or blocks.
+func TestComposeAnthropicSystemRoleBlockContent(t *testing.T) {
+	body := `{
+	  "model": "claude-x",
+	  "messages": [
+	    {"role": "system", "content": [{"type": "text", "text": "Be terse."}]},
+	    {"role": "user", "content": "hi"}
+	  ]
+	}`
+	comp, ok := Compose("anthropic-messages", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	var system, other int64
+	for _, s := range comp.Sources {
+		if s.Key == "system" {
+			system = s.Tokens
+		}
+		if s.Key == "other" {
+			other = s.Tokens
+		}
+	}
+	if system <= 0 {
+		t.Error("system-role block content did not weigh as system")
+	}
+	if other != 0 {
+		t.Error("system-role block content leaked into other")
+	}
+}
+
+// pdfPages counts exactly /Page dictionaries — not /Pages, and not /PageLabel
+// or other names that /Page merely prefixes.
+func TestPDFPagesExactNameMatch(t *testing.T) {
+	data := []byte("<< /Type /Pages /Kids [] >> << /Type /Page >> << /Type /PageLabel /S /D >> << /Type/Page >>")
+	if got := pdfPages(data); got != 2 {
+		t.Fatalf("pdfPages = %d, want 2", got)
+	}
+}
+
 // Chat tool messages fall back to their legacy name field for attribution
 // when the tool_call_id lookup misses.
 func TestComposeOpenAIChatToolNameFallback(t *testing.T) {
