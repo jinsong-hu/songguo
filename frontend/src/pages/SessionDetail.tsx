@@ -165,7 +165,7 @@ export function SessionDetailPage() {
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 14 }}
               >
                 Timeline
-                <InfoHint text="Every proxied call on a shared clock. The top lane is the main session; each sub-agent gets its own lane. Bar colour is the call's kind (tool/text turn, monitor, count-tokens, utility, failure); grey fills the idle stretches where no request is in flight. Hover for detail." />
+                <InfoHint text="Every proxied call on a shared clock. The top lane is the main session; each sub-agent gets its own lane. Bar colour is the call's kind (tool/text turn, monitor, count-tokens, utility, failure). Between calls, no request is in flight: each gap is split into an estimated tool-run band (hatched, one slice per tool the next request carried) plus an idle slice — an even 1/(n+1) split, refined later. The bar below sums where the wall-clock went. Hover for detail." />
               </div>
               <SessionTimeline entries={data.entries} />
             </div>
