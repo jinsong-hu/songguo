@@ -463,12 +463,25 @@ export interface DwellBlock {
   dwell: number;
 }
 
-/** GET /api/sessions/{id}/context: growth series, snapshot, dwell. */
+/** A selectable agent scope for a session's context charts. agent_id is "" for
+ *  the main loop; sub-agents carry a non-empty id and a positional label. */
+export interface ContextAgent {
+  agent_id: string;
+  label: string;
+  turns: number;
+}
+
+/** GET /api/sessions/{id}/context: growth series, snapshot, dwell — scoped to
+ *  one agent (the ?agent query param; default is the main loop). */
 export interface SessionContext {
   session_id: string;
   title?: string;
+  /** The agent this view is scoped to ("" = main loop). */
+  agent: string;
+  /** Every selectable scope, main first, for the agent picker. */
+  agents: ContextAgent[];
   turns: ContextTurn[];
-  /** Request-weighted aggregate context distribution for the whole session. */
+  /** Request-weighted aggregate context distribution for the scoped agent. */
   distribution: ContextDistribution;
   /** Latest-window composition tree (snapshot). */
   snapshot: SourceSlice[];

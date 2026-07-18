@@ -716,13 +716,28 @@ type contextBlockView struct {
 // composition, the session's request-weighted aggregate distribution, the
 // latest turn's full snapshot (with producers), and a dwell list (empty until
 // lineage tracking lands).
+//
+// The view is scoped to a single agent (the ?agent query param; default is the
+// main loop). Turns, Distribution, and Snapshot cover only the selected agent's
+// calls; Agents lists every selectable scope so the client can render a picker.
 type sessionContextView struct {
 	SessionID    string                  `json:"session_id"`
 	Title        string                  `json:"title,omitempty"`
+	Agent        string                  `json:"agent"`
+	Agents       []agentScopeView        `json:"agents"`
 	Turns        []contextTurnView       `json:"turns"`
 	Distribution contextDistributionView `json:"distribution"`
 	Snapshot     []compose.Source        `json:"snapshot"`
 	Dwell        []dwellBlockView        `json:"dwell"`
+}
+
+// agentScopeView is one selectable agent in a session's context charts. AgentID
+// is "" for the main loop; sub-agents carry a non-empty id and a positional
+// label ("Sub-agent N") since the ledger holds no semantic sub-agent name.
+type agentScopeView struct {
+	AgentID string `json:"agent_id"`
+	Label   string `json:"label"`
+	Turns   int    `json:"turns"`
 }
 
 // contextTurnView is one turn's composition. Sources maps top-level source key

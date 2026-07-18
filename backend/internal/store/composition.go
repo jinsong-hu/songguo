@@ -166,23 +166,34 @@ func (s *Store) AggregateComposition(since, until *time.Time) (AggComposition, e
 }
 
 // SessionCompositionRow is one call's decomposition within a session, carrying
-// the call's timestamp and agent id for turn ordering and labeling.
+// the call's timestamp and agent ids for turn ordering, agent scoping, and
+// labeling. AgentID is "" for the main loop; a non-empty value is a sub-agent,
+// with ParentAgentID pointing at its spawner.
 type SessionCompositionRow struct {
-	CallID  string
-	TS      time.Time
-	AgentID string
-	Wire    string
-	C       compose.Composition
+	CallID        string
+	TS            time.Time
+	AgentID       string
+	ParentAgentID string
+	Wire          string
+	C             compose.Composition
 }
 
 // SessionComposition returns every composition row for a session's calls,
 // ordered by call timestamp ascending (oldest turn first).
+//
+// Utility calls are EXCLUDED: the composition views (per-turn growth and the
+// aggregated distribution) are accretion metrics for the visible conversation,
+// and harness utility work (monitor, count_tokens, title/compaction, memory,
+// cron, ...) is kept out of them by invariant — see calls.Entrypoint.IsUtility
+// and store/sessions.go. We keep only conversation rows: entrypoint 'main', or
+// empty on legacy rows (which reads as main).
 func (s *Store) SessionComposition(sessionID string) ([]SessionCompositionRow, error) {
 	rows, err := s.db.Query(
-		`SELECT cc.call_id, c.ts, c.agent_id, c.wire, cc.total, cc.cached, cc.sources, cc.blocks
+		`SELECT cc.call_id, c.ts, c.agent_id, c.parent_agent_id, c.wire, cc.total, cc.cached, cc.sources, cc.blocks
 		   FROM context_composition cc
 		   JOIN calls c ON c.id = cc.call_id
 		  WHERE c.session_id = ?
+		    AND (c.entrypoint = '' OR c.entrypoint = 'main')
 		  ORDER BY c.ts ASC`, sessionID,
 	)
 	if err != nil {
@@ -200,7 +211,7 @@ func (s *Store) SessionComposition(sessionID string) ([]SessionCompositionRow, e
 			rawSrc   string
 			rawBlk   string
 		)
-		if err := rows.Scan(&r.CallID, &tsMillis, &r.AgentID, &r.Wire, &total, &cached, &rawSrc, &rawBlk); err != nil {
+		if err := rows.Scan(&r.CallID, &tsMillis, &r.AgentID, &r.ParentAgentID, &r.Wire, &total, &cached, &rawSrc, &rawBlk); err != nil {
 			return nil, fmt.Errorf("store: scan session composition: %w", err)
 		}
 		r.TS = time.UnixMilli(tsMillis)
@@ -229,6 +240,15 @@ func (s *Store) AggregateSessionComposition(sessionID string) (AggComposition, e
 		return AggComposition{}, err
 	}
 	return aggregateCompositionRows(rows), nil
+}
+
+// AggregateRows sums a pre-filtered set of session composition rows (e.g. one
+// agent's turns) into a distribution, using the same request-weighted model as
+// AggregateSessionComposition but over a caller-chosen subset. Callers that have
+// already loaded a session's rows (e.g. to scope by agent) use this to avoid a
+// second query.
+func AggregateRows(rows []SessionCompositionRow) AggComposition {
+	return aggregateCompositionRows(rows)
 }
 
 func aggregateCompositionRows(rows []SessionCompositionRow) AggComposition {

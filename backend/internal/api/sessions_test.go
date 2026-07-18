@@ -47,6 +47,41 @@ func TestBuildAgentTree(t *testing.T) {
 	}
 }
 
+// TestBuildContextAgents checks the agent-scope list for the context charts: the
+// main loop ("") first, then sub-agents in first-seen order with positional
+// labels and per-agent turn counts. (Utility exclusion happens upstream in
+// SessionComposition, so these rows are already conversation turns.)
+func TestBuildContextAgents(t *testing.T) {
+	rows := []store.SessionCompositionRow{
+		{AgentID: ""},
+		{AgentID: "beta"},
+		{AgentID: ""},
+		{AgentID: "alpha"},
+		{AgentID: "beta"},
+	}
+	agents := buildContextAgents(rows)
+	if len(agents) != 3 {
+		t.Fatalf("agents = %d, want 3 (main, beta, alpha)", len(agents))
+	}
+	if agents[0].AgentID != "" || agents[0].Label != "Main" || agents[0].Turns != 2 {
+		t.Errorf("main = %+v, want {\"\" Main 2}", agents[0])
+	}
+	// Sub-agents keep first-seen order: beta (seen at index 1) before alpha.
+	if agents[1].AgentID != "beta" || agents[1].Label != "Sub-agent 1" || agents[1].Turns != 2 {
+		t.Errorf("agents[1] = %+v, want {beta Sub-agent 1 2}", agents[1])
+	}
+	if agents[2].AgentID != "alpha" || agents[2].Label != "Sub-agent 2" || agents[2].Turns != 1 {
+		t.Errorf("agents[2] = %+v, want {alpha Sub-agent 2 1}", agents[2])
+	}
+
+	if !containsAgent(agents, "") || !containsAgent(agents, "alpha") {
+		t.Error("containsAgent should find main and alpha")
+	}
+	if containsAgent(agents, "ghost") {
+		t.Error("containsAgent should not find ghost")
+	}
+}
+
 func TestTitleFromPayload(t *testing.T) {
 	p := store.Payload{
 		ReqBody: []byte(`{

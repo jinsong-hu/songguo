@@ -970,7 +970,13 @@ func (a *api) handleContextComposition(w http.ResponseWriter, r *http.Request) {
 
 // handleSessionContext returns one session's per-turn context composition, its
 // request-weighted distribution, the latest turn's full snapshot, and a
-// (currently empty) dwell list.
+// (currently empty) dwell list — all scoped to one agent.
+//
+// The rows from SessionComposition are already utility-free. This handler then
+// scopes them to a single agent (the ?agent query param): "" or "main" selects
+// the main loop, a non-empty id selects that sub-agent. Absent/unknown values
+// fall back to the default scope (the main loop when present, else the first
+// agent seen). Agents lists every selectable scope for the client's picker.
 func (a *api) handleSessionContext(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	rows, err := a.store.SessionComposition(id)
@@ -978,18 +984,34 @@ func (a *api) handleSessionContext(w http.ResponseWriter, r *http.Request) {
 		a.writeDataErr(w, "session context", err)
 		return
 	}
-	agg, err := a.store.AggregateSessionComposition(id)
-	if err != nil {
-		a.writeDataErr(w, "session context", err)
-		return
+
+	agents := buildContextAgents(rows)
+	sel := r.URL.Query().Get("agent")
+	if sel == "main" {
+		sel = ""
 	}
+	if !containsAgent(agents, sel) {
+		sel = "" // main loop
+		if len(agents) > 0 {
+			sel = agents[0].AgentID
+		}
+	}
+
+	scoped := make([]store.SessionCompositionRow, 0, len(rows))
+	for _, row := range rows {
+		if row.AgentID == sel {
+			scoped = append(scoped, row)
+		}
+	}
+
+	agg := store.AggregateRows(scoped)
 	if agg.Sources == nil {
 		agg.Sources = []compose.Source{}
 	}
 
-	turns := make([]contextTurnView, 0, len(rows))
+	turns := make([]contextTurnView, 0, len(scoped))
 	snapshot := []compose.Source{}
-	for i, row := range rows {
+	for i, row := range scoped {
 		srcMap := make(map[string]int64, len(row.C.Sources))
 		for _, s := range row.C.Sources {
 			srcMap[s.Key] = s.Tokens
@@ -1003,7 +1025,7 @@ func (a *api) handleSessionContext(w http.ResponseWriter, r *http.Request) {
 			Cached:  row.C.Cached,
 			Sources: srcMap,
 		})
-		if i == len(rows)-1 {
+		if i == len(scoped)-1 {
 			snapshot = row.C.Sources
 			if snapshot == nil {
 				snapshot = []compose.Source{}
@@ -1014,16 +1036,62 @@ func (a *api) handleSessionContext(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sessionContextView{
 		SessionID: id,
 		Title:     a.sessionTitle(id),
+		Agent:     sel,
+		Agents:    agents,
 		Turns:     turns,
 		Distribution: contextDistributionView{
 			Requests: agg.Requests,
 			AvgTotal: agg.AvgTotal,
 			Sources:  agg.Sources,
-			Blocks:   a.aggregateSessionBlocks(rows),
+			Blocks:   a.aggregateSessionBlocks(scoped),
 		},
 		Snapshot: snapshot,
 		Dwell:    []dwellBlockView{},
 	})
+}
+
+// buildContextAgents lists the selectable agent scopes for a session's context
+// charts, from its (utility-free) composition rows: the main loop ("") first
+// when present, then each sub-agent in first-seen order. Labels are positional
+// ("Sub-agent N") — the ledger carries no semantic sub-agent name — matching the
+// per-lane labeling in the session timeline.
+func buildContextAgents(rows []store.SessionCompositionRow) []agentScopeView {
+	counts := map[string]int{}
+	var order []string
+	for _, row := range rows {
+		if _, seen := counts[row.AgentID]; !seen {
+			order = append(order, row.AgentID)
+		}
+		counts[row.AgentID]++
+	}
+
+	out := make([]agentScopeView, 0, len(order))
+	if n, ok := counts[""]; ok {
+		out = append(out, agentScopeView{AgentID: "", Label: "Main", Turns: n})
+	}
+	sub := 0
+	for _, agentID := range order {
+		if agentID == "" {
+			continue
+		}
+		sub++
+		out = append(out, agentScopeView{
+			AgentID: agentID,
+			Label:   "Sub-agent " + strconv.Itoa(sub),
+			Turns:   counts[agentID],
+		})
+	}
+	return out
+}
+
+// containsAgent reports whether id is one of the listed agent scopes.
+func containsAgent(agents []agentScopeView, id string) bool {
+	for _, ag := range agents {
+		if ag.AgentID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *api) aggregateSessionBlocks(rows []store.SessionCompositionRow) []contextBlockView {

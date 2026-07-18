@@ -42,10 +42,21 @@ export function SessionDetailPage() {
     { enabled: id !== '' },
   );
 
-  const ctx = useFetch(() => api.sessionContext(id), [id], { enabled: id !== '' });
+  const [selectedAgent, setSelectedAgent] = useState('');
+  const ctx = useFetch(
+    () => api.sessionContext(id, selectedAgent),
+    [id, selectedAgent],
+    { enabled: id !== '' },
+  );
   const [axis, setAxis] = useState<'source' | 'cache'>('source');
 
   const turns = useMemo(() => ctx.data?.turns ?? [], [ctx.data]);
+  // Agent scope for the two context charts. `agents` lists every selectable
+  // scope (main first); `scopedAgent` is the one the server actually resolved to
+  // (echoed back), so the picker highlight stays correct even when a stale
+  // selection falls back to main on a different session.
+  const agents = useMemo(() => ctx.data?.agents ?? [], [ctx.data]);
+  const scopedAgent = ctx.data?.agent ?? '';
   const distribution = ctx.data?.distribution;
   const distributionTotal = useMemo(() => distribution?.sources.reduce((sum, source) => sum + source.tokens, 0) ?? 0, [distribution]);
   const latestCompositionCallId = turns.length ? turns[turns.length - 1].call_id : null;
@@ -168,6 +179,35 @@ export function SessionDetailPage() {
                 <InfoHint text="Every proxied call on a shared clock. The top lane is the main session; each sub-agent gets its own lane. Bar colour is the call's kind (tool/text turn, monitor, count-tokens, utility, failure). Between calls, no request is in flight: each gap is split into an estimated tool-run band (hatched, one slice per tool the next request carried) plus an idle slice — an even 1/(n+1) split, refined later. The bar below sums where the wall-clock went. Hover for detail." />
               </div>
               <SessionTimeline entries={data.entries} />
+            </div>
+          )}
+
+          {agents.length > 1 && (
+            <div className="card" style={{ padding: 16 }}>
+              <div
+                className={styles.fieldLabel}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 12 }}
+              >
+                Context scope
+                <InfoHint text="The distribution and growth charts below show one agent at a time. The main session is the default; each sub-agent (a Task/sub-agent run) keeps its own context window, so viewing them separately avoids interleaving their growth. Harness utility calls (monitor, count-tokens, title/compaction) are excluded from both charts." />
+              </div>
+              <div className={styles.agentScope} role="tablist" aria-label="Context agent scope">
+                {agents.map((ag) => {
+                  const active = ag.agent_id === scopedAgent;
+                  return (
+                    <button
+                      key={ag.agent_id || 'main'}
+                      role="tab"
+                      aria-selected={active}
+                      className={`${styles.agentChip} ${active ? styles.agentChipActive : ''}`}
+                      onClick={() => setSelectedAgent(ag.agent_id)}
+                    >
+                      {ag.label}
+                      <span className={styles.agentChipCount}>{int(ag.turns)}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           )}
 

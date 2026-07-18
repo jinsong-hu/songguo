@@ -233,9 +233,10 @@ export const api = {
   contextComposition: (since: number, until: number) =>
     request<ContextComposition>(`/context/composition${qs({ since, until })}`),
 
-  /** Per-turn context growth, snapshot, and dwell for one session. */
-  sessionContext: (id: string) =>
-    request<SessionContext>(`/sessions/${encodeURIComponent(id)}/context`),
+  /** Per-turn context growth, snapshot, and dwell for one session, scoped to one
+   *  agent (agent="" or omitted → the main loop). */
+  sessionContext: (id: string, agent?: string) =>
+    request<SessionContext>(`/sessions/${encodeURIComponent(id)}/context${qs({ agent: agent || undefined })}`),
 
   /** Fetch the captured request/response trace for a call (UUID). 404 if none. */
   trace: (id: string) => request<CallTrace>(`/calls/${encodeURIComponent(id)}/trace`),

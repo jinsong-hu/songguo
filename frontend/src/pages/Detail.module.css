@@ -933,6 +933,51 @@
   color: var(--accent);
 }
 
+/* Agent scope picker above the two context charts. One chip per selectable
+   agent (main + sub-agents); wraps when a session has many sub-agents. The
+   active chip mirrors the axis toggle's accent. */
+.agentScope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agentChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.agentChip:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.agentChipActive,
+.agentChipActive:hover {
+  border-color: var(--accent);
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+.agentChipCount {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.agentChipActive .agentChipCount {
+  color: var(--accent);
+}
+
 /* Calls table header: title on the left, utility toggle on the right. */
 .callsHeader {
   display: flex;
