@@ -7,13 +7,17 @@
     <meta name="color-scheme" content="light dark" />
     <title>Songguo</title>
     <script>
-      // Apply persisted theme before paint to avoid a flash.
+      // Apply persisted theme before paint to avoid a flash. Preference is
+      // light/dark/auto; auto (also the default when unset) follows the OS.
       (function () {
         try {
           var t = localStorage.getItem('songguo_theme');
-          if (t === 'dark' || t === 'light') {
-            document.documentElement.setAttribute('data-theme', t);
+          if (t !== 'dark' && t !== 'light') {
+            t = window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light';
           }
+          document.documentElement.setAttribute('data-theme', t);
         } catch (e) {}
       })();
     </script>

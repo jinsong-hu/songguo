@@ -11,7 +11,7 @@ import styles from './DocsApi.module.css';
 // schema only). Scalar renders it; we bind its dark mode to the app theme and
 // disable telemetry so a self-hosted gateway never phones home.
 export function DocsApiPage() {
-  const { theme } = useTheme();
+  const { resolvedTheme } = useTheme();
   const specUrl = `${window.location.origin}/openapi.yaml`;
 
   return (
@@ -30,7 +30,7 @@ export function DocsApiPage() {
             url: '/openapi.yaml',
             theme: 'default',
             layout: 'modern',
-            forceDarkModeState: theme,
+            forceDarkModeState: resolvedTheme,
             hideDarkModeToggle: true,
             telemetry: false,
           }}

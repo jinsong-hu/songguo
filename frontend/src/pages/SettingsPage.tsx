@@ -1,4 +1,4 @@
-import { Info, Lock, LockOpen, LogOut, Moon, Sun } from 'lucide-react';
+import { Info, Lock, LockOpen, LogOut, Monitor, Moon, Sun } from 'lucide-react';
 import { api } from '../api/client';
 import { CopyButton } from '../components/CopyButton';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -31,6 +31,12 @@ export function SettingsPage() {
           <div className={styles.panelTitle}>Appearance</div>
           <div className={styles.panelDesc}>Choose how the dashboard looks.</div>
           <div className={styles.themeRow}>
+            <button
+              className={`${styles.themeBtn} ${theme === 'auto' ? styles.themeActive : ''}`}
+              onClick={() => setTheme('auto')}
+            >
+              <Monitor size={15} /> Auto
+            </button>
             <button
               className={`${styles.themeBtn} ${theme === 'light' ? styles.themeActive : ''}`}
               onClick={() => setTheme('light')}
