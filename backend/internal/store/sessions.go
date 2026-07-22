@@ -68,13 +68,19 @@ func (s *Store) UpsertSessionCall(e calls.Entry, title string) error {
 
 	if _, err := s.db.Exec(
 		`INSERT INTO sessions
-		   (id, title, first_ts, last_ts, turns, error_count, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, thinking_tokens, cost, tool_calls, tool_tokens, last_status, has_subagents,
+		   (id, title, user_id, first_ts, last_ts, turns, error_count, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, thinking_tokens, cost, tool_calls, tool_tokens, last_status, has_subagents,
 		    utility_calls, utility_input_tokens, utility_output_tokens, utility_cache_read_input_tokens, utility_cache_creation_input_tokens, utility_cost)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   title         = CASE
 		                     WHEN sessions.title = '' AND excluded.title != '' THEN excluded.title
 		                     ELSE sessions.title
+		                   END,
+		   -- A session belongs to one consumer key; latch the first non-empty id
+		   -- and never overwrite it (mirrors the title fill-if-empty above).
+		   user_id       = CASE
+		                     WHEN sessions.user_id = '' AND excluded.user_id != '' THEN excluded.user_id
+		                     ELSE sessions.user_id
 		                   END,
 		   first_ts                    = MIN(first_ts, excluded.first_ts),
 		   last_ts                     = MAX(last_ts, excluded.last_ts),
@@ -98,7 +104,7 @@ func (s *Store) UpsertSessionCall(e calls.Entry, title string) error {
 		   -- seen so far, so out-of-order processing can't regress it.
 		   last_status   = CASE WHEN excluded.last_ts >= last_ts THEN excluded.last_status ELSE last_status END,
 		   has_subagents = MAX(has_subagents, excluded.has_subagents)`,
-		e.SessionID, title, tsMs, tsMs, turnInc, isErr, e.InputTokens, e.OutputTokens,
+		e.SessionID, title, e.UserID, tsMs, tsMs, turnInc, isErr, e.InputTokens, e.OutputTokens,
 		e.CachedTokens, e.CacheCreationTokens, e.ThinkingTokens, e.Cost,
 		toolCalls, toolTokens, e.Status, hasSub,
 		utilCalls, utilIn, utilOut, utilCacheRead, utilCacheCreate, utilCost,

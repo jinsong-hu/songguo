@@ -189,6 +189,7 @@ func (s *Store) migrate() error {
 		`CREATE TABLE IF NOT EXISTS sessions (
 			id             TEXT PRIMARY KEY,
 			title          TEXT NOT NULL DEFAULT '',
+			user_id        TEXT NOT NULL DEFAULT '',
 			first_ts       INTEGER NOT NULL,
 			last_ts        INTEGER NOT NULL,
 			turns          INTEGER NOT NULL DEFAULT 0,
@@ -316,6 +317,10 @@ func (s *Store) migrate() error {
 		{"calls", "tool_calls", "INTEGER NOT NULL DEFAULT 0"},
 		{"calls", "tool_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"sessions", "title", "TEXT NOT NULL DEFAULT ''"},
+		// Owning consumer key, set from the session's calls going forward. Existing
+		// rows stay '' (no backfill), so a session that predates this column is
+		// visible only in the unscoped operator view, never a user's scoped one.
+		{"sessions", "user_id", "TEXT NOT NULL DEFAULT ''"},
 		{"sessions", "tool_calls", "INTEGER NOT NULL DEFAULT 0"},
 		{"sessions", "tool_tokens", "REAL NOT NULL DEFAULT 0"},
 		// Session-level token rollups mirroring the disjoint calls columns; summed
@@ -353,6 +358,13 @@ func (s *Store) migrate() error {
 	}
 	if err := s.addColumn("context_composition", "blocks", `TEXT NOT NULL DEFAULT '[]'`); err != nil {
 		return err
+	}
+	// Index sessions.user_id for the per-user Behavioral view. Created here, after
+	// the addColumn migration above, so it also lands on pre-existing databases
+	// where the column was just added (a CREATE INDEX in the table-creation block
+	// would run before the column exists).
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)`); err != nil {
+		return fmt.Errorf("store: index sessions.user_id: %w", err)
 	}
 	if _, err := s.db.Exec(`UPDATE users SET capture = 0 WHERE capture IS NULL`); err != nil {
 		return fmt.Errorf("store: backfill users.capture: %w", err)

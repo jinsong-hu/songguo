@@ -27,11 +27,13 @@ func TestOverviewScopedToUserKey(t *testing.T) {
 		t.Fatalf("CreateUser bob: %v", err)
 	}
 
-	// Alice: two successful gpt-4o calls totalling $3.00. Bob: one $10.00 call.
+	// Alice: two successful gpt-4o calls totalling $3.00, one of them session-
+	// bearing (sessA). Bob: one $10.00 call in its own session (sessB). The
+	// session-bearing calls fold into the per-user sessions rollup.
 	entries := []calls.Entry{
 		{TS: now.Add(-1 * time.Hour), UserID: alice.ID, Model: "gpt-4o", Modality: calls.ModalityChat, Vendor: "openai", Status: 200, Cost: 1.0, LatencyMS: 100, InputTokens: 100, OutputTokens: 20},
-		{TS: now.Add(-2 * time.Hour), UserID: alice.ID, Model: "gpt-4o", Modality: calls.ModalityChat, Vendor: "openai", Status: 200, Cost: 2.0, LatencyMS: 120, InputTokens: 200, OutputTokens: 40},
-		{TS: now.Add(-3 * time.Hour), UserID: bob.ID, Model: "deepseek-chat", Modality: calls.ModalityChat, Vendor: "deepseek", Status: 200, Cost: 10.0, LatencyMS: 300, InputTokens: 500, OutputTokens: 90},
+		{TS: now.Add(-2 * time.Hour), UserID: alice.ID, SessionID: "sessA", Model: "gpt-4o", Modality: calls.ModalityChat, Vendor: "openai", Status: 200, Cost: 2.0, LatencyMS: 120, InputTokens: 200, OutputTokens: 40},
+		{TS: now.Add(-3 * time.Hour), UserID: bob.ID, SessionID: "sessB", Model: "deepseek-chat", Modality: calls.ModalityChat, Vendor: "deepseek", Status: 200, Cost: 10.0, LatencyMS: 300, InputTokens: 500, OutputTokens: 90},
 	}
 	for _, e := range entries {
 		if _, err := s.AppendCall(e); err != nil {
@@ -93,8 +95,23 @@ func TestOverviewScopedToUserKey(t *testing.T) {
 		t.Errorf("alice feed with spoofed user_id=bob total = %d, want 2 (scope enforced server-side)", spoofFeed.Total)
 	}
 
-	// --- admin-only sessions overview stays closed to a user key ---
-	if rec := do(h, "GET", "/api/sessions/overview", aliceKey, nil); rec.Code != http.StatusUnauthorized {
-		t.Errorf("user key on /api/sessions/overview = %d, want 401", rec.Code)
+	// --- /api/sessions/overview: scoped to the caller's own sessions ---
+	var adminSess, aliceSess, bobSess sessionStatsView
+	decodeBody(t, do(h, "GET", "/api/sessions/overview", "secret", nil), &adminSess)
+	decodeBody(t, do(h, "GET", "/api/sessions/overview", aliceKey, nil), &aliceSess)
+	decodeBody(t, do(h, "GET", "/api/sessions/overview", bobKey, nil), &bobSess)
+	if adminSess.Sessions != 2 {
+		t.Errorf("admin sessions = %d, want 2 (union)", adminSess.Sessions)
+	}
+	if aliceSess.Sessions != 1 {
+		t.Errorf("alice sessions = %d, want 1 (own only)", aliceSess.Sessions)
+	}
+	if bobSess.Sessions != 1 {
+		t.Errorf("bob sessions = %d, want 1 (own only)", bobSess.Sessions)
+	}
+
+	// The per-session detail routes remain admin-only.
+	if rec := do(h, "GET", "/api/sessions/sessB", aliceKey, nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("user key on /api/sessions/{id} = %d, want 401", rec.Code)
 	}
 }

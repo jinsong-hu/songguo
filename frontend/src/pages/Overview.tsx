@@ -61,8 +61,8 @@ type FetchLike = { initialLoading: boolean; error: string | null; refetch: () =>
 
 export function OverviewPage() {
   // A consumer key gets the same dashboard scoped by the backend to its own
-  // traffic; the fleet-only surfaces (active-users KPI, Behavioral section, the
-  // by-user breakdown, and the admin-only users/sessions endpoints) are hidden.
+  // traffic; the remaining fleet-only surfaces (active-users KPI, the by-user
+  // breakdown, and the admin-only users roster) are hidden.
   const { me } = useSession();
   const isUser = me.role === 'user';
   const usageDims = isUser ? USER_USAGE_DIMS : USAGE_DIMS;
@@ -84,11 +84,13 @@ export function OverviewPage() {
   }, [tick, range]);
 
   const opts = { intervalMs: REFRESH_MS };
-  // Session stats and the users roster are admin-only endpoints (the sessions
-  // rollup isn't per-user scoped yet); skip them entirely for a user key.
+  // The users roster is admin-only; skip it for a user key (which also drops the
+  // by-user breakdown, the only thing that needs id→name resolution). The
+  // overview and sessions endpoints are both scoped server-side, so a user key
+  // fetches them normally.
   const adminOpts = { intervalMs: REFRESH_MS, enabled: !isUser };
   const overview = useFetch(() => api.overview(since, until), [since, until], opts);
-  const sessions = useFetch(() => api.sessionsOverview(since, until), [since, until], adminOpts);
+  const sessions = useFetch(() => api.sessionsOverview(since, until), [since, until], opts);
   const tokenSeries = useFetch(
     () => api.tokensByModel(since, until, range.bucket, usageDim),
     [since, until, range.bucket, usageDim],
@@ -332,24 +334,13 @@ export function OverviewPage() {
 
       {/* KPI cards */}
       <div className={styles.kpiGrid}>
-        {isUser ? (
-          // Session stats aren't per-user scoped yet, so a user key shows a
-          // plain request count from the (scoped) overview instead of Sessions.
-          <Kpi
-            icon={<Activity size={14} />}
-            label="Requests"
-            loading={overview.initialLoading}
-            value={ov ? int(ov.requests) : '—'}
-          />
-        ) : (
-          <Kpi
-            icon={<Activity size={14} />}
-            label="Sessions"
-            loading={overview.initialLoading || sessions.initialLoading}
-            value={ss ? int(ss.sessions) : '—'}
-            sub={ov ? `${int(ov.requests)} calls` : undefined}
-          />
-        )}
+        <Kpi
+          icon={<Activity size={14} />}
+          label="Sessions"
+          loading={overview.initialLoading || sessions.initialLoading}
+          value={ss ? int(ss.sessions) : '—'}
+          sub={ov ? `${int(ov.requests)} calls` : undefined}
+        />
         <Kpi
           icon={<Coins size={14} />}
           label="Tokens"
@@ -675,10 +666,8 @@ export function OverviewPage() {
         </Frame>
       </Panel>
 
-      {/* Behavioral — sourced from the admin-only, not-yet-per-user-scoped
-          sessions rollup, so it's hidden in the scoped user view. */}
-      {!isUser && (
-        <>
+      {/* Behavioral — per-session stats from the sessions rollup, scoped to the
+          caller's own sessions server-side (user_id-filtered for a user key). */}
       <SectionTitle name="Behavioral" hint="How agent runs behave — per-session turns, duration, tokens, and tool use" />
       <div className={styles.kpiGrid}>
         <Kpi
@@ -717,8 +706,6 @@ export function OverviewPage() {
           sub={ss ? `p50 ${int(ss.tool_calls_p50)} · p95 ${int(ss.tool_calls_p95)}` : undefined}
         />
       </div>
-        </>
-      )}
 
       {/* Recent activity — ActivityFeed renders its own title row + sort tabs.
           Rows aren't clickable for a user key (no detail routes/APIs). */}

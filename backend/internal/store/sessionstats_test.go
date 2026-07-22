@@ -34,7 +34,7 @@ func TestSessionStats(t *testing.T) {
 		}
 	}
 
-	st, err := s.SessionStats(nil, nil)
+	st, err := s.SessionStats("", nil, nil)
 	if err != nil {
 		t.Fatalf("SessionStats: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestSessionStatsWindow(t *testing.T) {
 	// Window covering only the first call.
 	since := base.Add(-1 * time.Minute)
 	until := base.Add(5 * time.Minute)
-	st, err := s.SessionStats(&since, &until)
+	st, err := s.SessionStats("", &since, &until)
 	if err != nil {
 		t.Fatalf("SessionStats: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestSessionStatsWindow(t *testing.T) {
 	// Empty window → no sessions, no panic on percentiles.
 	emptySince := base.Add(100 * time.Hour)
 	emptyUntil := base.Add(200 * time.Hour)
-	st, err = s.SessionStats(&emptySince, &emptyUntil)
+	st, err = s.SessionStats("", &emptySince, &emptyUntil)
 	if err != nil {
 		t.Fatalf("SessionStats(empty): %v", err)
 	}

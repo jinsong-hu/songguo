@@ -61,9 +61,11 @@ type SessionStats struct {
 // NOT a live GROUP BY over calls. The window filters on each session's last
 // activity (last_ts), the same key the rollup is pruned by. Outcomes, totals,
 // and per-session percentiles are derived from the rolled-up rows.
-func (s *Store) SessionStats(since, until *time.Time) (SessionStats, error) {
+func (s *Store) SessionStats(userID string, since, until *time.Time) (SessionStats, error) {
 	// windowClause emits predicates on `ts`; the sessions table keys activity on
-	// last_ts, so build the clause by hand.
+	// last_ts, so build the clause by hand. A non-empty userID restricts to that
+	// consumer key's own sessions (rows predating the user_id column carry '' and
+	// so only ever appear in the unscoped operator view).
 	var (
 		conds []string
 		args  []any
@@ -75,6 +77,10 @@ func (s *Store) SessionStats(since, until *time.Time) (SessionStats, error) {
 	if until != nil {
 		conds = append(conds, "last_ts < ?")
 		args = append(args, until.UnixMilli())
+	}
+	if userID != "" {
+		conds = append(conds, "user_id = ?")
+		args = append(args, userID)
 	}
 	clause := ""
 	if len(conds) > 0 {

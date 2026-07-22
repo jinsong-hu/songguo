@@ -250,7 +250,7 @@ func (a *api) handleSessionsOverview(w http.ResponseWriter, r *http.Request) {
 		until = *v
 	}
 
-	st, err := a.store.SessionStats(&since, &until)
+	st, err := a.store.SessionStats(scopeUserID(r), &since, &until)
 	if err != nil {
 		a.writeDataErr(w, "sessions overview", err)
 		return

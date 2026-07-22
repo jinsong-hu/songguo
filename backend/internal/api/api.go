@@ -110,7 +110,7 @@ var adminRoutes = []adminRoute{
 	// Overview analytics are Shared: a consumer key reaches them too, but each
 	// handler restricts results to the caller's own traffic via scopeUserID (the
 	// admin key stays unscoped). The cross-user surfaces below — /usage/breakdown,
-	// /usage/errors, /usage/series, /sessions/overview — stay admin-only.
+	// /usage/errors, /usage/series — stay admin-only.
 	{"GET", "/api/overview", (*api).handleOverview, true},
 	{"GET", "/api/usage/series", (*api).handleUsageSeries, false},
 	{"GET", "/api/usage/tokens-by-model", (*api).handleTokensByModel, true},
@@ -125,8 +125,10 @@ var adminRoutes = []adminRoute{
 	{"GET", "/api/calls/export", (*api).handleCallsExport, false},
 	{"GET", "/api/calls/{id}", (*api).handleCall, false},
 	{"GET", "/api/calls/{id}/trace", (*api).handleCallTrace, false},
-	// Literal path — Go's mux prefers it over the {id} wildcard below.
-	{"GET", "/api/sessions/overview", (*api).handleSessionsOverview, false},
+	// Literal path — Go's mux prefers it over the {id} wildcard below. Shared:
+	// scoped to the caller's own sessions via scopeUserID (the per-session detail
+	// routes below stay admin-only).
+	{"GET", "/api/sessions/overview", (*api).handleSessionsOverview, true},
 	{"GET", "/api/sessions/{id}", (*api).handleSession, false},
 	{"GET", "/api/sessions/{id}/messages", (*api).handleSessionMessages, false},
 	{"GET", "/api/sessions/{id}/context", (*api).handleSessionContext, false},
