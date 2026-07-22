@@ -31,9 +31,15 @@ type Options struct {
 	// TestWSHandler, if non-nil, is the dashboard's browser-facing streaming test
 	// driver, mounted at /api/test/ (more specific than the admin /api/ mount).
 	TestWSHandler http.Handler
-	// MCPHandler, if non-nil, is mounted at /mcp as the agent-facing MCP server
-	// over the same control plane as AdminHandler (admin-key gated).
-	MCPHandler http.Handler
+	// AdminMCPHandler, if non-nil, is mounted at /admin/mcp as the operator-facing
+	// MCP server over the same control plane as AdminHandler (admin-key gated).
+	// The bare /mcp path is the consumer-facing services MCP.
+	AdminMCPHandler http.Handler
+	// ServicesMCPHandler, if non-nil, is mounted at /mcp as the consumer-facing
+	// services MCP: capability tools (image generation, speech) an agent invokes,
+	// each originating a native vendor request through ProxyHandler. Consumer-key
+	// gated — a separate audience from AdminMCPHandler.
+	ServicesMCPHandler http.Handler
 	// OpenAPIHandler, if non-nil, serves the admin API's OpenAPI spec at
 	// /openapi.yaml and /openapi.json (unauthenticated; schema only).
 	OpenAPIHandler http.Handler
@@ -172,10 +178,17 @@ func (s *Server) registerRoutes() {
 		// The dashboard and CLI call the admin API under http://<songguo>/api.
 		s.mux.Handle("/api/", s.opts.AdminHandler)
 	}
-	if s.opts.MCPHandler != nil {
-		// Agents connect an MCP client to http://<songguo>/mcp (admin-key gated).
-		s.mux.Handle("/mcp", s.opts.MCPHandler)
-		s.mux.Handle("/mcp/", s.opts.MCPHandler)
+	if s.opts.AdminMCPHandler != nil {
+		// Operators connect an MCP client to http://<songguo>/admin/mcp (admin-key
+		// gated). The bare /mcp path is the consumer-facing services MCP.
+		s.mux.Handle("/admin/mcp", s.opts.AdminMCPHandler)
+		s.mux.Handle("/admin/mcp/", s.opts.AdminMCPHandler)
+	}
+	if s.opts.ServicesMCPHandler != nil {
+		// Agents connect an MCP client to http://<songguo>/mcp (consumer-key gated)
+		// to invoke capability tools. More specific than the "/" SPA catch-all.
+		s.mux.Handle("/mcp", s.opts.ServicesMCPHandler)
+		s.mux.Handle("/mcp/", s.opts.ServicesMCPHandler)
 	}
 	if s.opts.OpenAPIHandler != nil {
 		// The machine-readable admin-API contract, unauthenticated (schema only).

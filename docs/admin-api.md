@@ -9,17 +9,25 @@ Songguo has two surfaces:
   OpenAI/Anthropic-shaped APIs, `/api/v3/*` for Volcengine speech); the provider is
   selected by the `X-Songguo-Provider` header, else the body's model, else the wire
   default. It speaks each vendor's native wire protocol, so any SDK just points its
-  `base_url` at Songguo. This is already agent-friendly and is **not** wrapped in
-  MCP (that would be a translation layer, which Songguo never does). See
+  `base_url` at Songguo. The proxy wire itself is **never** wrapped in MCP — that
+  would be a body-level translation layer, which Songguo never does. See
   `registry.md`.
 - **Control plane** — the admin API under `/api/*`: usage, the call ledger, users,
   providers, services, pricing and settings. This is what the dashboard uses, and
-  what the **MCP server** and the **OpenAPI spec** below expose for agents.
+  what the **admin MCP server** (`/admin/mcp`) and the **OpenAPI spec** below expose
+  for operators.
+- **Services MCP** — a consumer-facing MCP server at the bare `/mcp`, gated by a
+  **consumer key**. Its tools are capabilities an agent invokes (image generation,
+  and later speech); each constructs a native vendor request and originates it
+  *through* the proxy in-process, so the call is routed, credential-swapped and
+  metered like any other — against the caller's key. The translation lives in the
+  tool, above the wire, so byte-transparency is preserved. See
+  [Services MCP](#services-mcp) below.
 
 ## Auth
 
-Every `/api/*` endpoint and the `/mcp` endpoint are gated by a single admin bearer
-key, `SONGGUO_ADMIN_KEY`:
+Every `/api/*` endpoint and the `/admin/mcp` endpoint are gated by a single admin
+bearer key, `SONGGUO_ADMIN_KEY`:
 
 ```
 Authorization: Bearer <SONGGUO_ADMIN_KEY>
@@ -57,12 +65,12 @@ GET /openapi.yaml    # YAML source
 GET /openapi.json    # same document as JSON
 ```
 
-## MCP server
+## Admin MCP server (`/admin/mcp`)
 
-Agents connect an MCP client to the streamable-HTTP endpoint:
+Operators connect an MCP client to the streamable-HTTP endpoint:
 
 ```
-URL:    http://<host>:12345/mcp
+URL:    http://<host>:12345/admin/mcp
 Header: Authorization: Bearer <SONGGUO_ADMIN_KEY>
 ```
 
@@ -101,3 +109,36 @@ SONGGUO_MCP_WRITE=1 songguo
 For `create_provider` / `update_provider`, each endpoint is `{ wire, endpoint,
 adapter }` — a wire bound to its **full upstream URL** and auth scheme (no
 provider-level base URL; see `registry.md`).
+
+## Services MCP
+
+The **consumer-facing** MCP server, at the bare `/mcp`. Where the admin MCP
+drives the control plane, the services MCP exposes *capabilities* an agent
+invokes. It runs stateless in the same binary.
+
+```
+URL:    http://<host>:12345/mcp
+Header: Authorization: Bearer <consumer key>    # or  X-Api-Key: <consumer key>
+```
+
+Auth is a **consumer key** (the same key an SDK would use to call the proxy),
+read from `Authorization: Bearer` or `X-Api-Key` — the same ingress as the data
+plane. A missing/invalid/revoked key is a `401` before any tool runs.
+
+Each tool builds a **native vendor request** and originates it *through* the
+transparent proxy in-process, carrying the caller's key (and an optional
+provider pin). So the call is routed, credential-swapped and metered exactly
+like a direct proxy call — against that key. The schema→native translation lives
+in the tool, **above** the wire; the proxy still forwards the bytes verbatim, so
+byte-transparency holds.
+
+### Tools
+
+| Tool | Does | Native call |
+|---|---|---|
+| `generate_image` | Generate image(s) from a prompt. Args: `prompt`, `model`, `size?`, `provider?`. Returns image content (base64) or the image URL(s). | `POST /v1/images/generations` (`openai/images`) |
+
+More capability tools (speech synthesis, transcription) follow the same
+pattern — a typed tool over a native wire — and are added as their response
+encodings are settled. A tool's failure is returned as an MCP tool error whose
+text is the vendor/gateway response verbatim, so the agent can self-correct.

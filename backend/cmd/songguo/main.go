@@ -92,23 +92,30 @@ func main() {
 	}
 	adminHandler := api.NewHandler(adminDeps)
 
-	// The MCP server exposes the same control plane as tools (admin-key gated).
-	// Write tools are opt-in: only registered when SONGGUO_MCP_WRITE is truthy,
-	// since the admin key already controls budgets and upstream credentials.
+	// The admin MCP server exposes the same control plane as tools (admin-key
+	// gated), mounted at /admin/mcp. Write tools are opt-in: only registered when
+	// SONGGUO_MCP_WRITE is truthy, since the admin key already controls budgets
+	// and upstream credentials.
 	mcpWrite := getenv("SONGGUO_MCP_WRITE", "") != ""
-	mcpHandler := api.NewMCPHandler(adminDeps, mcpWrite)
+	adminMCPHandler := api.NewMCPHandler(adminDeps, mcpWrite)
 	if mcpWrite {
 		logger.Warn("MCP write tools are ENABLED (SONGGUO_MCP_WRITE is set)")
 	}
 
+	// The services MCP (bare /mcp, consumer-key gated) exposes capability tools
+	// that originate native vendor calls through the proxy — routed and metered
+	// against the caller's own key.
+	servicesMCPHandler := api.NewServicesMCPHandler(adminDeps, proxyHandler)
+
 	srv := server.New(server.Options{
-		Addr:           listen,
-		ProxyHandler:   proxyHandler,
-		TestWSHandler:  testWSHandler,
-		AdminHandler:   adminHandler,
-		MCPHandler:     mcpHandler,
-		OpenAPIHandler: api.NewOpenAPIHandler(),
-		Logger:         logger,
+		Addr:               listen,
+		ProxyHandler:       proxyHandler,
+		TestWSHandler:      testWSHandler,
+		AdminHandler:       adminHandler,
+		AdminMCPHandler:    adminMCPHandler,
+		ServicesMCPHandler: servicesMCPHandler,
+		OpenAPIHandler:     api.NewOpenAPIHandler(),
+		Logger:             logger,
 	})
 
 	// Retention janitor: prune derived/captured data on a fixed clock, off the

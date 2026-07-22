@@ -135,7 +135,7 @@ func TestMCPHandlerRequiresAdminKey(t *testing.T) {
 	h := NewMCPHandler(Deps{AdminKey: "secret"}, false)
 	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
 
-	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/admin/mcp", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -143,7 +143,7 @@ func TestMCPHandlerRequiresAdminKey(t *testing.T) {
 		t.Errorf("no key: code = %d, want 401", rec.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	req = httptest.NewRequest(http.MethodPost, "/admin/mcp", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer wrong")
 	rec = httptest.NewRecorder()
