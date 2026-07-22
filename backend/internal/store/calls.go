@@ -276,8 +276,8 @@ func (s *Store) SpendByUser(userID string, since *time.Time) (float64, error) {
 }
 
 // TotalSpend sums cost across all rows within the optional [since, until)
-// window.
-func (s *Store) TotalSpend(since, until *time.Time) (float64, error) {
+// window. A non-empty userID restricts the sum to that consumer key's calls.
+func (s *Store) TotalSpend(userID string, since, until *time.Time) (float64, error) {
 	var (
 		conds []string
 		args  []any
@@ -289,6 +289,10 @@ func (s *Store) TotalSpend(since, until *time.Time) (float64, error) {
 	if until != nil {
 		conds = append(conds, "ts < ?")
 		args = append(args, until.UnixMilli())
+	}
+	if userID != "" {
+		conds = append(conds, "user_id = ?")
+		args = append(args, userID)
 	}
 	query := `SELECT COALESCE(SUM(cost), 0) FROM calls`
 	if len(conds) > 0 {
@@ -302,8 +306,8 @@ func (s *Store) TotalSpend(since, until *time.Time) (float64, error) {
 }
 
 // SpendByModality returns cost summed per modality within the optional
-// [since, until) window.
-func (s *Store) SpendByModality(since, until *time.Time) (map[string]float64, error) {
+// [since, until) window. A non-empty userID restricts to that consumer key.
+func (s *Store) SpendByModality(userID string, since, until *time.Time) (map[string]float64, error) {
 	var (
 		conds []string
 		args  []any
@@ -315,6 +319,10 @@ func (s *Store) SpendByModality(since, until *time.Time) (map[string]float64, er
 	if until != nil {
 		conds = append(conds, "ts < ?")
 		args = append(args, until.UnixMilli())
+	}
+	if userID != "" {
+		conds = append(conds, "user_id = ?")
+		args = append(args, userID)
 	}
 	query := `SELECT modality, COALESCE(SUM(cost), 0) FROM calls`
 	if len(conds) > 0 {

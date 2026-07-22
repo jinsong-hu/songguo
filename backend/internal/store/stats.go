@@ -46,7 +46,11 @@ type ModelStat struct {
 
 // windowClause builds the optional "[since, until)" WHERE clause shared by the
 // stats queries.
-func windowClause(since, until *time.Time) (string, []any) {
+// windowClause builds the time-window (and optional per-user) WHERE clause
+// shared by the aggregate stats queries. userID == "" leaves the query unscoped
+// (the operator/admin view); a non-empty userID restricts to that consumer key's
+// own calls via the indexed user_id column.
+func windowClause(userID string, since, until *time.Time) (string, []any) {
 	var (
 		conds []string
 		args  []any
@@ -59,17 +63,31 @@ func windowClause(since, until *time.Time) (string, []any) {
 		conds = append(conds, "ts < ?")
 		args = append(args, until.UnixMilli())
 	}
+	if userID != "" {
+		conds = append(conds, "user_id = ?")
+		args = append(args, userID)
+	}
 	if len(conds) == 0 {
 		return "", nil
 	}
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
+// userScopeClause returns a trailing ` AND user_id = ?` fragment (and its bound
+// arg) for the per-user-scoped series queries that build their WHERE by hand.
+// userID == "" yields an empty clause and no args, leaving the query unscoped.
+func userScopeClause(userID string) (string, []any) {
+	if userID == "" {
+		return "", nil
+	}
+	return " AND user_id = ?", []any{userID}
+}
+
 // OverviewStats returns total requests, error count, and p50/p95/p99 latency
 // (ms) over the optional [since, until) window. It pulls the latencies sorted
 // from SQLite and computes percentiles in Go via nearest-rank.
-func (s *Store) OverviewStats(since, until *time.Time) (OverviewStats, error) {
-	clause, args := windowClause(since, until)
+func (s *Store) OverviewStats(userID string, since, until *time.Time) (OverviewStats, error) {
+	clause, args := windowClause(userID, since, until)
 
 	rows, err := s.db.Query(
 		`SELECT latency_ms, status, ttft_ms, generation_ms, output_tokens
@@ -131,7 +149,7 @@ func (s *Store) OverviewStats(since, until *time.Time) (OverviewStats, error) {
 // last status over the optional [since, until) window. The map is keyed by
 // vendor name; vendors with no rows in the window are absent.
 func (s *Store) VendorStats(since, until *time.Time) (map[string]VendorStat, error) {
-	clause, args := windowClause(since, until)
+	clause, args := windowClause("", since, until)
 
 	// Aggregate counts and average latency per vendor.
 	aggRows, err := s.db.Query(
@@ -202,7 +220,7 @@ func (s *Store) VendorStats(since, until *time.Time) (map[string]VendorStat, err
 // the optional [since, until) window. The map is keyed by model name; models
 // with no rows in the window are absent.
 func (s *Store) ModelStats(since, until *time.Time) (map[string]ModelStat, error) {
-	clause, args := windowClause(since, until)
+	clause, args := windowClause("", since, until)
 
 	rows, err := s.db.Query(
 		`SELECT model,
@@ -245,8 +263,8 @@ type TokenTotals struct {
 }
 
 // TokenTotals sums normalized tokens over the optional [since, until) window.
-func (s *Store) TokenTotals(since, until *time.Time) (TokenTotals, error) {
-	clause, args := windowClause(since, until)
+func (s *Store) TokenTotals(userID string, since, until *time.Time) (TokenTotals, error) {
+	clause, args := windowClause(userID, since, until)
 	var t TokenTotals
 	err := s.db.QueryRow(
 		`SELECT COALESCE(SUM(input_tokens), 0),
@@ -266,7 +284,7 @@ func (s *Store) TokenTotals(since, until *time.Time) (TokenTotals, error) {
 // optional [since, until) window. The empty user id (admin/unknown traffic) is
 // excluded so the count reflects real callers.
 func (s *Store) DistinctUsers(since, until *time.Time) (int, error) {
-	clause, args := windowClause(since, until)
+	clause, args := windowClause("", since, until)
 	if clause == "" {
 		clause = " WHERE user_id != ''"
 	} else {
@@ -335,7 +353,7 @@ func (s *Store) Breakdown(dimension BreakdownDimension, since, until *time.Time)
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrBadDimension, dimension)
 	}
-	clause, args := windowClause(since, until)
+	clause, args := windowClause("", since, until)
 	rows, err := s.db.Query(
 		`SELECT `+col+` AS k,
 		        COUNT(*),
@@ -385,7 +403,7 @@ type ErrorClasses struct {
 // ErrorClassCounts groups error rows into {rate-limited, client, server,
 // transport} over the optional [since, until) window.
 func (s *Store) ErrorClassCounts(since, until *time.Time) (ErrorClasses, error) {
-	clause, args := windowClause(since, until)
+	clause, args := windowClause("", since, until)
 	var c ErrorClasses
 	err := s.db.QueryRow(
 		`SELECT
@@ -414,8 +432,10 @@ type ErrorCodeRow struct {
 // recognized dimension and key is non-empty, the count is scoped to rows whose
 // dimension column equals key (e.g. one model, vendor, or user); an empty key
 // leaves the result unscoped. An unrecognized non-empty dim returns
-// ErrBadDimension. limit <= 0 defaults to 8.
-func (s *Store) TopErrorCodes(dim BreakdownDimension, key string, since, until *time.Time, limit int) ([]ErrorCodeRow, error) {
+// ErrBadDimension. limit <= 0 defaults to 8. userID, when non-empty, further
+// restricts the count to that consumer key's own calls (ANDed with any dim/key
+// scope), so a user cannot read another user's error breakdown.
+func (s *Store) TopErrorCodes(userID string, dim BreakdownDimension, key string, since, until *time.Time, limit int) ([]ErrorCodeRow, error) {
 	if limit <= 0 {
 		limit = 8
 	}
@@ -438,6 +458,13 @@ func (s *Store) TopErrorCodes(dim BreakdownDimension, key string, since, until *
 		// interpolate (column names cannot be bound as query parameters).
 		conds = append(conds, col+" = ?")
 		args = append(args, key)
+	}
+	// Per-user scope is a separate conjunct so it composes with (dim,key): a user
+	// probing another user's rows via ?dimension=user&key=<other> still gets
+	// user_id = <other> AND user_id = <self> → empty.
+	if userID != "" {
+		conds = append(conds, "user_id = ?")
+		args = append(args, userID)
 	}
 	args = append(args, limit)
 
@@ -641,7 +668,7 @@ type TokensByModelBucket struct {
 // slice is that key set, ordered descending by total tokens with "Other" (when
 // present) last. Bucket timestamps are UTC. Empty key values are reported as
 // "unknown". An unrecognized dimension returns ErrBadDimension.
-func (s *Store) TokensByModelSeries(dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []TokensByModelBucket, error) {
+func (s *Store) TokensByModelSeries(userID string, dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []TokensByModelBucket, error) {
 	col, ok := breakdownColumn(dim)
 	if !ok {
 		return nil, nil, ErrBadDimension
@@ -667,6 +694,7 @@ func (s *Store) TokensByModelSeries(dim BreakdownDimension, since, until time.Ti
 
 	// col comes from the breakdownColumn whitelist, so it is safe to interpolate
 	// (column names cannot be bound as query parameters).
+	userClause, userArgs := userScopeClause(userID)
 	rows, err := s.db.Query(
 		fmt.Sprintf(`SELECT (ts / ?) * ? AS bucket_start,
 		        %s,
@@ -677,9 +705,9 @@ func (s *Store) TokensByModelSeries(dim BreakdownDimension, since, until time.Ti
 		        COALESCE(SUM(CASE WHEN generation_ms > 0 AND output_tokens > 0 THEN output_tokens * 1000.0 / generation_ms END), 0),
 		        COUNT(CASE WHEN generation_ms > 0 AND output_tokens > 0 THEN 1 END)
 		   FROM calls
-		  WHERE ts >= ? AND ts < ?
-		  GROUP BY bucket_start, %s`, col, col),
-		bucketMs, bucketMs, sinceMs, untilMs,
+		  WHERE ts >= ? AND ts < ?%s
+		  GROUP BY bucket_start, %s`, col, userClause, col),
+		append([]any{bucketMs, bucketMs, sinceMs, untilMs}, userArgs...)...,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("store: tokens by model series: %w", err)
@@ -842,7 +870,7 @@ type SuccessByModelBucket struct {
 // total requests with "Other" (when present) last. Bucket timestamps are UTC. An
 // "error" is any row whose status is 0 (transport failure) or >= 400. Empty key
 // values are reported as "unknown". An unrecognized dimension returns ErrBadDimension.
-func (s *Store) SuccessByModelSeries(dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []SuccessByModelBucket, error) {
+func (s *Store) SuccessByModelSeries(userID string, dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []SuccessByModelBucket, error) {
 	col, ok := breakdownColumn(dim)
 	if !ok {
 		return nil, nil, ErrBadDimension
@@ -868,15 +896,16 @@ func (s *Store) SuccessByModelSeries(dim BreakdownDimension, since, until time.T
 
 	// col comes from the breakdownColumn whitelist, so it is safe to interpolate
 	// (column names cannot be bound as query parameters).
+	userClause, userArgs := userScopeClause(userID)
 	rows, err := s.db.Query(
 		fmt.Sprintf(`SELECT (ts / ?) * ? AS bucket_start,
 		        %s,
 		        COUNT(*),
 		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END)
 		   FROM calls
-		  WHERE ts >= ? AND ts < ?
-		  GROUP BY bucket_start, %s`, col, col),
-		bucketMs, bucketMs, sinceMs, untilMs,
+		  WHERE ts >= ? AND ts < ?%s
+		  GROUP BY bucket_start, %s`, col, userClause, col),
+		append([]any{bucketMs, bucketMs, sinceMs, untilMs}, userArgs...)...,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("store: success by model series: %w", err)
@@ -1006,7 +1035,7 @@ type CacheByModelBucket struct {
 // The returned slice is that key set, ordered descending by total input with "Other"
 // (when present) last. Bucket timestamps are UTC. Empty key values are reported as
 // "unknown". An unrecognized dimension returns ErrBadDimension.
-func (s *Store) CacheByModelSeries(dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []CacheByModelBucket, error) {
+func (s *Store) CacheByModelSeries(userID string, dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []CacheByModelBucket, error) {
 	col, ok := breakdownColumn(dim)
 	if !ok {
 		return nil, nil, ErrBadDimension
@@ -1032,15 +1061,16 @@ func (s *Store) CacheByModelSeries(dim BreakdownDimension, since, until time.Tim
 
 	// col comes from the breakdownColumn whitelist, so it is safe to interpolate
 	// (column names cannot be bound as query parameters).
+	userClause, userArgs := userScopeClause(userID)
 	rows, err := s.db.Query(
 		fmt.Sprintf(`SELECT (ts / ?) * ? AS bucket_start,
 		        %s,
 		        COALESCE(SUM(cache_read_input_tokens), 0),
 		        COALESCE(SUM(input_tokens + cache_read_input_tokens + cache_creation_input_tokens), 0)
 		   FROM calls
-		  WHERE ts >= ? AND ts < ?
-		  GROUP BY bucket_start, %s`, col, col),
-		bucketMs, bucketMs, sinceMs, untilMs,
+		  WHERE ts >= ? AND ts < ?%s
+		  GROUP BY bucket_start, %s`, col, userClause, col),
+		append([]any{bucketMs, bucketMs, sinceMs, untilMs}, userArgs...)...,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("store: cache by model series: %w", err)

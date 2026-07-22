@@ -26,6 +26,7 @@ import {
 import { LIVE_REFRESH_MS, useFetch, useLiveTick } from '../lib/useFetch';
 import { bucketLabel, duration, int, money, percent } from '../lib/format';
 import { brandOf, providerBrand, ModelIcon } from '../lib/modelBrand';
+import { useSession } from '../lib/sessionContext';
 import { ActivityFeed } from './ActivityFeed';
 import styles from './Overview.module.css';
 
@@ -51,11 +52,21 @@ const USAGE_DIMS: { key: UsageDimension; label: string }[] = [
   { key: 'vendor', label: 'By provider' },
   { key: 'user', label: 'By user' },
 ];
+// A single consumer key is the only "user" in its own scoped view, so the
+// by-user breakdown is meaningless there — drop it, keeping model + provider.
+const USER_USAGE_DIMS = USAGE_DIMS.filter((d) => d.key !== 'user');
 const CHART_CLS = 'aspect-auto h-full w-full';
 
 type FetchLike = { initialLoading: boolean; error: string | null; refetch: () => void };
 
 export function OverviewPage() {
+  // A consumer key gets the same dashboard scoped by the backend to its own
+  // traffic; the fleet-only surfaces (active-users KPI, Behavioral section, the
+  // by-user breakdown, and the admin-only users/sessions endpoints) are hidden.
+  const { me } = useSession();
+  const isUser = me.role === 'user';
+  const usageDims = isUser ? USER_USAGE_DIMS : USAGE_DIMS;
+
   const [rangeKey, setRangeKey] = useState('24h');
   const [usageDim, setUsageDim] = useState<UsageDimension>('model');
   const [perfDim, setPerfDim] = useState<UsageDimension>('model');
@@ -73,8 +84,11 @@ export function OverviewPage() {
   }, [tick, range]);
 
   const opts = { intervalMs: REFRESH_MS };
+  // Session stats and the users roster are admin-only endpoints (the sessions
+  // rollup isn't per-user scoped yet); skip them entirely for a user key.
+  const adminOpts = { intervalMs: REFRESH_MS, enabled: !isUser };
   const overview = useFetch(() => api.overview(since, until), [since, until], opts);
-  const sessions = useFetch(() => api.sessionsOverview(since, until), [since, until], opts);
+  const sessions = useFetch(() => api.sessionsOverview(since, until), [since, until], adminOpts);
   const tokenSeries = useFetch(
     () => api.tokensByModel(since, until, range.bucket, usageDim),
     [since, until, range.bucket, usageDim],
@@ -97,8 +111,9 @@ export function OverviewPage() {
     [since, until, range.bucket, cacheDim],
     opts,
   );
-  // Resolve user-id series keys to display names for the by-user views.
-  const usersList = useFetch(() => api.users(), [], opts);
+  // Resolve user-id series keys to display names for the by-user views. Admin
+  // only — a user key drops the by-user dimension, so it needs no name map.
+  const usersList = useFetch(() => api.users(), [], adminOpts);
   const composition = useFetch(() => api.contextComposition(since, until), [since, until], opts);
 
   const ov = overview.data;
@@ -317,13 +332,24 @@ export function OverviewPage() {
 
       {/* KPI cards */}
       <div className={styles.kpiGrid}>
-        <Kpi
-          icon={<Activity size={14} />}
-          label="Sessions"
-          loading={overview.initialLoading || sessions.initialLoading}
-          value={ss ? int(ss.sessions) : '—'}
-          sub={ov ? `${int(ov.requests)} calls` : undefined}
-        />
+        {isUser ? (
+          // Session stats aren't per-user scoped yet, so a user key shows a
+          // plain request count from the (scoped) overview instead of Sessions.
+          <Kpi
+            icon={<Activity size={14} />}
+            label="Requests"
+            loading={overview.initialLoading}
+            value={ov ? int(ov.requests) : '—'}
+          />
+        ) : (
+          <Kpi
+            icon={<Activity size={14} />}
+            label="Sessions"
+            loading={overview.initialLoading || sessions.initialLoading}
+            value={ss ? int(ss.sessions) : '—'}
+            sub={ov ? `${int(ov.requests)} calls` : undefined}
+          />
+        )}
         <Kpi
           icon={<Coins size={14} />}
           label="Tokens"
@@ -348,12 +374,14 @@ export function OverviewPage() {
           loading={overview.initialLoading}
           value={ov ? money(ov.total_spend) : '—'}
         />
-        <Kpi
-          icon={<Users size={14} />}
-          label="Active users"
-          loading={overview.initialLoading}
-          value={ov ? int(ov.active_callers) : '—'}
-        />
+        {!isUser && (
+          <Kpi
+            icon={<Users size={14} />}
+            label="Active users"
+            loading={overview.initialLoading}
+            value={ov ? int(ov.active_callers) : '—'}
+          />
+        )}
         <Kpi
           icon={<ShieldCheck size={14} />}
           label="Success rate"
@@ -374,7 +402,7 @@ export function OverviewPage() {
         name="Usage"
         control={
           <div className={styles.seg} role="tablist" aria-label="Usage breakdown dimension">
-            {USAGE_DIMS.map((d) => (
+            {usageDims.map((d) => (
               <button
                 key={d.key}
                 role="tab"
@@ -462,7 +490,7 @@ export function OverviewPage() {
         name="Performance"
         control={
           <div className={styles.seg} role="tablist" aria-label="Performance breakdown dimension">
-            {USAGE_DIMS.map((d) => (
+            {usageDims.map((d) => (
               <button
                 key={d.key}
                 role="tab"
@@ -516,7 +544,7 @@ export function OverviewPage() {
         name="Success"
         control={
           <div className={styles.seg} role="tablist" aria-label="Success breakdown dimension">
-            {USAGE_DIMS.map((d) => (
+            {usageDims.map((d) => (
               <button
                 key={d.key}
                 role="tab"
@@ -591,7 +619,7 @@ export function OverviewPage() {
         name="Cache"
         control={
           <div className={styles.seg} role="tablist" aria-label="Cache breakdown dimension">
-            {USAGE_DIMS.map((d) => (
+            {usageDims.map((d) => (
               <button
                 key={d.key}
                 role="tab"
@@ -647,7 +675,10 @@ export function OverviewPage() {
         </Frame>
       </Panel>
 
-      {/* Behavioral */}
+      {/* Behavioral — sourced from the admin-only, not-yet-per-user-scoped
+          sessions rollup, so it's hidden in the scoped user view. */}
+      {!isUser && (
+        <>
       <SectionTitle name="Behavioral" hint="How agent runs behave — per-session turns, duration, tokens, and tool use" />
       <div className={styles.kpiGrid}>
         <Kpi
@@ -686,9 +717,12 @@ export function OverviewPage() {
           sub={ss ? `p50 ${int(ss.tool_calls_p50)} · p95 ${int(ss.tool_calls_p95)}` : undefined}
         />
       </div>
+        </>
+      )}
 
-      {/* Recent activity — ActivityFeed renders its own title row + sort tabs. */}
-      <ActivityFeed since={since} until={until} />
+      {/* Recent activity — ActivityFeed renders its own title row + sort tabs.
+          Rows aren't clickable for a user key (no detail routes/APIs). */}
+      <ActivityFeed since={since} until={until} interactive={!isUser} />
     </Page>
   );
 }

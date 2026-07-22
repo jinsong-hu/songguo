@@ -38,7 +38,7 @@ func TestOverviewStats(t *testing.T) {
 		}
 	}
 
-	st, err := s.OverviewStats(nil, nil)
+	st, err := s.OverviewStats("", nil, nil)
 	if err != nil {
 		t.Fatalf("OverviewStats: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestOverviewStats(t *testing.T) {
 
 func TestOverviewStatsEmpty(t *testing.T) {
 	s := openTestStore(t)
-	st, err := s.OverviewStats(nil, nil)
+	st, err := s.OverviewStats("", nil, nil)
 	if err != nil {
 		t.Fatalf("OverviewStats: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestOverviewStatsWindow(t *testing.T) {
 	}
 	since := base.Add(1 * time.Minute)
 	until := base.Add(4 * time.Minute)
-	st, err := s.OverviewStats(&since, &until)
+	st, err := s.OverviewStats("", &since, &until)
 	if err != nil {
 		t.Fatalf("OverviewStats(window): %v", err)
 	}

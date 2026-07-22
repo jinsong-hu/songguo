@@ -25,6 +25,9 @@ const TOP_KEYS = TOP_SORTS.map((t) => t.key);
 interface ActivityFeedProps {
   since: number;
   until: number;
+  /** Whether rows open a detail page on click. Off for the scoped user shell,
+   *  which has no session/call detail routes (and no access to those APIs). */
+  interactive?: boolean;
 }
 
 /**
@@ -37,7 +40,7 @@ interface ActivityFeedProps {
  * that re-rank the whole window server-side (see FeedSort). Changing the sort
  * resets to the first page.
  */
-export function ActivityFeed({ since, until }: ActivityFeedProps) {
+export function ActivityFeed({ since, until, interactive = true }: ActivityFeedProps) {
   const [offset, setOffset] = useState(0);
   const [sort, setSort] = useState<FeedSort>('recent');
   const navigate = useNavigate();
@@ -127,7 +130,11 @@ export function ActivityFeed({ since, until }: ActivityFeedProps) {
               </thead>
               <tbody>
                 {data.rows.map((row) => (
-                  <FeedRowView key={rowKey(row)} row={row} onOpen={() => openRow(row)} />
+                  <FeedRowView
+                    key={rowKey(row)}
+                    row={row}
+                    onOpen={interactive ? () => openRow(row) : undefined}
+                  />
                 ))}
               </tbody>
             </table>
@@ -249,14 +256,18 @@ function shortId(id: string): string {
   return id.length > 18 ? `${id.slice(0, 18)}…` : id;
 }
 
-function FeedRowView({ row, onOpen }: { row: FeedRow; onOpen: () => void }) {
+function FeedRowView({ row, onOpen }: { row: FeedRow; onOpen?: () => void }) {
   const isSession = row.kind === 'session';
   const tokens =
     row.input_tokens + row.cache_read_input_tokens + row.cache_creation_input_tokens + row.output_tokens;
   const model = isSession ? row.major_model || row.model || row.models[0] : row.model;
 
   return (
-    <tr className={styles.callRow} style={{ cursor: 'pointer' }} onClick={onOpen}>
+    <tr
+      className={styles.callRow}
+      style={onOpen ? { cursor: 'pointer' } : undefined}
+      onClick={onOpen}
+    >
       <td className="mono" style={{ color: 'var(--text-muted)' }}>
         {dateTime(row.last_ts)}
       </td>

@@ -21,7 +21,7 @@ func TestTokenTotalsAndSeries(t *testing.T) {
 		}
 	}
 
-	tt, err := s.TokenTotals(nil, nil)
+	tt, err := s.TokenTotals("", nil, nil)
 	if err != nil {
 		t.Fatalf("TokenTotals: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestTokenTotalsAndSeries(t *testing.T) {
 
 func TestTokenTotalsEmpty(t *testing.T) {
 	s := openTestStore(t)
-	tt, err := s.TokenTotals(nil, nil)
+	tt, err := s.TokenTotals("", nil, nil)
 	if err != nil {
 		t.Fatalf("TokenTotals: %v", err)
 	}

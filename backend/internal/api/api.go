@@ -107,16 +107,20 @@ var adminRoutes = []adminRoute{
 	// Bootstrap/whoami — the SPA calls this to detect the key's role and, for a
 	// user key, the models it may play. Accepts either key type.
 	{"GET", "/api/me", (*api).handleMe, true},
-	{"GET", "/api/overview", (*api).handleOverview, false},
+	// Overview analytics are Shared: a consumer key reaches them too, but each
+	// handler restricts results to the caller's own traffic via scopeUserID (the
+	// admin key stays unscoped). The cross-user surfaces below — /usage/breakdown,
+	// /usage/errors, /usage/series, /sessions/overview — stay admin-only.
+	{"GET", "/api/overview", (*api).handleOverview, true},
 	{"GET", "/api/usage/series", (*api).handleUsageSeries, false},
-	{"GET", "/api/usage/tokens-by-model", (*api).handleTokensByModel, false},
-	{"GET", "/api/usage/success-by-model", (*api).handleSuccessByModel, false},
-	{"GET", "/api/usage/cache-by-model", (*api).handleCacheByModel, false},
+	{"GET", "/api/usage/tokens-by-model", (*api).handleTokensByModel, true},
+	{"GET", "/api/usage/success-by-model", (*api).handleSuccessByModel, true},
+	{"GET", "/api/usage/cache-by-model", (*api).handleCacheByModel, true},
 	{"GET", "/api/usage/breakdown", (*api).handleBreakdown, false},
 	{"GET", "/api/usage/errors", (*api).handleErrors, false},
-	{"GET", "/api/usage/error-codes", (*api).handleTopErrorCodes, false},
-	{"GET", "/api/context/composition", (*api).handleContextComposition, false},
-	{"GET", "/api/feed", (*api).handleFeed, false},
+	{"GET", "/api/usage/error-codes", (*api).handleTopErrorCodes, true},
+	{"GET", "/api/context/composition", (*api).handleContextComposition, true},
+	{"GET", "/api/feed", (*api).handleFeed, true},
 	{"GET", "/api/calls", (*api).handleCalls, false},
 	{"GET", "/api/calls/export", (*api).handleCallsExport, false},
 	{"GET", "/api/calls/{id}", (*api).handleCall, false},
@@ -206,6 +210,18 @@ func roleFrom(r *http.Request) role {
 func userFrom(r *http.Request) (store.User, bool) {
 	u, ok := r.Context().Value(ctxUser).(store.User)
 	return u, ok
+}
+
+// scopeUserID returns the user id an analytics query should be restricted to:
+// the consumer key's own id for a user-role request, or "" for the operator
+// (admin), which the store treats as "all traffic, unscoped". This is the one
+// place shared analytics handlers derive their scope, so scoping is always
+// server-enforced and never taken from a client-supplied value.
+func scopeUserID(r *http.Request) string {
+	if u, ok := userFrom(r); ok {
+		return u.ID
+	}
+	return ""
 }
 
 // authMiddleware enforces the admin bearer key. When AdminKey is empty the API

@@ -141,7 +141,9 @@ export function App() {
     );
   }
 
-  // Scoped user: models list + per-model playground only. No admin routes.
+  // Scoped user: own-traffic Overview + models list + per-model playground.
+  // The Overview and its data endpoints are server-scoped to this key; no admin
+  // routes are mounted.
   if (phase.role === 'user') {
     return (
       <SessionContext.Provider value={{ me: phase.me, signOut }}>
@@ -149,10 +151,10 @@ export function App() {
           <BrowserRouter>
             <Routes>
               <Route element={<Layout />}>
-                <Route index element={<Navigate to="/services" replace />} />
+                <Route index element={<OverviewPage />} />
                 <Route path="services" element={<ServicesPage />} />
                 <Route path="services/:model" element={<ServiceDetailPage />} />
-                <Route path="*" element={<Navigate to="/services" replace />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Routes>
           </BrowserRouter>

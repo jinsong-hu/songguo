@@ -41,11 +41,18 @@ export function Layout() {
         </div>
         <nav className={styles.nav}>
           {isUser ? (
-            // Scoped playground: models list only, no operator surfaces.
-            <NavLink to="/services" className={navItemClass}>
-              <Layers size={16} />
-              <span>Models</span>
-            </NavLink>
+            // Scoped shell: own-traffic Overview + the Services playground. No
+            // operator surfaces.
+            <>
+              <NavLink to="/" end className={navItemClass}>
+                <Activity size={16} />
+                <span>Overview</span>
+              </NavLink>
+              <NavLink to="/services" className={navItemClass}>
+                <Layers size={16} />
+                <span>Services</span>
+              </NavLink>
+            </>
           ) : (
             <>
               {NAV_TOP.map(({ to, label, icon: Icon, end }) => (

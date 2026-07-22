@@ -81,10 +81,11 @@ type AggComposition struct {
 // until) window. Every total/subtotal is our own local token count; there is no
 // official-anchored "unattributed" bucket — calls without a composition are
 // simply absent from this view (the KPI, which is official, covers them). The
-// window clause filters on the joined calls' bare `ts`, unambiguous here since
-// only calls carries a ts column. Sources are sorted by tokens desc.
-func (s *Store) AggregateComposition(since, until *time.Time) (AggComposition, error) {
-	clause, args := windowClause(since, until)
+// window clause filters on the joined calls' bare `ts` (and `user_id` when a
+// userID scope is given), unambiguous here since only calls carries those
+// columns. Sources are sorted by tokens desc.
+func (s *Store) AggregateComposition(userID string, since, until *time.Time) (AggComposition, error) {
+	clause, args := windowClause(userID, since, until)
 	rows, err := s.db.Query(
 		`SELECT cc.total, cc.sources
 		   FROM context_composition cc

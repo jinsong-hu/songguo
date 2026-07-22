@@ -572,7 +572,7 @@ func TestCallsAppendQueryAndAggregations(t *testing.T) {
 	}
 
 	// TotalSpend across all and within a window.
-	tot, err := s.TotalSpend(nil, nil)
+	tot, err := s.TotalSpend("", nil, nil)
 	if err != nil {
 		t.Fatalf("TotalSpend: %v", err)
 	}
@@ -581,7 +581,7 @@ func TestCallsAppendQueryAndAggregations(t *testing.T) {
 	}
 
 	// SpendByModality.
-	byMod, err := s.SpendByModality(nil, nil)
+	byMod, err := s.SpendByModality("", nil, nil)
 	if err != nil {
 		t.Fatalf("SpendByModality: %v", err)
 	}

@@ -141,7 +141,8 @@ func (a *api) mcpGetOverview(_ context.Context, _ *mcp.CallToolRequest, args ove
 	if args.Until != nil {
 		until = time.Unix(*args.Until, 0).UTC()
 	}
-	v, err := a.overviewData(since, until)
+	// The MCP surface is operator-only, so the overview is unscoped ("").
+	v, err := a.overviewData("", since, until)
 	if err != nil {
 		return nil, overviewView{}, err
 	}

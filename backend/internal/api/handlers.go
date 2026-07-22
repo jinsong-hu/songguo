@@ -112,7 +112,7 @@ func (a *api) handleOverview(w http.ResponseWriter, r *http.Request) {
 		until = *v
 	}
 
-	view, err := a.overviewData(since, until)
+	view, err := a.overviewData(scopeUserID(r), since, until)
 	if err != nil {
 		a.writeDataErr(w, "overview", err)
 		return
@@ -123,24 +123,26 @@ func (a *api) handleOverview(w http.ResponseWriter, r *http.Request) {
 // overviewData computes the dashboard summary over [since, until]: total spend,
 // spend by modality, request/error/latency stats, active vendors/users, daily
 // burn and (when any budget is set) runway in days.
-func (a *api) overviewData(since, until time.Time) (overviewView, error) {
-	totalSpend, err := a.store.TotalSpend(&since, &until)
+//
+// userID scopes every traffic aggregate to one consumer key; "" is the operator
+// (admin) view over all traffic. In user mode the fleet-wide fields — vendors
+// active, users active, active callers, and cross-user runway/daily-burn — are
+// meaningless and would leak other users' data, so they are left zero/nil and
+// only the caller's own spend/tokens/latency/error stats are returned.
+func (a *api) overviewData(userID string, since, until time.Time) (overviewView, error) {
+	totalSpend, err := a.store.TotalSpend(userID, &since, &until)
 	if err != nil {
 		return overviewView{}, err
 	}
-	byMod, err := a.store.SpendByModality(&since, &until)
+	byMod, err := a.store.SpendByModality(userID, &since, &until)
 	if err != nil {
 		return overviewView{}, err
 	}
-	stats, err := a.store.OverviewStats(&since, &until)
+	stats, err := a.store.OverviewStats(userID, &since, &until)
 	if err != nil {
 		return overviewView{}, err
 	}
-	tokens, err := a.store.TokenTotals(&since, &until)
-	if err != nil {
-		return overviewView{}, err
-	}
-	activeCallers, err := a.store.DistinctUsers(&since, &until)
+	tokens, err := a.store.TokenTotals(userID, &since, &until)
 	if err != nil {
 		return overviewView{}, err
 	}
@@ -150,50 +152,64 @@ func (a *api) overviewData(since, until time.Time) (overviewView, error) {
 		errorRate = float64(stats.Errors) / float64(stats.Requests)
 	}
 
-	// vendors_active = vendors in the current snapshot.
-	vendorsActive := 0
-	if snap := a.snap(); snap != nil {
-		vendorsActive = len(snap.Vendors())
-	}
-
-	// users_active = non-revoked users; also compute runway from budgets.
-	users, err := a.store.ListUsers()
-	if err != nil {
-		return overviewView{}, err
-	}
-	usersActive := 0
-	var remainingBudget float64
-	anyBudget := false
-	for _, u := range users {
-		if u.RevokedAt == nil {
-			usersActive++
+	var (
+		vendorsActive int
+		usersActive   int
+		activeCallers int
+		dailyBurn     float64
+		runway        *float64
+	)
+	// Fleet-wide rollups are operator-only: skip them for a scoped (user) view so
+	// a consumer key never sees the vendor count, the user roster, other users'
+	// budgets, or the distinct-caller count.
+	if userID == "" {
+		activeCallers, err = a.store.DistinctUsers(&since, &until)
+		if err != nil {
+			return overviewView{}, err
 		}
-		if u.Budget != nil {
-			anyBudget = true
-			spent, err := a.store.SpendByUser(u.ID, nil)
-			if err != nil {
-				return overviewView{}, err
+
+		// vendors_active = vendors in the current snapshot.
+		if snap := a.snap(); snap != nil {
+			vendorsActive = len(snap.Vendors())
+		}
+
+		// users_active = non-revoked users; also compute runway from budgets.
+		users, err := a.store.ListUsers()
+		if err != nil {
+			return overviewView{}, err
+		}
+		var remainingBudget float64
+		anyBudget := false
+		for _, u := range users {
+			if u.RevokedAt == nil {
+				usersActive++
 			}
-			rem := *u.Budget - spent
-			if rem > 0 {
-				remainingBudget += rem
+			if u.Budget != nil {
+				anyBudget = true
+				spent, err := a.store.SpendByUser(u.ID, nil)
+				if err != nil {
+					return overviewView{}, err
+				}
+				rem := *u.Budget - spent
+				if rem > 0 {
+					remainingBudget += rem
+				}
 			}
 		}
-	}
 
-	// daily_burn = spend over the last 7 days / 7.
-	now := a.now().UTC()
-	weekAgo := now.AddDate(0, 0, -7)
-	weekSpend, err := a.store.TotalSpend(&weekAgo, &now)
-	if err != nil {
-		return overviewView{}, err
-	}
-	dailyBurn := weekSpend / 7.0
+		// daily_burn = spend over the last 7 days / 7.
+		now := a.now().UTC()
+		weekAgo := now.AddDate(0, 0, -7)
+		weekSpend, err := a.store.TotalSpend("", &weekAgo, &now)
+		if err != nil {
+			return overviewView{}, err
+		}
+		dailyBurn = weekSpend / 7.0
 
-	var runway *float64
-	if anyBudget && dailyBurn > 0 {
-		rd := remainingBudget / dailyBurn
-		runway = &rd
+		if anyBudget && dailyBurn > 0 {
+			rd := remainingBudget / dailyBurn
+			runway = &rd
+		}
 	}
 
 	if byMod == nil {
@@ -370,7 +386,7 @@ func (a *api) handleTokensByModel(w http.ResponseWriter, r *http.Request) {
 		a.writeDataErr(w, "tokens by model", err)
 		return
 	}
-	models, buckets, err := a.store.TokensByModelSeries(dim, since, until, bucket)
+	models, buckets, err := a.store.TokensByModelSeries(scopeUserID(r), dim, since, until, bucket)
 	if err != nil {
 		if errors.Is(err, store.ErrTooManyBuckets) {
 			a.writeDataErr(w, "tokens by model", badRequestErr("requested range is too large for the chosen bucket"))
@@ -423,7 +439,7 @@ func (a *api) handleSuccessByModel(w http.ResponseWriter, r *http.Request) {
 		a.writeDataErr(w, "success by model", err)
 		return
 	}
-	models, buckets, err := a.store.SuccessByModelSeries(dim, since, until, bucket)
+	models, buckets, err := a.store.SuccessByModelSeries(scopeUserID(r), dim, since, until, bucket)
 	if err != nil {
 		if errors.Is(err, store.ErrTooManyBuckets) {
 			a.writeDataErr(w, "success by model", badRequestErr("requested range is too large for the chosen bucket"))
@@ -473,7 +489,7 @@ func (a *api) handleCacheByModel(w http.ResponseWriter, r *http.Request) {
 		a.writeDataErr(w, "cache by model", err)
 		return
 	}
-	models, buckets, err := a.store.CacheByModelSeries(dim, since, until, bucket)
+	models, buckets, err := a.store.CacheByModelSeries(scopeUserID(r), dim, since, until, bucket)
 	if err != nil {
 		if errors.Is(err, store.ErrTooManyBuckets) {
 			a.writeDataErr(w, "cache by model", badRequestErr("requested range is too large for the chosen bucket"))
@@ -594,7 +610,7 @@ func (a *api) handleTopErrorCodes(w http.ResponseWriter, r *http.Request) {
 	}
 	key := r.URL.Query().Get("key")
 
-	rows, err := a.store.TopErrorCodes(dim, key, &since, &until, 8)
+	rows, err := a.store.TopErrorCodes(scopeUserID(r), dim, key, &since, &until, 8)
 	if err != nil {
 		if errors.Is(err, store.ErrBadDimension) {
 			a.writeDataErr(w, "usage error codes", badRequestErr("dimension must be model, vendor, or user"))
@@ -704,7 +720,14 @@ func (a *api) callTraceData(id string) (traceView, error) {
 // handleFeed returns the activity feed: one row per coding-agent session
 // (aggregated) or per standalone request, newest activity first.
 func (a *api) handleFeed(w http.ResponseWriter, r *http.Request) {
-	view, err := a.feedData(callFilterFromQuery(r, defaultCallsAPILimit, maxCallsAPILimit))
+	f := callFilterFromQuery(r, defaultCallsAPILimit, maxCallsAPILimit)
+	// A consumer key sees only its own activity: force the scope onto the filter,
+	// overriding any client-supplied ?user_id (the admin-only /api/calls still
+	// honours that param). scopeUserID is "" for the admin key, leaving it unset.
+	if uid := scopeUserID(r); uid != "" {
+		f.UserID = uid
+	}
+	view, err := a.feedData(f)
 	if err != nil {
 		a.writeDataErr(w, "query feed", err)
 		return
@@ -951,7 +974,7 @@ func (a *api) handleContextComposition(w http.ResponseWriter, r *http.Request) {
 		until = *v
 	}
 
-	agg, err := a.store.AggregateComposition(&since, &until)
+	agg, err := a.store.AggregateComposition(scopeUserID(r), &since, &until)
 	if err != nil {
 		a.writeDataErr(w, "context composition", err)
 		return
