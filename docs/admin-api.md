@@ -17,12 +17,12 @@ Songguo has two surfaces:
   what the **admin MCP server** (`/admin/mcp`) and the **OpenAPI spec** below expose
   for operators.
 - **Services MCP** — a consumer-facing MCP server at the bare `/mcp`, gated by a
-  **consumer key**. Its tools are capabilities an agent invokes (image generation,
-  and later speech); each constructs a native vendor request and originates it
-  *through* the proxy in-process, so the call is routed, credential-swapped and
-  metered like any other — against the caller's key. The translation lives in the
-  tool, above the wire, so byte-transparency is preserved. See
-  [Services MCP](#services-mcp) below.
+  **consumer key**. Its tools are songguo's services organized by **task**
+  (Text-to-Image, Text-to-Speech, Automatic Speech Recognition, Text-to-Video);
+  each constructs a native vendor request and originates it *through* the proxy
+  in-process, so the call is routed, credential-swapped and metered like any
+  other — against the caller's key. The translation lives in the tool, above the
+  wire, so byte-transparency is preserved. See [Services MCP](#services-mcp) below.
 
 ## Auth
 
@@ -134,11 +134,29 @@ byte-transparency holds.
 
 ### Tools
 
-| Tool | Does | Native call |
-|---|---|---|
-| `generate_image` | Generate image(s) from a prompt. Args: `prompt`, `model`, `size?`, `provider?`. Returns image content (base64) or the image URL(s). | `POST /v1/images/generations` (`openai/images`) |
+Tools are named by **task** — the taxonomy the wires already declare via
+`Modality` (`chat`→Text Generation, `image`→Text-to-Image, `tts`→Text-to-Speech,
+`stt`→Automatic Speech Recognition, `video`→Text-to-Video). Text Generation and
+Feature Extraction stay native (an agent points its SDK at `/v1`); the media
+tasks get tools. Async tasks are a **submit + poll** pair — no server-side
+waiting or handle; the caller owns the loop, and each call meters independently.
 
-More capability tools (speech synthesis, transcription) follow the same
-pattern — a typed tool over a native wire — and are added as their response
-encodings are settled. A tool's failure is returned as an MCP tool error whose
-text is the vendor/gateway response verbatim, so the agent can self-correct.
+| Task | Tool(s) | Native call (wire) |
+|---|---|---|
+| Text-to-Image | `text-to-image` | `POST /v1/images/generations` (`openai/images`) |
+| Text-to-Speech | `text-to-speech` | `POST /api/v3/tts/unidirectional` (`volc/tts-unidirectional`) |
+| Automatic Speech Recognition | `automatic-speech-recognition` → `get-transcription` | `…/auc/bigmodel/submit` → `…/query` (`volc/asr-file`) |
+| Text-to-Video | `text-to-video` → `get-text-to-video` | `…/generations/tasks` → `GET …/tasks/{id}` (`ark/video`) |
+
+**Provider affinity** for the submit→poll pairs is the real `X-Songguo-Provider`,
+exposed as a `provider` arg — pin the same value on submit and poll when several
+providers serve the endpoint. The ASR task key is a client-owned
+`X-Api-Request-Id` (submit generates it and hands it back; poll takes it).
+
+**Honesty note:** the Text-to-Video poll (`…/tasks/{id}`) is *not* a metered wire
+— `ark/video` only matches the submit suffix, so the status GET is served by
+**unmatched passthrough**. It works exactly as it does for a direct proxy caller:
+the pinned provider must allow unmatched passthrough, and the poll meters zero.
+
+A tool's failure is returned as an MCP tool error whose text is the
+vendor/gateway response verbatim, so the agent can self-correct.
