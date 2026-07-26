@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/store"
 )
 
@@ -91,20 +92,32 @@ func TestManagerSkipsIncompleteProviders(t *testing.T) {
 	}
 }
 
-// A model that would silently meter $0 — a zero rate or an unrecognized unit —
-// is warned about (not blocked); a well-formed price stays silent. The provider
-// still routes regardless.
+// A model that cannot be priced is warned about (not blocked), and the flavour
+// of warning says what happened: an unrecognized unit still meters $0, an
+// unpriced model borrows its provider's priciest same-unit rate, and only a
+// model with nothing to borrow from is left at $0. The provider routes either
+// way, and a well-priced model stays silent.
 func TestManagerWarnsOnUnpriceableModels(t *testing.T) {
 	st := openTestStore(t)
 
 	if _, err := st.CreateProvider(store.NewProvider{
 		Name: "warnme", Enabled: true, APIKey: "sk-z",
 		Models: []store.ProviderModel{
-			{Model: "free-model", Input: 0, Output: 0, Unit: "per_1m_tokens"}, // zero rate
+			{Model: "free-model", Input: 0, Output: 0, Unit: "per_1m_tokens"}, // unpriced → borrows ok-model
 			{Model: "typo-model", Input: 1, Output: 2, Unit: "per_1m_token"},  // unknown unit (missing s)
 			{Model: "ok-model", Input: 1, Output: 2, Unit: "per_1m_tokens"},   // fine
 		},
 		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://api.openai.com/v1/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Nothing to borrow from: the only token-family price is itself zero.
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "allfree", Enabled: true, APIKey: "sk-y",
+		Models: []store.ProviderModel{
+			{Model: "lonely-model", Input: 0, Output: 0, Unit: "per_1m_tokens"},
+		},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://free.example.com/v1/chat/completions", Adapter: "openai-compatible"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -122,14 +135,280 @@ func TestManagerWarnsOnUnpriceableModels(t *testing.T) {
 	}
 
 	out := buf.String()
-	if !strings.Contains(out, "free-model") || !strings.Contains(out, "price is zero") {
-		t.Errorf("expected zero-price warning for free-model; logs:\n%s", out)
+	if !strings.Contains(out, "free-model") || !strings.Contains(out, "no published price") {
+		t.Errorf("expected fallback warning for free-model; logs:\n%s", out)
+	}
+	if !strings.Contains(out, "borrowed_from=ok-model") {
+		t.Errorf("fallback warning should name the model it borrowed from; logs:\n%s", out)
 	}
 	if !strings.Contains(out, "typo-model") || !strings.Contains(out, "unit not recognized") {
 		t.Errorf("expected unknown-unit warning for typo-model; logs:\n%s", out)
 	}
-	if strings.Contains(out, "ok-model") {
-		t.Errorf("well-priced ok-model should not warn; logs:\n%s", out)
+	if !strings.Contains(out, "lonely-model") || !strings.Contains(out, "no same-unit price exists") {
+		t.Errorf("expected zero-price warning for lonely-model; logs:\n%s", out)
+	}
+}
+
+// An unpriced model is metered at the most expensive rate its own provider
+// charges in the same unit family, copied whole from a real model — not a
+// per-field maximum, which would invert the cache-read axis (CachedInput == 0
+// means "charge full Input", so max(CachedInput) picks the biggest discount).
+func TestManagerFallsBackToPriciestSameFamilyPrice(t *testing.T) {
+	st := openTestStore(t)
+
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "acme", Enabled: true, APIKey: "sk-a",
+		Models: []store.ProviderModel{
+			{Model: "cheap", Input: 1, Output: 2, CachedInput: 0.1, Unit: "per_1m_tokens"},
+			// Priciest by output, and deliberately carries no cache discount.
+			{Model: "dear", Input: 5, Output: 25, CachedInput: 0, Unit: "per_1m_tokens"},
+			{Model: "brand-new", Input: 0, Output: 0, Unit: "per_1m_tokens"},
+		},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://api.acme.com/v1/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	p, ok := m.Current().PriceFor("acme", "brand-new")
+	if !ok {
+		t.Fatal("missing price for unpriced model")
+	}
+	if p.Input != 5 || p.Output != 25 {
+		t.Errorf("fallback price = %+v, want dear's 5/25", p)
+	}
+	if p.CachedInput != 0 {
+		t.Errorf("fallback CachedInput = %v, want dear's 0 verbatim (not cheap's 0.1 discount)", p.CachedInput)
+	}
+	if p.Source != "fallback:dear" {
+		t.Errorf("fallback Source = %q, want %q", p.Source, "fallback:dear")
+	}
+	// Real prices keep their own provenance and values.
+	if cheap, _ := m.Current().PriceFor("acme", "cheap"); cheap.Input != 1 || cheap.Source == "fallback:dear" {
+		t.Errorf("priced model was disturbed: %+v", cheap)
+	}
+}
+
+// Units across families price disjoint quantities, so a fallback never crosses
+// one: a speech model borrows a speech rate, never a token rate (which would
+// compute $0 while claiming a price).
+func TestManagerFallbackStaysWithinUnitFamily(t *testing.T) {
+	st := openTestStore(t)
+
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "speech", Enabled: true, APIKey: "sk-s",
+		Models: []store.ProviderModel{
+			{Model: "chat-big", Input: 10, Output: 50, Unit: "per_1m_tokens"},
+			{Model: "asr-cheap", Input: 0.002, Unit: "per_second"},
+			{Model: "asr-dear", Input: 0.01, Unit: "per_second"},
+			{Model: "asr-new", Input: 0, Unit: "per_second"},
+			{Model: "tts-new", Input: 0, Unit: "per_char"},
+		},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://api.speech.com/v1/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	asr, _ := m.Current().PriceFor("speech", "asr-new")
+	if asr.Unit != "per_second" || asr.Input != 0.01 || asr.Source != "fallback:asr-dear" {
+		t.Errorf("asr-new = %+v, want the priciest per_second rate", asr)
+	}
+	// per_char has no other priced member: stays $0 rather than borrowing a
+	// per_second or token rate.
+	tts, _ := m.Current().PriceFor("speech", "tts-new")
+	if tts.Input != 0 || tts.Unit != "per_char" {
+		t.Errorf("tts-new = %+v, want an untouched zero per_char price", tts)
+	}
+	if config.IsFallbackPrice(tts) {
+		t.Errorf("tts-new must not borrow across unit families, got %q", tts.Source)
+	}
+}
+
+// A fallback is scoped to its own provider. Borrowing across providers would
+// make one provider's bill a function of unrelated config — adding an expensive
+// provider would silently re-price another provider's unknown models.
+func TestManagerFallbackIsProviderScoped(t *testing.T) {
+	st := openTestStore(t)
+
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "cheapco", Enabled: true, APIKey: "sk-c",
+		Models: []store.ProviderModel{
+			{Model: "cheapco-known", Input: 0.1, Output: 0.9, Unit: "per_1m_tokens"},
+			{Model: "cheapco-new", Input: 0, Output: 0, Unit: "per_1m_tokens"},
+		},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://cheap.example.com/v1/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	before, _ := m.Current().PriceFor("cheapco", "cheapco-new")
+	if before.Output != 0.9 {
+		t.Fatalf("cheapco-new = %+v, want its own provider's 0.9 ceiling", before)
+	}
+
+	// Adding an expensive, unrelated provider must not move that number.
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "dearco", Enabled: true, APIKey: "sk-d",
+		Models: []store.ProviderModel{
+			{Model: "dearco-flagship", Input: 10, Output: 50, Unit: "per_1m_tokens"},
+		},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://dear.example.com/v1/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	after, _ := m.Current().PriceFor("cheapco", "cheapco-new")
+	if after != before {
+		t.Errorf("cheapco-new changed from %+v to %+v after an unrelated provider was added", before, after)
+	}
+}
+
+// An explicit operator override of zero means "this model is free" and is left
+// alone; only never-priced models get a fallback.
+func TestManagerFallbackRespectsExplicitZeroOverride(t *testing.T) {
+	st := openTestStore(t)
+
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "freebie", Enabled: true, APIKey: "sk-f",
+		Models: []store.ProviderModel{
+			{Model: "paid", Input: 3, Output: 15, Unit: "per_1m_tokens"},
+			{Model: "on-the-house", Input: 0, Output: 0, Unit: "per_1m_tokens", PriceOverride: true},
+		},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://free.example.com/v1/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	p, _ := m.Current().PriceFor("freebie", "on-the-house")
+	if p.Input != 0 || p.Output != 0 {
+		t.Errorf("explicit zero override = %+v, want an untouched zero", p)
+	}
+	if config.IsFallbackPrice(p) {
+		t.Errorf("explicit zero override must not be given a fallback, got %q", p.Source)
+	}
+}
+
+// A zero someone published is a real price meaning "free" — the catalog lists
+// genuinely free tiers — and must never be re-priced at the provider's ceiling.
+// Only a model nobody ever stated a rate for is eligible for a fallback.
+func TestManagerFallbackLeavesCatalogPublishedFreeModelsAlone(t *testing.T) {
+	st := openTestStore(t)
+
+	// glm-4.7-flash is published in the catalog at 0.0/0.0; glm-5.1 is the
+	// priciest model on the same provider and would be the fallback if the gate
+	// keyed on the value rather than the provenance.
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name:      "zhipu",
+		Vendor:    "Zhipu",
+		CatalogID: "zhipu",
+		Enabled:   true,
+		APIKey:    "sk-z",
+		Models: []store.ProviderModel{
+			{Model: "glm-4.7-flash", Unit: "per_1m_tokens"},
+			{Model: "glm-5.1", Unit: "per_1m_tokens"},
+		},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	flash, ok := m.Current().PriceFor("zhipu", "glm-4.7-flash")
+	if !ok {
+		t.Fatal("missing price for glm-4.7-flash")
+	}
+	if flash.Input != 0 || flash.Output != 0 {
+		t.Errorf("catalog-published free model = %+v, want an untouched 0/0", flash)
+	}
+	if config.IsFallbackPrice(flash) {
+		t.Errorf("a published price of zero must not be treated as unpriced, got %q", flash.Source)
+	}
+}
+
+// A rate typed against the wrong unit (3.0 per_token is $3,000,000/1M) meters
+// as written but is never borrowed, so one typo cannot re-price a provider.
+func TestManagerFallbackIgnoresImplausibleRates(t *testing.T) {
+	st := openTestStore(t)
+
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "fatfinger", Enabled: true, APIKey: "sk-t",
+		Models: []store.ProviderModel{
+			{Model: "oops", Input: 3, Output: 3, Unit: "per_token"},
+			{Model: "sane", Input: 2, Output: 8, Unit: "per_1m_tokens"},
+			{Model: "new", Input: 0, Output: 0, Unit: "per_1m_tokens"},
+		},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://oops.example.com/v1/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	p, _ := m.Current().PriceFor("fatfinger", "new")
+	if p.Source != "fallback:sane" || p.Output != 8 {
+		t.Errorf("fallback = %+v, want sane's rate, not the mistyped per_token one", p)
+	}
+	// The mistyped row itself is untouched — we warn, we don't rewrite.
+	if oops, _ := m.Current().PriceFor("fatfinger", "oops"); oops.Input != 3 || oops.Unit != "per_token" {
+		t.Errorf("mistyped price was rewritten: %+v", oops)
+	}
+}
+
+// Two builds of identical config must choose the same fallback: map iteration
+// order must not leak into billing.
+func TestManagerFallbackIsDeterministic(t *testing.T) {
+	st := openTestStore(t)
+
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "ties", Enabled: true, APIKey: "sk-x",
+		Models: []store.ProviderModel{
+			{Model: "bbb", Input: 1, Output: 9, Unit: "per_1m_tokens"},
+			{Model: "aaa", Input: 4, Output: 9, Unit: "per_1m_tokens"}, // same rank, earlier name
+			{Model: "ccc", Input: 2, Output: 9, Unit: "per_1m_tokens"},
+			{Model: "unpriced", Input: 0, Output: 0, Unit: "per_1m_tokens"},
+		},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://ties.example.com/v1/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	first, _ := m.Current().PriceFor("ties", "unpriced")
+	if first.Source != "fallback:aaa" {
+		t.Errorf("tie broke to %q, want fallback:aaa (lowest name at equal rank)", first.Source)
+	}
+	for i := 0; i < 5; i++ {
+		if err := m.Reload(); err != nil {
+			t.Fatalf("Reload: %v", err)
+		}
+		if got, _ := m.Current().PriceFor("ties", "unpriced"); got != first {
+			t.Fatalf("reload %d chose %+v, want stable %+v", i, got, first)
+		}
 	}
 }
 

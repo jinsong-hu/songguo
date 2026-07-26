@@ -1190,6 +1190,13 @@ components:
         input: { type: number }
         output: { type: number }
         unit: { type: string }
+        source: { $ref: "#/components/schemas/PriceSource" }
+    PriceSource:
+      type: string
+      description: >-
+        Rate provenance. "catalog", "override", "stored", "unpriced", or
+        "fallback:<model>" when the model has no published rate and was metered
+        at the named model's price instead.
     Settings:
       type: object
       properties:
@@ -1208,6 +1215,7 @@ components:
         input: { type: number }
         output: { type: number }
         unit: { type: string }
+        source: { $ref: "#/components/schemas/PriceSource" }
     Vendor:
       type: object
       properties:

@@ -1929,7 +1929,7 @@ func (a *api) pricingData() []pricingRow {
 			for _, m := range models {
 				p := v.Prices[m]
 				rows = append(rows, pricingRow{
-					Vendor: v.Name, Model: m, Input: p.Input, Output: p.Output, Unit: p.Unit,
+					Vendor: v.Name, Model: m, Input: p.Input, Output: p.Output, Unit: p.Unit, Source: p.Source,
 				})
 			}
 		}

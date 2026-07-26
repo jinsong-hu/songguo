@@ -102,23 +102,67 @@ func (m *Manager) build() (*config.Snapshot, error) {
 // suffix. Every group carries the provider id as its credential id, so an
 // X-Songguo-Provider pin resolves across the split.
 func vendorsFromProvider(pvd store.Provider, cat catalog.Catalog, logger *slog.Logger) []config.Vendor {
+	// Pass 1: resolve each model's published price (catalog, or the stored row).
 	models := make([]string, 0, len(pvd.Models))
 	prices := make(map[string]config.Price, len(pvd.Models))
 	for _, m := range pvd.Models {
 		models = append(models, m.Model)
-		p := effectivePrice(pvd.CatalogID, m, cat)
-		prices[m.Model] = p
+		prices[m.Model] = effectivePrice(pvd.CatalogID, m, cat)
+	}
 
-		// Price-completeness warnings (non-fatal): both cases silently meter calls
-		// as $0, which looks identical to "free" in the ledger. Warn, don't block —
-		// a half-priced provider must still route.
+	// Pass 2: a model with no published rate would meter every call as $0, which
+	// is indistinguishable from "free" in the ledger and under-bills real usage.
+	// Give it the most expensive rate this same provider charges in the same unit
+	// family instead, so an unpriced model errs toward over-billing and surfaces
+	// as an outlier rather than vanishing. See fallbackPrice for the rules.
+	//
+	// The gate is provenance, NOT the number: only PriceSourceUnpriced — nobody
+	// ever stated a rate — is eligible. A zero that someone published is a real
+	// price meaning free (the catalog lists genuinely free tiers, and an operator
+	// override of zero is a deliberate "don't bill this"), and re-pricing it at
+	// the provider's ceiling would invent a charge for a model that costs nothing.
+	for _, m := range pvd.Models {
+		p := prices[m.Model]
+		if p.Source != config.PriceSourceUnpriced {
+			continue
+		}
+		fb, from, ok := fallbackPrice(prices, m.Model, p.Unit)
+		if !ok {
+			continue
+		}
+		fb.Source = config.PriceSourceFallbackPrefix + from
+		prices[m.Model] = fb
+	}
+
+	// Price-completeness warnings (non-fatal): a provider must still route when
+	// part of its price table is missing or suspect. Warn, don't block.
+	for _, m := range pvd.Models {
+		p := prices[m.Model]
 		switch {
 		case !config.KnownPriceUnits[p.Unit]:
 			logger.Warn("price unit not recognized; calls for this model will meter as $0",
 				"provider", pvd.Name, "model", m.Model, "unit", p.Unit)
-		case config.PriceMetersZero(p):
-			logger.Warn("price is zero; calls for this model will meter as $0",
+		case config.PriceMetersZero(p) && p.Source == config.PriceSourceOverride:
+			logger.Warn("price is explicitly overridden to zero; calls for this model will meter as $0",
 				"provider", pvd.Name, "model", m.Model, "unit", p.Unit)
+		case config.PriceMetersZero(p) && p.Source == config.PriceSourceCatalog:
+			logger.Warn("catalog publishes this model as free; calls for this model will meter as $0",
+				"provider", pvd.Name, "model", m.Model, "unit", p.Unit)
+		case config.PriceMetersZero(p) && p.Source == config.PriceSourceUnpriced:
+			logger.Warn("price is zero and no same-unit price exists to fall back to; calls for this model will meter as $0",
+				"provider", pvd.Name, "model", m.Model, "unit", p.Unit)
+		case config.PriceMetersZero(p):
+			logger.Warn("price meters as $0 for its unit; calls for this model will meter as $0",
+				"provider", pvd.Name, "model", m.Model, "unit", p.Unit)
+		case config.IsFallbackPrice(p):
+			logger.Warn("model has no published price; metering it at this provider's most expensive same-unit rate",
+				"provider", pvd.Name, "model", m.Model, "unit", p.Unit,
+				"borrowed_from", strings.TrimPrefix(p.Source, config.PriceSourceFallbackPrefix),
+				"input", p.Input, "output", p.Output)
+		case config.PriceRateImplausible(p):
+			logger.Warn("price rate is implausibly high for its unit; check the unit — it meters as written but cannot be borrowed as a fallback",
+				"provider", pvd.Name, "model", m.Model, "unit", p.Unit,
+				"input", p.Input, "output", p.Output)
 		}
 	}
 
@@ -203,7 +247,66 @@ func effectivePrice(catalogID string, m store.ProviderModel, cat catalog.Catalog
 	if unit == "" {
 		unit = "per_1m_tokens"
 	}
-	return config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: unit}
+	source := config.PriceSourceStored
+	switch {
+	case m.PriceOverride:
+		source = config.PriceSourceOverride
+	case m.Input <= 0 && m.Output <= 0:
+		// No catalog entry and no operator-entered rate: nothing priced this
+		// model. Pass 2 in vendorsFromProvider may replace it with a fallback.
+		source = config.PriceSourceUnpriced
+	}
+	return config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: unit, Source: source}
+}
+
+// fallbackPrice picks the price an unpriced model should borrow: the most
+// expensive rate the same provider charges in the same unit family. It returns
+// the winning price and the model it came from.
+//
+// Three rules make the substitution safe:
+//
+//   - Same unit family only (config.PriceUnitFamily). Units across families
+//     price disjoint quantities — wire.Normalized keeps Seconds/Chars/Images
+//     apart from token counts and pricing.Cost dispatches on Unit — so lending
+//     a token rate to a per_second model would not over-bill, it would compute
+//     $0 while claiming a rate. A speech model borrows a speech rate or none.
+//   - A whole real price is copied, never a per-field maximum. A synthetic max
+//     inverts the cache axis: CachedInput == 0 means "charge full Input"
+//     (pricing.tokenCost), so max(CachedInput) picks the largest discount and
+//     can bill cache-heavy traffic cheaper than any real model.
+//   - Same provider only. Borrowing across providers would make one provider's
+//     bill a function of unrelated config — adding an Anthropic provider would
+//     silently re-price unknown DeepSeek models at ~57x — so a provider with no
+//     usable same-family rate keeps its $0 and is warned about instead.
+//
+// Candidates must be plausibly scaled (config.PriceRateImplausible) so a single
+// mistyped unit cannot become the ceiling for every unpriced model. Ties break
+// on model name, keeping the choice stable across reloads.
+func fallbackPrice(prices map[string]config.Price, forModel, unit string) (config.Price, string, bool) {
+	family := config.PriceUnitFamily(unit)
+	if family == "" {
+		return config.Price{}, "", false
+	}
+	var best config.Price
+	var bestModel string
+	var bestRank float64
+	for model, p := range prices {
+		if model == forModel ||
+			config.PriceUnitFamily(p.Unit) != family ||
+			config.PriceMetersZero(p) ||
+			config.IsFallbackPrice(p) ||
+			config.PriceRateImplausible(p) {
+			continue
+		}
+		rank := config.PriceRank(p)
+		if bestModel == "" || rank > bestRank || (rank == bestRank && model < bestModel) {
+			best, bestModel, bestRank = p, model, rank
+		}
+	}
+	if bestModel == "" {
+		return config.Price{}, "", false
+	}
+	return best, bestModel, true
 }
 
 func catalogModelPrice(cat catalog.Catalog, catalogID, model string) (config.Price, bool) {
@@ -218,7 +321,7 @@ func catalogModelPrice(cat catalog.Catalog, catalogID, model string) (config.Pri
 		if !ok {
 			return config.Price{}, false
 		}
-		return config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: m.Unit}, true
+		return config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: m.Unit, Source: config.PriceSourceCatalog}, true
 	}
 	return config.Price{}, false
 }
@@ -229,7 +332,7 @@ func catalogAnyModelPrice(cat catalog.Catalog, model string) (config.Price, bool
 		if !ok {
 			continue
 		}
-		return config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: m.Unit}, true
+		return config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: m.Unit, Source: config.PriceSourceCatalog}, true
 	}
 	return config.Price{}, false
 }

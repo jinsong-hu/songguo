@@ -507,11 +507,13 @@ type credentialView struct {
 	MaskedKey string `json:"masked_key"`
 }
 
-// priceView is a single model price.
+// priceView is a single model price. Source carries the rate's provenance so a
+// borrowed ("fallback:<model>") rate is never read as a published one.
 type priceView struct {
 	Input  float64 `json:"input"`
 	Output float64 `json:"output"`
 	Unit   string  `json:"unit"`
+	Source string  `json:"source"`
 }
 
 // vendorStatsView is the per-vendor health/usage summary.
@@ -549,7 +551,7 @@ func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool) vendorV
 
 	prices := make(map[string]priceView, len(v.Prices))
 	for model, p := range v.Prices {
-		prices[model] = priceView{Input: p.Input, Output: p.Output, Unit: p.Unit}
+		prices[model] = priceView{Input: p.Input, Output: p.Output, Unit: p.Unit, Source: p.Source}
 	}
 
 	endpoints := v.Endpoints
@@ -622,6 +624,7 @@ type pricingRow struct {
 	Input  float64 `json:"input"`
 	Output float64 `json:"output"`
 	Unit   string  `json:"unit"`
+	Source string  `json:"source"`
 }
 
 // newTraceView converts a stored payload into its JSON trace view, encoding

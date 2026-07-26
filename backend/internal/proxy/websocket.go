@@ -476,9 +476,16 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 		if len(ext.Raw) > 0 {
 			usage["usage"] = ext.Raw
 		}
+		// Unpriced-model fallback happens in the snapshot, not here — see the
+		// note on the HTTP path. A miss means the billing model (often an
+		// X-Api-Resource-Id class) isn't one this vendor declares, so there is
+		// no rate to reason from: bill $0 and say so.
 		if snap := h.snapshot(); snap != nil {
 			if price, ok := snap.PriceFor(vendorName, billingModel); ok {
 				cost = pricing.Cost(price, ext.Norm)
+			} else {
+				h.logger.Warn("no price entry for model under this vendor; metering $0",
+					"vendor", vendorName, "model", billingModel)
 			}
 		}
 	}

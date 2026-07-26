@@ -114,6 +114,22 @@ func TestCost(t *testing.T) {
 			norm:  wire.Normalized{},
 			want:  0,
 		},
+		// The next two pin why a fallback price must never cross unit families
+		// (see configsvc.fallbackPrice): the quantities are disjoint, so a
+		// mismatched unit does not over- or under-bill, it computes exactly $0
+		// while appearing to carry a rate.
+		{
+			name:  "token rate against speech usage is zero",
+			price: config.Price{Input: 10, Output: 50, Unit: "per_1m_tokens"},
+			norm:  wire.Normalized{Seconds: 120, Chars: 4_000},
+			want:  0,
+		},
+		{
+			name:  "speech rate against token usage is zero",
+			price: config.Price{Input: 0.01, Unit: "per_second"},
+			norm:  wire.Normalized{InputTokens: 1_000_000, OutputTokens: 500_000},
+			want:  0,
+		},
 	}
 
 	for _, tt := range tests {
@@ -184,5 +200,35 @@ func TestCostBillingInvariance(t *testing.T) {
 		if !approx(got, want) {
 			t.Errorf("invariance broken for %+v: new=%v old=%v", c, got, want)
 		}
+	}
+}
+
+// TestCostCacheAxisIsNotMonotonicInCachedInput is the reason an unpriced model
+// borrows a whole real price rather than a per-field maximum of its provider's
+// prices (see configsvc.fallbackPrice).
+//
+// CachedInput == 0 means "no discount, charge the full Input rate", so on the
+// cache-read axis a zero is the EXPENSIVE value. Taking max() field by field
+// would pick the largest declared discount and produce a "most expensive price"
+// that bills cache-heavy traffic — the common shape for agent workloads — for
+// less than a real model does.
+func TestCostCacheAxisIsNotMonotonicInCachedInput(t *testing.T) {
+	// dear declares no cache discount; cheap declares a large one.
+	dear := config.Price{Input: 15, Output: 75, CachedInput: 0, Unit: "per_1m_tokens"}
+	cheap := config.Price{Input: 1, Output: 5, CachedInput: 1.5, Unit: "per_1m_tokens"}
+	// chimera is what a per-field max would have produced from those two.
+	chimera := config.Price{Input: 15, Output: 75, CachedInput: 1.5, Unit: "per_1m_tokens"}
+
+	cacheHeavy := wire.Normalized{CachedInputTokens: 1_000_000}
+
+	if got, want := Cost(dear, cacheHeavy), 15.0; !approx(got, want) {
+		t.Fatalf("dear cache-read cost = %v, want %v (CachedInput 0 falls back to Input)", got, want)
+	}
+	if Cost(chimera, cacheHeavy) >= Cost(dear, cacheHeavy) {
+		t.Error("per-field max should have been cheaper than a real model here; the hazard this test documents is gone — re-check fallbackPrice")
+	}
+	// And the real price we do borrow is never cheaper than the one it beat.
+	if Cost(dear, cacheHeavy) < Cost(cheap, cacheHeavy) {
+		t.Error("borrowed price must not undercut the model it outranked")
 	}
 }

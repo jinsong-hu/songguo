@@ -27,11 +27,34 @@ type Credential struct {
 // Price is the true per-model cost used for metering and cheapest-route.
 // CachedInput is the rate for cache-hit input tokens; non-positive means
 // "charge the full Input rate" (no cache discount configured).
+//
+// Source records where the rate came from, so a synthetic price is never
+// mistaken for a published one. It is metadata only — pricing.Cost ignores it —
+// but it is surfaced through GET /api/pricing and the vendor view so the ledger
+// and the pricing table can always be reconciled. See PriceSource* below.
 type Price struct {
 	Input       float64 `yaml:"input"`
 	Output      float64 `yaml:"output"`
 	CachedInput float64 `yaml:"cached_input"`
-	Unit        string  `yaml:"unit"` // e.g. per_1m_tokens, per_1k_tokens, per_token, per_call, per_image, per_second, per_char
+	Unit        string  `yaml:"unit"`   // e.g. per_1m_tokens, per_1k_tokens, per_token, per_call, per_image, per_second, per_char
+	Source      string  `yaml:"source"` // provenance; see PriceSource*
+}
+
+// Price provenance values. Anything with the PriceSourceFallbackPrefix is a
+// guess: the model had no published rate, so it borrowed the named model's
+// price (see configsvc.fallbackPrice).
+const (
+	PriceSourceCatalog        = "catalog"   // matched an entry in the embedded catalog
+	PriceSourceOverride       = "override"  // operator typed the rate and set price_override
+	PriceSourceStored         = "stored"    // rate came from the provider row as-is
+	PriceSourceUnpriced       = "unpriced"  // no rate available; meters $0
+	PriceSourceFallbackPrefix = "fallback:" // + the model whose price was borrowed
+)
+
+// IsFallbackPrice reports whether p's rate was borrowed from another model
+// rather than published for this one.
+func IsFallbackPrice(p Price) bool {
+	return strings.HasPrefix(p.Source, PriceSourceFallbackPrefix)
 }
 
 // KnownPriceUnits is the set of pricing units the cost engine understands (see
@@ -57,6 +80,64 @@ func PriceMetersZero(p Price) bool {
 	default:
 		return p.Input <= 0
 	}
+}
+
+// PriceUnitFamily groups units that price the same physical thing, so two
+// prices can be compared or substituted for one another. The three token units
+// differ only by scale and share a family; every other unit stands alone
+// because the quantities are disjoint — wire.Normalized keeps Seconds, Chars,
+// Images and Calls separate from the token counts, and pricing.Cost dispatches
+// on Unit alone. Substituting across families therefore does not over- or
+// under-bill, it silently computes $0. An unrecognized unit has no family.
+func PriceUnitFamily(unit string) string {
+	switch unit {
+	case "per_1m_tokens", "per_1k_tokens", "per_token":
+		return "tokens"
+	case "per_call", "per_image", "per_second", "per_char":
+		return unit
+	default:
+		return ""
+	}
+}
+
+// PriceRank scores a price so two prices in the same family can be ordered by
+// expensiveness. Token rates are normalized to a per-1M basis so units within
+// the family are comparable; the score is the dominant side (output rates
+// exceed input rates for every model in the catalogue, but take the max rather
+// than assume it). Single-rate units score on Input, their only rate. Prices
+// outside any known family score 0 — they can never win a comparison.
+func PriceRank(p Price) float64 {
+	side := p.Input
+	if p.Output > side {
+		side = p.Output
+	}
+	switch p.Unit {
+	case "per_1m_tokens":
+		return side
+	case "per_1k_tokens":
+		return side * 1e3
+	case "per_token":
+		return side * 1e6
+	case "per_call", "per_image", "per_second", "per_char":
+		return p.Input
+	default:
+		return 0
+	}
+}
+
+// MaxSaneTokenRate bounds a per-1M-normalized token rate that config assembly
+// will treat as real. It exists because per_token and per_1k_tokens normalize
+// by 1e6 and 1e3: a rate typed against the wrong unit (input: 3.0 as per_token
+// rather than per_1m_tokens) becomes $3,000,000/1M. Such a row still meters as
+// written — we do not silently rewrite an operator's number — but it is warned
+// about and barred from being borrowed as another model's fallback price, so
+// one typo cannot re-price a whole provider.
+const MaxSaneTokenRate = 1000.0
+
+// PriceRateImplausible reports whether a price's normalized rate exceeds
+// MaxSaneTokenRate, i.e. it is almost certainly a unit mistake.
+func PriceRateImplausible(p Price) bool {
+	return PriceUnitFamily(p.Unit) == "tokens" && PriceRank(p) > MaxSaneTokenRate
 }
 
 // Adapter names the auth scheme a vendor expects (header style applied when

@@ -540,6 +540,8 @@ export interface Price {
   input: number;
   output: number;
   unit: string;
+  /** Rate provenance: "catalog" | "override" | "stored" | "unpriced" | "fallback:<model>". */
+  source: string;
 }
 
 export interface VendorStats {
@@ -710,6 +712,8 @@ export interface PricingRow {
   input: number;
   output: number;
   unit: string;
+  /** Rate provenance: "catalog" | "override" | "stored" | "unpriced" | "fallback:<model>". */
+  source: string;
 }
 
 export type StatusGroup = 'all' | 'ok' | 'error';

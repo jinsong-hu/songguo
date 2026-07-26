@@ -129,6 +129,51 @@ Read-only by design: if a usage shape isn't recognized the call still succeeds w
 - **`anthropic/count_tokens`** — zero-cost: Anthropic bills token counting as free, so the call is logged (for observability) but never priced; the response (`{"input_tokens":N}`, no `usage` object) is not parsed.
 - **`openai/models`, `anthropic/models`, `volc/voice-clone`** — zero-cost management endpoints, not parsed. (Voice-clone's slot fee is billed out-of-band on first synthesis.)
 
+### Unpriced models fall back to the provider's ceiling
+
+Metering answers "how much was used"; pricing answers "at what rate". They fail
+differently, and only the first defaults to zero.
+
+**Unknown usage meters $0.** If the vendor omits usage or the shape isn't
+recognized, the call bills nothing. We bill what the vendor reported, verbatim,
+and never substitute a local token count.
+
+**An unknown *price* does not.** A model a provider serves but nobody published
+a rate for is given, at config-build time, **the most expensive rate that same
+provider charges in the same unit family**. Otherwise a newly released model
+(one not yet in `catalog.json`) silently bills $0 until someone notices — an
+under-bill indistinguishable from a free call in the ledger. The substitution:
+
+- **stays inside a unit family** — `per_1m_tokens`/`per_1k_tokens`/`per_token`
+  are interchangeable after normalizing; `per_call`, `per_image`, `per_second`
+  and `per_char` each stand alone. Crossing families would not over-bill, it
+  would compute $0 while appearing to carry a rate, because the quantities are
+  disjoint.
+- **copies a whole real price**, never a per-field maximum. `cached_input: 0`
+  means "no discount, charge full input", so a field-wise max would pick the
+  *largest discount* and undercut a real model on cache-heavy traffic.
+- **never crosses providers.** A provider with no usable same-family rate keeps
+  its $0 and is warned about. Borrowing globally would make one provider's bill
+  a function of unrelated config.
+- **triggers on provenance, not on the number.** Only a model nobody ever
+  stated a rate for is eligible. A zero *someone published* is a real price
+  meaning free — the catalog lists genuinely free tiers (`glm-4.7-flash`), and
+  an operator `price_override` of zero is a deliberate "don't bill this" — and
+  is left alone. Re-pricing those would invent a charge for a free model.
+- **skips implausibly scaled rates** (a `per_token` value that normalizes above
+  $1000/1M is almost certainly a unit typo), so one mistake can't become the
+  ceiling for a whole provider.
+
+Every price carries a `source` (`catalog`, `override`, `stored`, `unpriced`, or
+`fallback:<model>`), visible in `GET /api/pricing` and the vendor view, so a
+borrowed rate is never mistaken for a published one and the ledger can always be
+reconciled against the price table. Fallbacks are logged at reload.
+
+A price lookup that *misses entirely* is different again: it means the request
+reached a vendor that never declared the model (a provider pin, an empty model
+string, an unmapped `X-Api-Resource-Id`). There is no rate to reason from, so the
+call bills $0 and logs a warning — a routing signal, not a pricing gap.
+
 ## Auth adapters
 
 Derived from the wire name prefix — the operator never picks it. This is the

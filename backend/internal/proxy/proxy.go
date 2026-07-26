@@ -820,11 +820,24 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	// stable proportions/trends matter more than matching the vendor's exact total.
 	// Billing wants the authoritative number; insights want the granular one. They
 	// are separate on purpose and must not be cross-reconciled.
+	//
+	// The PRICE side is separate from the usage side above. A model the provider
+	// declares but nobody published a rate for is given the provider's most
+	// expensive same-unit rate at config-build time (configsvc.fallbackPrice), so
+	// it over-bills visibly instead of metering $0. That substitution lives in the
+	// snapshot — never here — which is what keeps GET /api/pricing and the ledger
+	// in agreement. A miss below is a different thing entirely: it means we routed
+	// a model this vendor never declared (a provider pin, an empty model string, or
+	// an unmapped X-Api-Resource-Id), which is a routing/classification signal, not
+	// a pricing gap. There is no rate to reason from, so we bill $0 and say so.
 	cost := 0.0
 	if rw.matched && !rw.wire.ZeroCost {
 		if snap := h.snapshot(); snap != nil {
 			if price, ok := snap.PriceFor(t.Vendor.Name, model); ok {
 				cost = pricing.Cost(price, ext.Norm)
+			} else {
+				h.logger.Warn("no price entry for model under this vendor; metering $0",
+					"vendor", t.Vendor.Name, "model", model, "call_id", callID)
 			}
 		}
 	}
