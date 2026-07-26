@@ -719,6 +719,7 @@ func claudeImageTier(model string) imageTier {
 		"mythos-5", "mythos 5",
 		// Real model ids use dash form (claude-opus-4-8); dot/space forms
 		// cover display names.
+		"opus-5", "opus 5",
 		"opus-4-8", "opus-4.8", "opus 4.8",
 		"opus-4-7", "opus-4.7", "opus 4.7",
 		"sonnet-5", "sonnet 5",
