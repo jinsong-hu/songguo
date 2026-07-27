@@ -33,11 +33,12 @@ These are not re-litigated here; they are the ground the gateway stands on.
   credential headers are stripped outbound so the songguo key never leaks.
 - **One attempt, no invented retries.** The gateway forwards exactly one attempt
   and surfaces the vendor's outcome — success or `429`/`5xx`/transport error —
-  verbatim. No per-call retry, no mid-call failover, no automatic health
-  demotion. A client that wants to retry retries itself.
+  verbatim. No per-call retry, no mid-call failover. A client that wants to retry
+  retries itself. Repeated failures do demote a vendor, but only for the *next*
+  request (see below).
 - **Endpoint-first routing.** The request path selects the wire; the wire plus
-  (when present) the body `model` selects the vendor (priority → weighted
-  round-robin, first pick forwarded). `X-Songguo-Provider` is an optional
+  (when present) the body `model` selects the vendor (health → sticky session → priority →
+  weight, first pick forwarded). `X-Songguo-Provider` is an optional
   disambiguator, never a required header. An unmatched path is a `404`.
 
 ## Request flow

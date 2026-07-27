@@ -156,7 +156,7 @@ type Vendor struct {
 	Adapter      string           `yaml:"adapter"` // auth scheme; default openai-compatible
 	ServedModels []string         `yaml:"served_models"`
 	Priority     int              `yaml:"priority"` // lower = preferred; default 0
-	Weight       int              `yaml:"weight"`   // weighted round-robin within a priority; normalized to >=1
+	Weight       int              `yaml:"weight"`   // share of traffic within a priority tier; normalized to >=1
 	Credential   Credential       `yaml:"credential"`
 	Prices       map[string]Price `yaml:"prices"`
 	// Wires is the allowlist of wire names (see internal/wire) the proxy may

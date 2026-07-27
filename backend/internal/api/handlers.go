@@ -11,6 +11,7 @@ import (
 	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/compose"
 	"github.com/songguo/songguo/internal/config"
+	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/sessiontitle"
 	"github.com/songguo/songguo/internal/store"
 )
@@ -1834,11 +1835,25 @@ func (a *api) handleListVendors(w http.ResponseWriter, r *http.Request) {
 		a.serverError(w, "vendor stats", err)
 		return
 	}
+	// Live routing state, keyed by vendor name. The router only holds entries
+	// for vendors it has an opinion about; the rest are live by default and get
+	// no routing block.
+	routing := map[string]router.VendorState{}
+	if a.router != nil {
+		for _, rs := range a.router.Inspect() {
+			routing[rs.Vendor] = rs
+		}
+	}
+
 	vendors := snap.Vendors()
 	views := make([]vendorView, 0, len(vendors))
 	for _, v := range vendors {
 		st, ok := stats[v.Name]
-		views = append(views, newVendorView(v, st, ok))
+		var rs *router.VendorState
+		if s, found := routing[v.Name]; found {
+			rs = &s
+		}
+		views = append(views, newVendorView(v, st, ok, rs))
 	}
 	writeJSON(w, http.StatusOK, views)
 }

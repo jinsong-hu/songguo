@@ -59,10 +59,33 @@ Because matching is suffix-based, the path _prefix_ is conventional. The canonic
 Every request resolves the same way — there are **no addressing "modes."** Once the wire is fixed by path suffix, the provider is chosen by the first available selector:
 
 1. **`X-Songguo-Provider: <name>` header** — explicit pin. A control header (like `X-Control-Require-Usage-Tokens-Return`): **stripped before forwarding**, never part of the body, so it stays inside no-transform. Use it to pick a specific account/provider, or to keep a submit→poll lifecycle on the same provider (affinity).
-2. **The body's `model` string** — for model-bearing wires, picks the provider(s) that declare `(wire, model)`; pooling applies (priority → weighted-RR), and the top candidate is forwarded to.
-3. **The default provider** — when neither a header nor a model is present, every vendor serving the matched wire is a candidate, ordered by the existing priority → weighted-RR ranking; the top one is the default. (No separate "default" flag — it reuses provider priority.)
+2. **The body's `model` string** — for model-bearing wires, picks the provider(s) that declare `(wire, model)`; pooling applies (health → sticky → priority → weight), and the top candidate is forwarded to.
+3. **The default provider** — when neither a header nor a model is present, every vendor serving the matched wire is a candidate, ordered by the same health → sticky → priority → weight ranking; the top one is the default. (No separate "default" flag — it reuses provider priority.)
 
-Only the top candidate is forwarded to: songguo makes **one attempt** per request and surfaces the vendor's response verbatim. There is no per-call retry or failover, and no automatic health demotion today — a failing vendor stays selected until an operator changes config. The remaining candidates are just the ranked pool, not a replay list.
+Only the top candidate is forwarded to: songguo makes **one attempt** per request and surfaces the vendor's response verbatim. There is no per-call retry or failover — the remaining candidates are a ranked pool, not a replay list.
+
+Ranking is **health → sticky session → priority → weight**.
+
+A session pins to the provider that served its previous turn, so an agent conversation keeps one vendor and its prompt cache stays warm — on a large context that is the most expensive routing decision songguo makes. Health sorts above the pin, so it is only ever consulted among vendors of equal health and can never strand a session on a broken provider, and a client that sends no session header simply gets the ordinary ordering. Within a priority tier, selection is a **weighted random draw** rather than a rotation: correct in expectation, stateless, and approximate over short bursts.
+
+Health is learned passively from real requests — songguo never sends probe traffic.
+
+Failures are graded by the question *"would an identical retry fail identically?"*:
+
+| signal | strikes | outcomes |
+|---|---|---|
+| `neutral` | 0 | 400/404/408/422, client aborted mid-stream — the caller's fault; every vendor would reject identically |
+| `fail` | 1 (3 demote) | timeout, connection reset, unexpected EOF, temporary DNS failure, 5xx, 429, 403 |
+| `fail_hard` | demotes at once | connection refused, DNS NXDOMAIN, bad TLS certificate — properties of the endpoint, not the request |
+| `fail_credential` | demotes at once, **all sibling vendors** | 401 — a revoked key is dead on every host presenting it |
+
+A transport failure has no status code, so classification inspects the error value (`ECONNREFUSED`, `DNSError.IsNotFound`, TLS verification errors) rather than the status. 403 stays ambiguous on purpose — it can mean "model not on your plan", which is per-model, not vendor-wide.
+
+Scope matters because one provider becomes several vendors via the `(origin, adapter)` split. Those hosts fail independently, so a dead origin never demotes its sibling — but they share one credential, so a 401 demotes all of them at once.
+
+The failure streak **survives the cooldown**: a vendor that fails its first request back is re-demoted immediately, so a permanently dead vendor costs one client-visible failure per window rather than three. Only a success clears it.
+
+Demotion is **cross-request** — it changes which vendor the *next* request goes to, never the one that failed — and it **never excludes**: a cooling vendor still serves if nothing healthier is available, so health can never empty a candidate list. `GET /api/vendors` exposes the live state under `routing`.
 
 If none resolves, the call is denied with a clear error.
 

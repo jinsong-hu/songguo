@@ -110,16 +110,18 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 	// 1. Select candidate vendors, endpoint-first. A pin constrains to one
 	// provider's vendors; with no pin every vendor is a candidate and the path
 	// narrows them below — the same rule resolve() applies to HTTP.
+	//
+	// Session affinity applies here too, though it rarely fires: realtime
+	// clients seldom send the agent-session headers, and a bodyless upgrade has
+	// no other identity. When absent the selector simply carries no session and
+	// ordering falls through to health, priority, and the weighted draw.
 	pin := r.Header.Get("X-Songguo-Provider")
-	var (
-		targets []router.Target
-		err     error
-	)
+	attr := extractAttribution(r.Header)
+	sel := router.Selector{Scope: router.ScopeAll, Session: attr.session}
 	if pin != "" {
-		targets, err = h.router.CandidatesForProvider(pin)
-	} else {
-		targets, err = h.router.AllCandidates()
+		sel.Scope, sel.ProviderID = router.ScopeProvider, pin
 	}
+	targets, err := h.router.Select(sel)
 	if err != nil || len(targets) == 0 {
 		writeError(w, http.StatusBadGateway, "no_upstream", "no upstream serves this request")
 		return
@@ -182,7 +184,7 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 	// 4. Single attempt: forward to the top candidate only. Like the HTTP path,
 	// there is no failover — a bad origin, a dial error, or a non-101 handshake is
 	// surfaced verbatim (the upstream's own response when we have one, else a
-	// 502). targets[0] is the pick (priority -> weighted-RR).
+	// 502). targets[0] is the pick (health -> sticky -> priority -> weight).
 	t := targets[0]
 
 	var (
@@ -202,11 +204,19 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 	start := h.now()
 	conn, reader, resp, derr := h.dialWSUpstream(host, useTLS, requestTarget, r, t)
 	if derr != nil {
+		// Cross-request health only — steers the next upgrade, never retries
+		// this one.
+		h.router.Report(t.Vendor.Name, t.Credential.ID, router.Classify(0, derr, r.Context().Err() != nil))
 		h.logger.Error("websocket dial failed", "err", derr, "vendor", t.Vendor.Name)
 		writeError(w, http.StatusBadGateway, "upstream_error", derr.Error())
 		return
 	}
 	handshake = h.now().Sub(start)
+
+	// Judge the vendor on the HANDSHAKE only. A pipe that ends an hour later
+	// says nothing about whether this vendor can accept a new connection now.
+	h.router.Report(t.Vendor.Name, t.Credential.ID, router.Classify(resp.StatusCode, nil, false))
+	h.router.Pin(sel, t.Vendor.Name)
 
 	if resp.StatusCode == http.StatusSwitchingProtocols {
 		upConn, upReader, upResp = conn, reader, resp

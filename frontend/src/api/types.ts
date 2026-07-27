@@ -553,6 +553,31 @@ export interface VendorStats {
   healthy: boolean;
 }
 
+/**
+ * Live router state for a vendor: what routing will do with the NEXT request.
+ * Distinct from VendorStats, which is historical and ledger-derived — a vendor
+ * with one old error reads stats.healthy=false while routing has it live.
+ * Absent when the router has no entry for the vendor (live by default).
+ */
+export interface RoutingState {
+  /** Demoted: ranked last until the cooldown lapses. Never excluded. */
+  cooling: boolean;
+  cooling_until?: string;
+  /**
+   * Presumed broken after repeated demotions with no success. Unlike `cooling`
+   * this does not lapse on a timer — while any healthy vendor exists it will not
+   * be tried again, so it clears only on a success or when an operator disables
+   * the provider. This is the state worth surfacing loudly.
+   */
+  dead: boolean;
+  /** Consecutive failures since the last success. */
+  consec_fails: number;
+  /** Consecutive demotions since the last success; each doubles the cooldown. */
+  demotions: number;
+  /** Live agent sessions pinned here for prompt-cache locality. */
+  sessions: number;
+}
+
 export interface Vendor {
   name: string;
   origin: string;
@@ -563,6 +588,7 @@ export interface Vendor {
   credential: Credential;
   prices: Record<string, Price>;
   stats: VendorStats;
+  routing?: RoutingState;
 }
 
 export interface VendorTestResult {

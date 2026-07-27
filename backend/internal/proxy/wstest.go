@@ -91,6 +91,11 @@ func (h *wsTestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve the pinned provider to its upstream endpoint + credential, reusing
 	// the proxy's wire matching and per-vendor path rewrite.
+	//
+	// This path deliberately never calls router.Report: it is operator-driven
+	// probe traffic from the dashboard, and a failing connectivity test must not
+	// demote a vendor for real clients. Health is learned from real requests
+	// only (see internal/router).
 	targets, err := h.router.CandidatesForProvider(providerID)
 	if err != nil || len(targets) == 0 {
 		http.Error(w, "no upstream for provider", http.StatusBadGateway)

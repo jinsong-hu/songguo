@@ -1216,6 +1216,19 @@ components:
         output: { type: number }
         unit: { type: string }
         source: { $ref: "#/components/schemas/PriceSource" }
+    RoutingState:
+      type: object
+      description: >-
+        Live router state for this vendor: what routing will do with the NEXT
+        request. Distinct from stats, which is historical and ledger-derived.
+        Omitted when the router has no entry for the vendor (live by default).
+      properties:
+        cooling: { type: boolean, description: "Demoted: ranked last until the cooldown lapses. Never excluded — it still serves if nothing healthier is available." }
+        cooling_until: { type: string, format: date-time }
+        dead: { type: boolean, description: "Presumed broken after repeated demotions with no success. Unlike cooling this does not lapse on a timer: while any healthy vendor exists it will not be tried again, so it clears only on a success or when an operator disables the provider. Alert on this." }
+        consec_fails: { type: integer, description: "Consecutive failures since the last success." }
+        demotions: { type: integer, description: "Consecutive demotions since the last success. Each one doubles the cooldown, up to the ceiling." }
+        sessions: { type: integer, description: "Live agent sessions pinned to this vendor for prompt-cache locality." }
     Vendor:
       type: object
       properties:
@@ -1227,6 +1240,7 @@ components:
         credential: { $ref: "#/components/schemas/Credential" }
         prices: { type: object, additionalProperties: { $ref: "#/components/schemas/Price" } }
         stats: { $ref: "#/components/schemas/VendorStats" }
+        routing: { $ref: "#/components/schemas/RoutingState" }
     TestResult:
       type: object
       properties:

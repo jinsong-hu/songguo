@@ -70,7 +70,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	rt := router.New(manager.Current)
+	rt := router.New(manager.Current, router.Options{Logger: logger})
 	proxyDeps := proxy.Deps{
 		Snapshot: manager.Current,
 		Store:    st,
@@ -81,9 +81,20 @@ func main() {
 	testWSHandler := proxy.NewWSTestHandler(proxyDeps)
 
 	adminDeps := api.Deps{
-		Store:      st,
-		Snapshot:   manager.Current,
-		Reload:     manager.Reload,
+		Store:    st,
+		Snapshot: manager.Current,
+		Router:   rt,
+		Reload: func() error {
+			if err := manager.Reload(); err != nil {
+				return err
+			}
+			// An operator edit is an explicit statement about a provider, so
+			// clear routing health rather than let a vendor inherit a cooldown
+			// it earned under different config. This also drops health entries
+			// for vendors the reload removed.
+			rt.ResetHealth()
+			return nil
+		},
 		AdminKey:   adminKey,
 		Logger:     logger,
 		Version:    "dev",

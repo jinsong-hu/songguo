@@ -10,9 +10,10 @@
 // It forwards exactly one attempt: there is no per-call retry or failover. The
 // vendor's response — success or failure (429, 5xx, transport error) — is
 // surfaced to the client verbatim; a client that wants to retry retries itself.
-// Choosing among multiple candidates for a model is a routing decision (priority
-// then weighted round-robin); there is no automatic health demotion today, so a
-// failing vendor stays selected until an operator changes config.
+// Choosing among multiple candidates for a model is a routing decision (health
+// then priority then weight). A vendor that fails repeatedly is
+// demoted for the NEXT request — cross-request steering, computed before
+// dispatch — but this request still gets exactly one attempt.
 //
 // Every request must resolve to a wire (see internal/wire): the service's
 // enabled wire whose path pattern matches. The wire owns usage extraction and
@@ -26,7 +27,7 @@
 //
 //   - the X-Songguo-Provider header (an explicit pin by provider id, stripped
 //     before forwarding), else
-//   - the body's model string (every vendor serving it; priority/weighted-RR/
+//   - the body's model string (every vendor serving it; health/priority/weight/
 //     health-ordered), else
 //   - the default: every vendor serving the matched path, priority-ordered.
 //
@@ -265,9 +266,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//
 	// Choosing among multiple candidates is still a real decision, but a
 	// cross-request (server-side) one, not a per-call one: rt.targets is ordered
-	// by priority -> weighted round-robin, so targets[0] is the pick. There is no
-	// health demotion today — a failing vendor is NOT auto-brought-down, so it
-	// stays selected until an operator changes config (see router package).
+	// by health -> sticky -> priority -> weight, so targets[0] is the pick.
+	// A vendor that has failed repeatedly is demoted for the NEXT request (see
+	// the router package); this request still gets exactly one attempt, and
+	// whatever it returns is what the client sees.
 	rw := rt.wires[t.Vendor.Name]
 
 	upReq, err := h.buildUpstreamRequest(r, t, rt.upstreamURL(t), body)
@@ -295,6 +297,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Transport error: we have no upstream response to forward, so surface the
 	// real failure verbatim.
 	if err != nil {
+		// Cross-request health only: this steers the NEXT request away from a
+		// dead vendor, it does not retry this one. A client that hung up
+		// mid-stream cancels our upstream request too, so pass whether the
+		// client is gone — that outcome must not be blamed on the vendor.
+		h.router.Report(t.Vendor.Name, t.Credential.ID, router.Classify(0, err, r.Context().Err() != nil))
 		h.logger.Warn("upstream request failed",
 			"vendor", t.Vendor.Name, "model", rt.model, "credential", t.Credential.ID,
 			"url", upReq.URL.String(), "latency_ms", headerLatency, "err", err)
@@ -310,12 +317,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Forward the vendor's response verbatim — including a 429/5xx. The client
-	// sees the real outcome and decides whether to retry.
-	h.forward(w, r, resp, callID, user.ID, rt.model, modality, rw, t, start, tags, attr, client, capture, body)
+	// sees the real outcome and decides whether to retry. The health report
+	// happens at the END of forward rather than here, so that a response which
+	// starts 200 and then dies mid-stream is not recorded as a success.
+	h.forward(w, r, resp, callID, user.ID, rt.model, modality, rw, t, start, tags, attr, client, capture, body, rt.sel)
 }
 
 // route is the resolved plan for a request: the candidate targets in selection
-// order (priority -> weighted-RR; only the first is forwarded to, the rest are
+// order (health -> sticky -> priority -> weight; only the first is forwarded to, the rest are
 // context for a future server-side ejection decision), the model/modality to
 // record, a per-target builder for the upstream URL, and the per-vendor resolved
 // wire that owns metering.
@@ -328,6 +337,10 @@ type route struct {
 	tags        map[string]string       // call tags (header + body metadata)
 	attr        attribution             // agent-session attribution ids
 	client      calls.ClientInfo        // normalized caller client from User-Agent
+	// sel is the selector that produced targets. Kept so the dispatch site can
+	// pin the session to the vendor it ACTUALLY used, which is not always
+	// targets[0] — wire matching and user scope narrow the list afterwards.
+	sel router.Selector
 }
 
 // resolvedWire is the metering plan for one candidate vendor: the matched wire
@@ -519,19 +532,22 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 	// vendor, and resolveWires (below) narrows to those serving the requested
 	// path — i.e. the endpoint. A single provider on an endpoint is selected
 	// without the model ever being consulted.
+	//
+	// The selector also carries the caller's agent session, which keeps a
+	// conversation on one provider so its prompt cache stays warm. It is a
+	// preference, not a constraint: a pinned vendor that stops working loses the
+	// pin immediately (see router.stickyRank).
 	pin := r.Header.Get("X-Songguo-Provider")
-	var (
-		targets []router.Target
-		err     error
-	)
+	sel := router.Selector{Session: attr.session}
 	switch {
 	case pin != "":
-		targets, err = h.router.CandidatesForProvider(pin)
+		sel.Scope, sel.ProviderID = router.ScopeProvider, pin
 	case routingModel != "":
-		targets, err = h.router.Candidates(routingModel)
+		sel.Scope, sel.Model = router.ScopeModel, routingModel
 	default:
-		targets, err = h.router.AllCandidates()
+		sel.Scope = router.ScopeAll
 	}
+	targets, err := h.router.Select(sel)
 	if err != nil {
 		if errors.Is(err, router.ErrNoVendor) {
 			h.denyCapture(w, r, body, capture, denyEntry(""), http.StatusBadGateway, "no_upstream", "no upstream serves this request")
@@ -571,6 +587,7 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 		tags:     tags,
 		attr:     attr,
 		client:   client,
+		sel:      sel,
 		upstreamURL: func(t router.Target) string {
 			if rw, ok := wires[t.Vendor.Name]; ok && rw.matched {
 				// A path-bearing endpoint is the fixed upstream URL — a rewrite
@@ -759,8 +776,27 @@ func mergeQuery(u, inboundQuery string) string {
 // call row is written.
 func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Response,
 	callID, userID, model string, modality calls.Modality, rw resolvedWire, t router.Target,
-	startedAt time.Time, tags map[string]string, attr attribution, client calls.ClientInfo, capture bool, reqBody []byte) {
+	startedAt time.Time, tags map[string]string, attr attribution, client calls.ClientInfo, capture bool, reqBody []byte,
+	sel router.Selector) {
 	defer resp.Body.Close()
+
+	// bodyErr is the terminal error from relaying the vendor's body, if any. It
+	// is what makes a truncated stream visible to health: a clean end reads as
+	// io.EOF and leaves this nil, while a vendor that dies mid-response leaves
+	// an unexpected EOF or a connection reset. No payload inspection is
+	// involved — the transport tells us directly.
+	var bodyErr error
+	defer func() {
+		clientGone := r.Context().Err() != nil || errors.Is(bodyErr, errClientGone)
+		h.router.Report(t.Vendor.Name, t.Credential.ID,
+			router.Classify(resp.StatusCode, upstreamBodyErr(bodyErr), clientGone))
+
+		// Pin the session to the vendor we actually used, so its next request
+		// reuses this provider's warm prompt cache. Done on every dispatch
+		// regardless of outcome: re-pinning on the next request is how every
+		// breakage case (demotion, config change, expiry) resolves itself.
+		h.router.Pin(sel, t.Vendor.Name)
+	}()
 
 	stream := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
 
@@ -783,14 +819,15 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 				})
 			}
 		}
-		respBody, parseRespBody = h.streamBody(r.Context(), w, resp.Body, capture, scanner, resp.Header.Get("Content-Encoding"))
+		respBody, parseRespBody, bodyErr = h.streamBody(r.Context(), w, resp.Body, capture, scanner, resp.Header.Get("Content-Encoding"))
 		if scanner != nil {
 			ext = scanner.Result()
 		} else {
 			ext = wire.Extraction{Confidence: calls.ConfidenceUnknown}
 		}
 	} else {
-		full := h.copyBody(w, resp.Body)
+		full, cerr := h.copyBody(w, resp.Body)
+		bodyErr = cerr
 		respBody = full
 		parseRespBody = bodyForMeter(full, resp.Header.Get("Content-Encoding"), h.logger)
 		if rw.matched {
@@ -996,21 +1033,29 @@ func (h *handler) savePayload(callID string, r *http.Request, reqBody []byte,
 // given), and (when capture is on) an in-memory buffer, flushing after each
 // chunk so nothing is buffered for the client. It returns the captured body, or
 // nil when capture is off.
-func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.Reader, capture bool, scanner wire.StreamScanner, contentEncoding string) ([]byte, []byte) {
+// It returns the terminal error, if any: nil when the vendor closed the stream
+// cleanly, errClientGone when our caller went away, and the raw read error when
+// the vendor's stream died early. That last case is how a truncated response
+// becomes a health signal without anyone parsing the payload.
+func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.Reader, capture bool, scanner wire.StreamScanner, contentEncoding string) ([]byte, []byte, error) {
 	flusher, _ := w.(http.Flusher)
 	scanWrite, scanFinish := meteringScannerWriter(scanner, contentEncoding, h.logger)
 	defer scanFinish()
 
 	var captured []byte
+	var termErr error
 	buf := make([]byte, 32*1024)
 	for {
 		if err := ctx.Err(); err != nil {
+			termErr = errClientGone
 			break
 		}
 		n, err := src.Read(buf)
 		if n > 0 {
 			chunk := buf[:n]
 			if _, werr := w.Write(chunk); werr != nil {
+				// The client hung up. Never the vendor's fault.
+				termErr = errClientGone
 				break
 			}
 			scanWrite(chunk)
@@ -1022,13 +1067,32 @@ func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.
 			}
 		}
 		if err != nil {
+			// io.EOF is the normal end of a stream. Anything else — an
+			// unexpected EOF, a connection reset, an HTTP/2 stream error — means
+			// the vendor stopped mid-response.
+			if !errors.Is(err, io.EOF) {
+				termErr = err
+			}
 			break
 		}
 	}
 	if !capture {
-		return nil, nil
+		return nil, nil, termErr
 	}
-	return captured, bodyForMeter(captured, contentEncoding, h.logger)
+	return captured, bodyForMeter(captured, contentEncoding, h.logger), termErr
+}
+
+// errClientGone marks a relay that ended because our caller disconnected, so it
+// is never charged against the vendor's health.
+var errClientGone = errors.New("proxy: client disconnected")
+
+// upstreamBodyErr filters a relay error down to the ones that are the vendor's
+// fault, so Classify sees nil for a clean stream or a client abort.
+func upstreamBodyErr(err error) error {
+	if err == nil || errors.Is(err, errClientGone) {
+		return nil
+	}
+	return err
 }
 
 func meteringScannerWriter(scanner wire.StreamScanner, contentEncoding string, logger *slog.Logger) (func([]byte), func()) {
@@ -1105,7 +1169,10 @@ func bodyForMeter(body []byte, contentEncoding string, logger *slog.Logger) []by
 
 // copyBody reads the full non-streaming body and writes it to the client
 // unchanged, returning the body for usage extraction and capture.
-func (h *handler) copyBody(w http.ResponseWriter, src io.Reader) []byte {
+// It returns the terminal error alongside the body, on the same terms as
+// streamBody: a truncated non-streaming response is just as much a vendor
+// failure as a truncated stream.
+func (h *handler) copyBody(w http.ResponseWriter, src io.Reader) ([]byte, error) {
 	body, err := readBody(src)
 	if err != nil {
 		h.logger.Error("read upstream body failed", "err", err)
@@ -1113,9 +1180,11 @@ func (h *handler) copyBody(w http.ResponseWriter, src io.Reader) []byte {
 	if len(body) > 0 {
 		if _, werr := w.Write(body); werr != nil {
 			h.logger.Error("write client body failed", "err", werr)
+			// Our caller went away; the vendor did its part.
+			return body, errClientGone
 		}
 	}
-	return body
+	return body, err
 }
 
 // append writes a single-shot finalized call entry, for paths that have no

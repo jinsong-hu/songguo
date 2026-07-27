@@ -87,23 +87,109 @@ behavior a transparent proxy must not have — it masks failures, and it can rep
 a request that had a side effect. So we don't.
 
 Choosing **which** vendor serves a request, when a model has several candidates,
-is a routing decision — priority → weighted round-robin, and the proxy forwards
-to the **first** one.
+is a routing decision — health → sticky session → priority → weight, and the proxy
+forwards to the **first** one.
 
-There is **no automatic health demotion today**: a failing vendor is **not**
-brought down on its own, so it stays selected until an operator changes config.
-That is deliberate — "auto bring-down a bad provider" is a future, server-side
-feature we haven't built yet, and when we do it belongs in the router as a
-cross-request decision (steer the *next* request), **never** as a per-call retry.
-Do **not** re-add per-call failover to fake it in the meantime. This is a settled
-decision, like byte-transparency; don't re-litigate it behind a flag.
+Two of those four deserve stating plainly, because they are easy to get backwards:
+
+- **Priority is a strict tier, not a weight.** While any priority-1 vendor is
+  live, priority-2 receives nothing. That keeps two knobs with one job each: same
+  priority + different weights is *load balancing*, different priority is
+  *failover*. To split 90/10, use one priority and weights 9 and 1.
+- **Stickiness distributes sessions, not requests.** A session pins to whichever
+  vendor served its last turn, so an agent conversation keeps one provider and
+  its prompt cache — on a 200k-token context that is roughly a 10× difference in
+  input cost, which makes it the most expensive routing decision songguo makes.
+  Weight therefore decides where a *new* session lands, not where each request
+  goes. Health sorts **above** stickiness, so a pin is only ever consulted among
+  vendors of equal health and can never hold a session on a broken one — the
+  guarantee is structural. A client that sends no session header just gets the
+  ordinary ordering; we never *require* a header (see interface transparency).
+
+### Health demotion is cross-request, and that is the only shape allowed
+
+A vendor that fails repeatedly **is** brought down automatically — but only for
+the **next** request, never the current one. The router watches the outcome of
+each dispatched attempt (`router.Report`) and ranks a failing vendor last. The
+failing request itself is still surfaced verbatim; we do not retry it, and we do
+not replay it anywhere else.
+
+There are three health tiers, and only the middle one is time-based:
+
+| tier | entered by | left by |
+|---|---|---|
+| **live** | default | — |
+| **cooling** | `failThreshold` consecutive failures | the cooldown lapsing, or a success |
+| **dead** | `deadAfter` consecutive *demotions* with no success between them | a success, or an operator |
+
+Cooldowns **double** on each repeat demotion (30s → 1m → 2m → … → 15m), so a
+vendor that is genuinely gone costs ~4 failed requests an hour instead of 120.
+
+**Dead deliberately does not expire.** While any working vendor exists a dead one
+is never chosen, so it never earns the success that would revive it — it waits
+for a human, which is the right response to a provider that has failed this
+consistently. What makes that safe is that dead still never *excludes*: if
+everything is dead — a partition on our side rather than a real outage — the
+least-bad candidate still gets the request and the first success clears it. So a
+self-inflicted outage heals itself while a genuinely broken provider waits.
+
+This is the *only* legal shape for auto bring-down, and the boundary is worth
+stating plainly:
+
+- **Allowed** — using past outcomes to pick a different `targets[0]` *before*
+  dispatch. One client request still produces exactly one upstream attempt.
+- **Forbidden** — noticing the failure of the in-flight request and trying
+  somebody else. That invents an attempt, and no flag makes it acceptable.
+
+Two invariants keep the first from sliding into the second:
+
+1. **The router orders; it never denies and never filters.** `Select` returns a
+   permutation of its candidates — health **demotes, never excludes**. A cooling
+   vendor still serves if nothing healthier exists, so health state can never
+   empty a candidate list or manufacture a gateway refusal.
+2. **Detection is passive.** Health is learned from requests clients actually
+   made. We never probe: inventing traffic to a credential the operator pays for
+   is the sibling of inventing attempts and inventing bytes. The accepted price
+   is real client failures — 3 to trip the first demotion, then 1 per cooldown
+   window for as long as the vendor stays dead (the failure streak survives the
+   cooldown, so a vendor that fails its first request back is re-demoted at
+   once). Only a success clears the streak.
+
+Not every failure counts, and the ones that do are not equal. The question a
+signal answers is **"would an identical retry fail identically?"**
+
+| | | |
+|---|---|---|
+| **neutral** | caller's fault | 400/404/408/422, client hung up mid-stream. Every vendor rejects these identically, so counting them would let one broken client walk the whole fleet out of rotation |
+| **fail** | vendor's fault, ambiguous | timeouts, connection resets, unexpected EOF, temporary DNS failure, 5xx, 429, 403. Real, but as plausibly about this request or the network as about the vendor. Needs corroboration — 3 in a row |
+| **fail_hard** | vendor's fault, conclusive | connection refused, DNS NXDOMAIN, unverifiable TLS certificate. Properties of the *endpoint*, not the request: one is enough to demote |
+| **fail_credential** | credential's fault, conclusive | 401. Like fail_hard, but demotes **every vendor sharing that credential**, not just the one that observed it |
+
+A transport failure carries **no status code** (the vendor never answered), so
+`Classify` ignores status whenever the error is non-nil and inspects the error
+value instead — `syscall.ECONNREFUSED`, `net.DNSError.IsNotFound`,
+`tls.CertificateVerificationError`. This is why "timeout" and "connection
+refused" get different weights despite both arriving as `status = 0`.
+
+Two deliberate asymmetries:
+
+- **401 is credential-scoped; everything else is endpoint-scoped.** A provider
+  splits into several vendors by `(origin, adapter)`, and those hosts fail
+  independently — so a dead host says nothing about its sibling. But they share
+  one API key, and a revoked key is dead on all of them at once. Making each
+  sibling rediscover that with its own failed client request would be re-proving
+  a fact we already hold.
+- **403 is not conclusive even though 401 is.** 403 can mean "this model is not
+  on your plan", which is per-model rather than vendor-wide.
 
 > History: the HTTP wire path once walked the whole candidate list, retrying the
 > same request against the next vendor on `429`/`5xx`/transport error, and the
 > router auto-demoted a failing vendor into a ~30s health cooldown. Both were
-> removed 2026-07-03 — per-call failover on the HTTP **and** WebSocket paths, and
-> the automatic health cooldown. Routing is now priority → weighted-RR, one
-> attempt, no auto bring-down.
+> removed 2026-07-03. Cross-request demotion came back 2026-07-27 — in the
+> router, as designed — while per-call failover stayed dead. `TestNoPerCallFailover`
+> and `TestHealthDemotionIsCrossRequest` are the paired regression guards: the
+> first proves one request never becomes two attempts, the second proves the
+> failure still moves the *next* request.
 
 ## Interface transparency: the client just changes the endpoint
 
@@ -124,7 +210,7 @@ alone** — the dialed path resolves to a wire, which resolves to a vendor. It d
 `X-Songguo-Provider` is an **optional disambiguator**, never a toll gate. It only
 does something when one endpoint is served by several providers and the caller
 wants to force one; absent it, the path narrows to the matching wire(s) and the
-router picks (priority → weighted-RR). An unmatched path is a `404`
+router picks (health → sticky → priority → weight). An unmatched path is a `404`
 (`wire_unmatched`) — the fix is a **wire mapping in config**, never a header the
 client must send. The one asymmetry: an explicit pin is trusted enough to reach a
 provider's origin-only vendor that declares no wire; an unpinned request never

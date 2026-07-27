@@ -103,7 +103,10 @@ vendors:
 	}
 }
 
-func TestWeightedRoundRobinDistribution(t *testing.T) {
+// Selection within a priority tier is a weighted random draw, not a rotation,
+// so the split is correct in expectation rather than exact. Over this many
+// samples the law of large numbers makes it tight; a short burst would not be.
+func TestWeightedDistribution(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: heavy
@@ -130,10 +133,50 @@ vendors:
 		}
 		lead[got[0].Vendor.Name]++
 	}
-	// Expect roughly 3:1. Allow generous tolerance.
+	// Expect roughly 3:1. Tolerance is generous: this asserts the draw is
+	// weighted, not that it is precise.
 	ratio := float64(lead["heavy"]) / float64(lead["light"])
 	if ratio < 2.4 || ratio > 3.6 {
 		t.Fatalf("weighted ratio heavy/light = %.2f (heavy=%d light=%d), want ~3", ratio, lead["heavy"], lead["light"])
+	}
+}
+
+// An equal-weight pair must actually alternate over time. Guards against a draw
+// that is weighted but degenerate — e.g. always returning declaration order.
+func TestEqualWeightsSplitEvenly(t *testing.T) {
+	snap := buildSnapshot(t, twoVendorSamePriorityYAML)
+	r := New(staticSnap(snap), Options{Logger: quietLogger()})
+
+	const n = 4000
+	lead := map[string]int{}
+	for i := 0; i < n; i++ {
+		got, err := r.Candidates("m")
+		if err != nil {
+			t.Fatal(err)
+		}
+		lead[got[0].Vendor.Name]++
+	}
+	ratio := float64(lead["alpha"]) / float64(lead["beta"])
+	if ratio < 0.85 || ratio > 1.18 {
+		t.Fatalf("equal-weight ratio = %.2f (alpha=%d beta=%d), want ~1",
+			ratio, lead["alpha"], lead["beta"])
+	}
+}
+
+// An injected Rand makes the draw reproducible, which is what lets the sticky
+// and health tests assert an exact leader within one priority tier.
+func TestInjectedRandMakesSelectionDeterministic(t *testing.T) {
+	snap := buildSnapshot(t, twoVendorSamePriorityYAML)
+	// Always draw 0 -> every vendor gets the same draw value, so the sort falls
+	// through to declaration order.
+	r := New(staticSnap(snap), Options{
+		Rand:   func() float64 { return 0 },
+		Logger: quietLogger(),
+	})
+	for i := 0; i < 20; i++ {
+		if got := leadName(t, r); got != "alpha" {
+			t.Fatalf("lead = %q on call %d, want alpha every time", got, i)
+		}
 	}
 }
 

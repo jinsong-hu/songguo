@@ -17,13 +17,17 @@ import (
 	"time"
 
 	"github.com/songguo/songguo/internal/config"
+	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/store"
 )
 
 // Deps are the collaborators the admin API handler needs.
 type Deps struct {
-	Store      *store.Store
-	Snapshot   func() *config.Snapshot
+	Store    *store.Store
+	Snapshot func() *config.Snapshot
+	// Router exposes live routing state (which vendors are demoted) for vendor
+	// inspection. Optional: nil simply omits that block from the response.
+	Router     *router.Router
 	Reload     func() error // rebuild the live snapshot after a config write
 	AdminKey   string       // from SONGGUO_ADMIN_KEY; empty = unprotected (logged once)
 	Logger     *slog.Logger
@@ -38,6 +42,7 @@ type Deps struct {
 type api struct {
 	store      *store.Store
 	snapshot   func() *config.Snapshot
+	router     *router.Router
 	reload     func() error
 	adminKey   string
 	logger     *slog.Logger
@@ -78,6 +83,7 @@ func newAPI(d Deps) *api {
 	return &api{
 		store:      d.Store,
 		snapshot:   d.Snapshot,
+		router:     d.Router,
 		reload:     reload,
 		adminKey:   d.AdminKey,
 		logger:     logger,

@@ -71,7 +71,7 @@ A model channel **or** an MCP channel.
 | `credentials[]` | The **号池** — one or more keys, rotated to spread per-key rate limits |
 | `weight` / `priority` | Routing policy inputs |
 | `per_model_price` | For true-cost metering + cheapest-route |
-| `health` | Read from upstream responses (429/5xx) for observability. No auto bring-down today — a failing vendor is not demoted automatically (future, server-side) |
+| `health` | Read passively from real request outcomes, graded by conclusiveness: conclusive endpoint faults (connection refused, NXDOMAIN, bad TLS cert) demote at once; a 401 demotes every vendor sharing that credential; ambiguous ones (timeout, reset, 5xx, 429, 403) need 3 in a row. Caller-side 4xx and client aborts never count. Demoted = ranks last for 30s, never excluded. Cross-request only: the failing request is still surfaced verbatim |
 
 ### 4.2 Token — a scoped budget
 | Field | Meaning |
@@ -101,7 +101,11 @@ Two senses of 号池, both supported:
 1. **Multi-credential within one Channel** — rotate keys to dodge per-key rate limits.
 2. **Multi-Channel per model** — e.g. A=[opus, gpt-4o], B=[gpt-4o, deepseek]. A request for `gpt-4o` has candidates {A, B} → load-balance across them.
 
-The gateway **auto-derives** "which channels can serve model X" from each channel's `served_models`, then picks by policy (priority → weighted round-robin). It forwards to **one** candidate and surfaces the result verbatim — **no per-call failover**. A vendor that returns 429/5xx (or errors on the transport) is not auto-demoted today: the failing request sees the real error, the client decides whether to retry, and the vendor stays selected until an operator changes config. (Auto bring-down of a persistently-failing vendor is a future, server-side feature.) **No** New-API-style model-group / 模型重定向 / 倍率分组 config subsystem.
+The gateway **auto-derives** "which channels can serve model X" from each channel's `served_models`, then ranks them by **health → sticky session → priority → weight**. It forwards to **one** candidate and surfaces the result verbatim — **no per-call failover**.
+
+A failing vendor *is* brought down automatically, but only for the **next** request: the failing call still sees the real error and the client decides whether to retry. Repeated demotions with no success in between mark a vendor **dead**, which does not lapse on a timer — it waits for a success or an operator. Demotion never *excludes*, so if every candidate is dead the least-bad one still serves and the first success clears it.
+
+Within a priority tier the split is a weighted random draw, so `weight` is a share of traffic rather than an exact rotation. **No** New-API-style model-group / 模型重定向 / 倍率分组 config subsystem.
 
 ```
 Channel A: models=[opus, gpt-4o],     creds=[…], price=…
@@ -117,10 +121,10 @@ Falls out for free: per-channel price → **route-cheapest**, and the Ledger rec
 > Superseded: earlier drafts had the proxy fail a request over to the next
 > candidate on 429/5xx mid-call, and the router auto-demoted a failing vendor
 > into a health cooldown. Both were dropped (2026-07-03) as inconsistent with
-> byte/behavior transparency — we surface the failure and let the client decide,
-> and we do not auto bring-down vendors today (a future server-side feature). So
-> the streaming-billing edge (bill per-attempt on mid-stream failover) no longer
-> arises.
+> byte/behavior transparency. Cross-request demotion returned 2026-07-27 — in the
+> router, before dispatch, steering only the *next* request — while per-call
+> failover stayed dropped. So the streaming-billing edge (bill per-attempt on
+> mid-stream failover) still does not arise: one request is still one attempt.
 
 ---
 
@@ -201,7 +205,7 @@ One binary, single-tenant, **SQLite default**, self-hosted, near-zero ops. Auto-
 
 **v1 (sync first):**
 - Channel / Token / Ledger
-- 号池 routing (priority → weighted RR, credential rotation; one attempt, no per-call failover, no auto bring-down)
+- 号池 routing (health → sticky session → priority → weight; one attempt, no per-call failover; cross-request health demotion steers the next request)
 - Budget enforcement (reject over-budget)
 - Sync modalities: chat, embedding, sync TTS/STT
 - Read-only metering with coarse fallback

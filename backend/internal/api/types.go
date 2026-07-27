@@ -9,6 +9,7 @@ import (
 	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/compose"
 	"github.com/songguo/songguo/internal/config"
+	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/store"
 )
 
@@ -527,6 +528,13 @@ type vendorStatsView struct {
 }
 
 // vendorView is the JSON representation of a vendor (without secrets).
+//
+// Note that Stats and Routing answer different questions and can legitimately
+// disagree. Stats is derived from the ledger and is historical ("this vendor
+// has served N requests, E of them errors, ever"). Routing is the router's live
+// in-memory state and is predictive ("this vendor is demoted, so the next
+// request will go elsewhere"). A vendor with one error months ago reads
+// stats.healthy=false while routing has it perfectly live.
 type vendorView struct {
 	Name         string               `json:"name"`
 	Origin       string               `json:"origin"`
@@ -537,11 +545,32 @@ type vendorView struct {
 	Credential   credentialView       `json:"credential"`
 	Prices       map[string]priceView `json:"prices"`
 	Stats        vendorStatsView      `json:"stats"`
+	Routing      *routingStateView    `json:"routing,omitempty"`
+}
+
+// routingStateView is the live routing state of one vendor: what the router
+// will do with the NEXT request. Absent when the router has no opinion yet
+// (a vendor nothing has been reported on is live by default).
+type routingStateView struct {
+	Cooling      bool       `json:"cooling"`
+	CoolingUntil *time.Time `json:"cooling_until,omitempty"`
+	// Dead means the vendor failed consistently enough to be presumed broken.
+	// Unlike Cooling it does not lapse on a timer — while any healthy vendor
+	// exists this one will not be tried again, so it clears only on a success or
+	// when an operator disables the provider. This is the state worth alerting
+	// on.
+	Dead        bool `json:"dead"`
+	ConsecFails int  `json:"consec_fails"`
+	Demotions   int  `json:"demotions"`
+	// Sessions is how many live agent sessions are pinned to this vendor for
+	// prompt-cache locality.
+	Sessions int `json:"sessions"`
 }
 
 // newVendorView builds a vendor view from config plus computed stats. The raw
-// api_key is intentionally dropped; only a masked preview is emitted.
-func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool) vendorView {
+// api_key is intentionally dropped; only a masked preview is emitted. rs is the
+// vendor's live routing state, or nil when the router has no entry for it.
+func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool, rs *router.VendorState) vendorView {
 	models := v.ServedModels
 	if models == nil {
 		models = []string{}
@@ -571,6 +600,21 @@ func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool) vendorV
 		sv.Healthy = stat.Errors == 0
 	}
 
+	var routing *routingStateView
+	if rs != nil {
+		routing = &routingStateView{
+			Cooling:     rs.Cooling,
+			Dead:        rs.Dead,
+			ConsecFails: rs.ConsecFails,
+			Demotions:   rs.Demotions,
+			Sessions:    rs.Sessions,
+		}
+		if rs.Cooling {
+			until := rs.CoolingUntil
+			routing.CoolingUntil = &until
+		}
+	}
+
 	return vendorView{
 		Name:         v.Name,
 		Origin:       v.Origin,
@@ -581,6 +625,7 @@ func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool) vendorV
 		Credential:   cred,
 		Prices:       prices,
 		Stats:        sv,
+		Routing:      routing,
 	}
 }
 
