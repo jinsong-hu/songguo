@@ -4,7 +4,9 @@
 
 A self-hosted, single-tenant gateway that sits in front of every AI provider you use and does exactly three things: **auth, billing, observability**. It **never rewrites your traffic** — it swaps the credential, meters the call, enforces the budget, and forwards everything else untouched. One binary, your keys, your budgets, your data.
 
-See [docs/prd.md](docs/prd.md) for the full product thinking.
+See [docs/prd.md](docs/prd.md) for the full product thinking. For a concise,
+implementation-oriented proxy handoff, see
+[docs/proxy-takeaway.md](docs/proxy-takeaway.md).
 
 ---
 
