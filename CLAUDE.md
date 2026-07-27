@@ -265,18 +265,18 @@ blind-pipes to an arbitrary origin.
 ## Git workflow
 
 - Work in a fresh git worktree for each task; do not edit the primary checkout directly.
-- Before creating any worktree, update the primary checkout first: switch to `main`, pull `origin/main` with `--ff-only`, then create the worktree branch from the updated base.
+- Before creating any worktree, update the primary checkout first: switch to `main`, fast-forward to `origin/main`, then create the worktree branch from the updated base.
 - Commit and push only after the user explicitly says to proceed.
 - Before pushing, fetch and rebase on `origin/main`; do not merge.
 - Push the task branch directly to `main` as `<branch>:main`.
-- After pushing from a worktree, update the primary checkout again: switch to `main`, pull `origin/main` with `--ff-only`, then prune stale refs.
-- After the push lands and the primary checkout is synced, remove the worktree and delete the local branch.
+- After pushing from a worktree, update the primary checkout again: switch to `main`, fast-forward to `origin/main`, then prune stale refs.
+- **Then remove the worktree — always, in the same step**, not "later". A worktree is scratch space for one task; leaving it behind means the next session inherits a stale checkout and an already-merged branch. Verify first: `git status --short` empty and `git log --oneline origin/main..HEAD` empty. If either is not, something is unpushed — stop and ask, never force.
 
 ```sh
 # --- before creating a worktree ---
 cd <primary-checkout>
 git switch main
-git pull --ff-only origin main
+git fetch origin && git merge --ff-only origin/main
 git worktree add ../<worktree-name> -b <branch> main
 
 # --- work in the worktree ---
@@ -290,13 +290,21 @@ git push origin <branch>:main
 # --- after pushing from the worktree ---
 cd <primary-checkout>
 git switch main
-git pull --ff-only origin main
+git fetch origin && git merge --ff-only origin/main
 git fetch --prune origin
 
-# --- after the push lands ---
+# --- then clean up: verify, then remove ---
+git -C ../<worktree-name> status --short                    # must be empty
+git -C ../<worktree-name> log --oneline origin/main..HEAD   # must be empty
 git worktree remove ../<worktree-name>
 git branch -d <branch>
 ```
+
+`git fetch` + `git merge --ff-only origin/main` rather than `git pull --ff-only`:
+with `pull.rebase=true` set, `pull` tries to rebase and refuses outright when the
+checkout has WIP. Fetch-then-merge fast-forwards cleanly. Either form still
+aborts when an incoming change touches a file you have uncommitted — that is
+correct; commit or set aside the WIP rather than forcing past it.
 
 ## On the MacBook (the dev machine) — no worktree
 
