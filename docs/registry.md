@@ -75,7 +75,8 @@ Failures are graded by the question *"would an identical retry fail identically?
 | signal | strikes | outcomes |
 |---|---|---|
 | `neutral` | 0 | 400/404/408/422, client aborted mid-stream — the caller's fault; every vendor would reject identically |
-| `fail` | 1 (3 demote) | timeout, connection reset, unexpected EOF, temporary DNS failure, 5xx, 429, 403 |
+| `fail` | 1 (3 demote) | timeout, connection reset, unexpected EOF, temporary DNS failure, 5xx, 403 |
+| `fail_model` | demotes `(vendor, model)` only | 429 — a per-model quota, so it never touches the vendor's other models |
 | `fail_hard` | demotes at once | connection refused, DNS NXDOMAIN, bad TLS certificate — properties of the endpoint, not the request |
 | `fail_credential` | demotes at once, **all sibling vendors** | 401 — a revoked key is dead on every host presenting it |
 

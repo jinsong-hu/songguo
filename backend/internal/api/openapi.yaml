@@ -1128,6 +1128,7 @@ components:
         catalog_id: { type: string }
         endpoints: { type: array, items: { $ref: "#/components/schemas/ProviderEndpoint" } }
         allow_unmatched: { type: boolean }
+        max_concurrency: { type: integer, description: "Max in-flight requests to this provider's credential; 0 = unlimited. Callers WAIT for a slot rather than being routed to another provider, which would discard the session prompt cache." }
         quirks: { type: object, additionalProperties: { type: string } }
         masked_key: { type: string }
         models: { type: array, items: { $ref: "#/components/schemas/ProviderModel" } }
@@ -1145,6 +1146,7 @@ components:
         enabled: { type: boolean }
         catalog_id: { type: string }
         allow_unmatched: { type: boolean }
+        max_concurrency: { type: integer, description: "Max in-flight requests to this provider's credential; 0 = unlimited. Callers WAIT for a slot rather than being routed to another provider, which would discard the session prompt cache." }
         quirks: { type: object, additionalProperties: { type: string } }
         api_key: { type: string }
         models: { type: array, items: { $ref: "#/components/schemas/ProviderModel" } }
@@ -1159,6 +1161,7 @@ components:
         weight: { type: integer }
         enabled: { type: boolean }
         allow_unmatched: { type: boolean }
+        max_concurrency: { type: integer, description: "Max in-flight requests to this provider's credential; 0 = unlimited. Callers WAIT for a slot rather than being routed to another provider, which would discard the session prompt cache." }
         api_key: { type: string, description: "Replaces the key when non-empty." }
         quirks: { type: object, additionalProperties: { type: string } }
         models: { type: array, items: { $ref: "#/components/schemas/ProviderModel" } }
@@ -1241,6 +1244,20 @@ components:
         prices: { type: object, additionalProperties: { $ref: "#/components/schemas/Price" } }
         stats: { $ref: "#/components/schemas/VendorStats" }
         routing: { $ref: "#/components/schemas/RoutingState" }
+        capacity: { $ref: "#/components/schemas/Capacity" }
+    Capacity:
+      type: object
+      description: >-
+        Provider concurrency occupancy for this vendor, keyed upstream by
+        credential — vendors sharing one provider key report identical numbers,
+        because they share the quota. Distinct from routing state: capacity does
+        not decide WHERE a request goes, only WHEN. A request to a full provider
+        queues rather than being sent elsewhere, so the session keeps its
+        prompt cache.
+      properties:
+        limit: { type: integer, description: "Configured ceiling; 0 = unlimited." }
+        in_flight: { type: integer, description: "Requests being served right now." }
+        waiting: { type: integer, description: "Requests queued for a slot. Persistently non-zero means the limit is below what the provider actually allows." }
     TestResult:
       type: object
       properties:

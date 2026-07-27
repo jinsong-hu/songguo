@@ -106,6 +106,32 @@ Two of those four deserve stating plainly, because they are easy to get backward
   guarantee is structural. A client that sends no session header just gets the
   ordinary ordering; we never *require* a header (see interface transparency).
 
+### Provider concurrency is enforced outside routing — it decides WHEN, not WHERE
+
+`max_concurrency` bounds in-flight requests per **credential** (0 = unlimited).
+A request to a full provider **waits** for a slot; it is never sent to a
+different provider.
+
+That is the whole reason it lives in `internal/concurrency` rather than in the
+router's sort key. If capacity steered routing, a busy provider would push
+sessions onto another vendor and throw away the prompt cache stickiness exists
+to protect — a cold 200k-token context costs roughly ten times a warm one, far
+more than the wait. So routing picks the provider and capacity decides when it
+goes.
+
+The queue is FIFO per credential and bounded **only by the caller's own
+context**: songguo invents no timeout here, exactly as it invents no retries and
+no refusals. A client unwilling to wait cancels, and cancelling frees the slot
+at once (recorded as `499 songguo_client_gone`).
+
+Per credential, not per vendor: the `(origin, adapter)` split gives one API key
+several routing vendors, and the account quota belongs to the key.
+
+Known cost: a queued request holds its buffered body in RAM, multiplying the
+memory tradeoff already accepted for buffering bodies. `waiting` on
+`GET /api/vendors` and the Providers page is the signal that a limit is set
+below what the provider actually allows.
+
 ### Health demotion is cross-request, and that is the only shape allowed
 
 A vendor that fails repeatedly **is** brought down automatically — but only for
@@ -161,7 +187,8 @@ signal answers is **"would an identical retry fail identically?"**
 | | | |
 |---|---|---|
 | **neutral** | caller's fault | 400/404/408/422, client hung up mid-stream. Every vendor rejects these identically, so counting them would let one broken client walk the whole fleet out of rotation |
-| **fail** | vendor's fault, ambiguous | timeouts, connection resets, unexpected EOF, temporary DNS failure, 5xx, 429, 403. Real, but as plausibly about this request or the network as about the vendor. Needs corroboration — 3 in a row |
+| **fail** | vendor's fault, ambiguous | timeouts, connection resets, unexpected EOF, temporary DNS failure, 5xx, 403. Real, but as plausibly about this request or the network as about the vendor. Needs corroboration — 3 in a row |
+| **fail_model** | vendor is fine, this model is not | 429. Demotes the `(vendor, model)` pair for a fixed cooldown and leaves vendor health untouched — providers meter per model tier, so a hot `gpt-4o` must not walk `text-embedding-3` out of rotation |
 | **fail_hard** | vendor's fault, conclusive | connection refused, DNS NXDOMAIN, unverifiable TLS certificate. Properties of the *endpoint*, not the request: one is enough to demote |
 | **fail_credential** | credential's fault, conclusive | 401. Like fail_hard, but demotes **every vendor sharing that credential**, not just the one that observed it |
 

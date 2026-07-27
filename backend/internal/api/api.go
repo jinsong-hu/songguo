@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/songguo/songguo/internal/concurrency"
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/store"
@@ -27,7 +28,10 @@ type Deps struct {
 	Snapshot func() *config.Snapshot
 	// Router exposes live routing state (which vendors are demoted) for vendor
 	// inspection. Optional: nil simply omits that block from the response.
-	Router     *router.Router
+	Router *router.Router
+	// Gate exposes live per-provider concurrency for vendor inspection.
+	// Optional: nil simply reports no occupancy.
+	Gate       *concurrency.Gate
 	Reload     func() error // rebuild the live snapshot after a config write
 	AdminKey   string       // from SONGGUO_ADMIN_KEY; empty = unprotected (logged once)
 	Logger     *slog.Logger
@@ -43,6 +47,7 @@ type api struct {
 	store      *store.Store
 	snapshot   func() *config.Snapshot
 	router     *router.Router
+	gate       *concurrency.Gate
 	reload     func() error
 	adminKey   string
 	logger     *slog.Logger
@@ -84,6 +89,7 @@ func newAPI(d Deps) *api {
 		store:      d.Store,
 		snapshot:   d.Snapshot,
 		router:     d.Router,
+		gate:       d.Gate,
 		reload:     reload,
 		adminKey:   d.AdminKey,
 		logger:     logger,

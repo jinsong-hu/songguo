@@ -228,6 +228,9 @@ func vendorsFromProvider(pvd store.Provider, cat catalog.Catalog, logger *slog.L
 			Wires:          wires,
 			Endpoints:      endpoints,
 			AllowUnmatched: pvd.AllowUnmatched,
+			// Replicated onto every vendor of this provider ON PURPOSE: the limit
+			// is per credential, and these vendors share one. See config.Vendor.
+			MaxConcurrency: pvd.MaxConcurrency,
 			Quirks:         pvd.Quirks,
 		})
 	}

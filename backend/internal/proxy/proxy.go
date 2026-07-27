@@ -56,6 +56,7 @@ import (
 	"github.com/songguo/songguo/internal/bodycodec"
 	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/compose"
+	"github.com/songguo/songguo/internal/concurrency"
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/meter"
 	"github.com/songguo/songguo/internal/parse"
@@ -85,6 +86,7 @@ type Deps struct {
 	Snapshot   func() *config.Snapshot
 	Store      *store.Store
 	Router     *router.Router
+	Gate       *concurrency.Gate // per-provider in-flight limit; a nil Gate is unlimited
 	Logger     *slog.Logger
 	HTTPClient *http.Client     // optional; default constructed if nil
 	Now        func() time.Time // optional; defaults to time.Now (for tests)
@@ -98,6 +100,7 @@ type handler struct {
 	logger   *slog.Logger
 	client   *http.Client
 	now      func() time.Time
+	gate     *concurrency.Gate
 	limiter  *rateLimiter
 	parse    *parsePipeline
 	insight  *insightsFork
@@ -117,6 +120,10 @@ func NewHandler(d Deps) http.Handler {
 	if client == nil {
 		client = defaultHTTPClient()
 	}
+	gate := d.Gate
+	if gate == nil {
+		gate = concurrency.New()
+	}
 	return &handler{
 		snapshot: d.Snapshot,
 		store:    d.Store,
@@ -124,6 +131,7 @@ func NewHandler(d Deps) http.Handler {
 		logger:   logger,
 		client:   client,
 		now:      now,
+		gate:     gate,
 		limiter:  newRateLimiter(now),
 		parse:    newParsePipeline(d.Store, logger, 0, 0),
 		insight:  newInsightsFork(d.Store, logger, 0, 0),
@@ -272,6 +280,36 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// whatever it returns is what the client sees.
 	rw := rt.wires[t.Vendor.Name]
 
+	// 5b. Provider concurrency. If this credential is already at its configured
+	// limit we WAIT for a slot rather than routing elsewhere — moving the
+	// request would throw away the prompt cache that session stickiness exists
+	// to protect, which costs far more than the wait. The wait is bounded only
+	// by the client's own context; songguo invents no timeout of its own, and a
+	// client that gives up frees its queue slot at once.
+	//
+	// The slot is released after the response is fully relayed (the defer runs
+	// once forward returns), because a stream still being copied is still
+	// occupying the provider.
+	release, err := h.gate.Acquire(r.Context(), t.Credential.ID, t.Vendor.MaxConcurrency)
+	if err != nil {
+		// Only ever the client's own cancellation. Record it so a queue that is
+		// routinely too deep is visible in the ledger, then stop — there is
+		// nobody left to answer.
+		h.logger.Info("client canceled while waiting for provider capacity",
+			"vendor", t.Vendor.Name, "credential", t.Credential.ID,
+			"limit", t.Vendor.MaxConcurrency)
+		h.denyCapture(w, r, body, false, calls.Entry{
+			ID:     callID,
+			UserID: user.ID, Model: rt.model, Modality: modality,
+			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID,
+			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
+			ClientName: client.Name, ClientVersion: client.Version,
+			ClientOS: client.OS, ClientOSVersion: client.OSVersion,
+		}, statusClientClosedRequest, "client_gone", "client canceled while waiting for provider capacity")
+		return
+	}
+	defer release()
+
 	upReq, err := h.buildUpstreamRequest(r, t, rt.upstreamURL(t), body)
 	if err != nil {
 		h.logger.Error("build upstream request failed", "err", err, "vendor", t.Vendor.Name)
@@ -301,7 +339,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// dead vendor, it does not retry this one. A client that hung up
 		// mid-stream cancels our upstream request too, so pass whether the
 		// client is gone — that outcome must not be blamed on the vendor.
-		h.router.Report(t.Vendor.Name, t.Credential.ID, router.Classify(0, err, r.Context().Err() != nil))
+		h.router.ReportModel(t.Vendor.Name, t.Credential.ID, rt.model, router.Classify(0, err, r.Context().Err() != nil))
 		h.logger.Warn("upstream request failed",
 			"vendor", t.Vendor.Name, "model", rt.model, "credential", t.Credential.ID,
 			"url", upReq.URL.String(), "latency_ms", headerLatency, "err", err)
@@ -788,7 +826,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	var bodyErr error
 	defer func() {
 		clientGone := r.Context().Err() != nil || errors.Is(bodyErr, errClientGone)
-		h.router.Report(t.Vendor.Name, t.Credential.ID,
+		h.router.ReportModel(t.Vendor.Name, t.Credential.ID, model,
 			router.Classify(resp.StatusCode, upstreamBodyErr(bodyErr), clientGone))
 
 		// Pin the session to the vendor we actually used, so its next request
@@ -1085,6 +1123,12 @@ func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.
 // errClientGone marks a relay that ended because our caller disconnected, so it
 // is never charged against the vendor's health.
 var errClientGone = errors.New("proxy: client disconnected")
+
+// statusClientClosedRequest is nginx's 499: the client went away before we
+// could answer. Not an IANA code, but the only honest one for a request that
+// was abandoned rather than refused — and it keeps these out of the 5xx error
+// rate, where they would look like our fault.
+const statusClientClosedRequest = 499
 
 // upstreamBodyErr filters a relay error down to the ones that are the vendor's
 // fault, so Classify sees nil for a clean stream or a client abort.

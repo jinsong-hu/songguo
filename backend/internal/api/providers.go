@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -43,6 +44,14 @@ type providerView struct {
 	CatalogID      string                 `json:"catalog_id"`
 	Endpoints      []providerEndpointView `json:"endpoints"`
 	AllowUnmatched bool                   `json:"allow_unmatched"`
+	MaxConcurrency int                    `json:"max_concurrency"`
+	// Routing is this provider's live routing state, aggregated across the
+	// vendors it projects to. Absent when the router has no opinion on any of
+	// them (live by default).
+	Routing *providerRoutingView `json:"routing,omitempty"`
+	// Capacity is shared by every vendor of this provider — they present one
+	// credential against one account quota.
+	Capacity capacityView `json:"capacity"`
 	Quirks         map[string]string      `json:"quirks"`
 	MaskedKey      string                 `json:"masked_key"`
 	Models         []providerModelView    `json:"models"`
@@ -51,7 +60,7 @@ type providerView struct {
 	Stats          vendorStatsView        `json:"stats"`
 }
 
-func newProviderView(pvd store.Provider, stat store.VendorStat, hasStat bool) providerView {
+func newProviderView(pvd store.Provider, stat store.VendorStat, hasStat bool, routing *providerRoutingView, cap capacityView) providerView {
 	masked := ""
 	if pvd.APIKey != "" {
 		masked = maskKey(pvd.APIKey)
@@ -87,6 +96,9 @@ func newProviderView(pvd store.Provider, stat store.VendorStat, hasStat bool) pr
 		CatalogID:      pvd.CatalogID,
 		Endpoints:      endpoints,
 		AllowUnmatched: pvd.AllowUnmatched,
+		MaxConcurrency: pvd.MaxConcurrency,
+		Routing:        routing,
+		Capacity:       cap,
 		Quirks:         pvd.Quirks,
 		MaskedKey:      masked,
 		Models:         models,
@@ -121,6 +133,7 @@ type createProviderReq struct {
 	Enabled        *bool                 `json:"enabled,omitempty"`
 	CatalogID      string                `json:"catalog_id,omitempty"`
 	AllowUnmatched bool                  `json:"allow_unmatched,omitempty"`
+	MaxConcurrency int                   `json:"max_concurrency,omitempty"`
 	Quirks         map[string]string     `json:"quirks,omitempty"`
 	APIKey         string                `json:"api_key,omitempty"`
 	Models         []providerModelReq    `json:"models,omitempty"`
@@ -134,6 +147,7 @@ type patchProviderReq struct {
 	Weight         *int    `json:"weight,omitempty"`
 	Enabled        *bool   `json:"enabled,omitempty"`
 	AllowUnmatched *bool   `json:"allow_unmatched,omitempty"`
+	MaxConcurrency *int    `json:"max_concurrency,omitempty"`
 	// APIKey replaces the provider's key when present and non-empty.
 	APIKey    *string                `json:"api_key,omitempty"`
 	Quirks    *map[string]string     `json:"quirks,omitempty"`
@@ -169,6 +183,11 @@ func sanitizeProvidersForUser(in []providerView) []providerView {
 	for _, p := range in {
 		p.MaskedKey = ""
 		p.Quirks = nil
+		// Operational capacity and routing health are not a consumer's business,
+		// and leaking them would let a caller infer how loaded the account is.
+		p.MaxConcurrency = 0
+		p.Routing = nil
+		p.Capacity = capacityView{}
 		p.Stats = vendorStatsView{Healthy: true}
 		eps := make([]providerEndpointView, 0, len(p.Endpoints))
 		for _, ep := range p.Endpoints {
@@ -185,6 +204,24 @@ func sanitizeProvidersForUser(in []providerView) []providerView {
 	return out
 }
 
+// providerRoutingView summarizes routing health across the vendors one provider
+// projects to. A provider is split by (origin, adapter), and those hosts fail
+// independently — so this reports the WORST state among them, and names which
+// vendors are affected rather than hiding the split.
+type providerRoutingView struct {
+	// Dead: failed consistently enough to be presumed broken. Does not lapse on
+	// a timer; clears on a success or when an operator disables the provider.
+	// This is the one that wants a human.
+	Dead bool `json:"dead"`
+	// Cooling: temporarily demoted, lapses on its own.
+	Cooling bool `json:"cooling"`
+	// Degraded names the vendors that are cooling or dead, so a partial outage
+	// is not reported as a whole-provider one.
+	Degraded []string `json:"degraded,omitempty"`
+	// Sessions is how many agent sessions are pinned to this provider.
+	Sessions int `json:"sessions"`
+}
+
 // providersData returns all configured providers (keys masked) with per-vendor
 // stats.
 func (a *api) providersData() ([]providerView, error) {
@@ -199,7 +236,7 @@ func (a *api) providersData() ([]providerView, error) {
 	views := make([]providerView, 0, len(pvds))
 	for _, pvd := range pvds {
 		st, ok := stats[pvd.Name]
-		views = append(views, newProviderView(pvd, st, ok))
+		views = append(views, newProviderView(pvd, st, ok, a.providerRouting(pvd.ID), a.providerCapacity(pvd)))
 	}
 	return views, nil
 }
@@ -224,7 +261,7 @@ func (a *api) getProviderData(id string) (providerView, error) {
 		}
 		return providerView{}, err
 	}
-	return newProviderView(pvd, store.VendorStat{}, false), nil
+	return newProviderView(pvd, store.VendorStat{}, false, a.providerRouting(pvd.ID), a.providerCapacity(pvd)), nil
 }
 
 // handleCreateProvider creates a provider from a JSON body and reloads the config.
@@ -267,6 +304,7 @@ func (a *api) createProviderData(req createProviderReq) (providerView, error) {
 		Enabled:        enabled,
 		CatalogID:      req.CatalogID,
 		AllowUnmatched: req.AllowUnmatched,
+		MaxConcurrency: req.MaxConcurrency,
 		Quirks:         req.Quirks,
 		APIKey:         strings.TrimSpace(req.APIKey),
 		Models:         toStoreModels(req.Models),
@@ -279,7 +317,7 @@ func (a *api) createProviderData(req createProviderReq) (providerView, error) {
 		return providerView{}, err
 	}
 	a.reloadAfterWrite()
-	return newProviderView(pvd, store.VendorStat{}, false), nil
+	return newProviderView(pvd, store.VendorStat{}, false, a.providerRouting(pvd.ID), a.providerCapacity(pvd)), nil
 }
 
 // handlePatchProvider applies a subset of fields and reloads the config.
@@ -315,6 +353,7 @@ func (a *api) updateProviderData(id string, req patchProviderReq) (providerView,
 		Weight:         req.Weight,
 		Enabled:        req.Enabled,
 		AllowUnmatched: req.AllowUnmatched,
+		MaxConcurrency: req.MaxConcurrency,
 		APIKey:         req.APIKey,
 		Quirks:         req.Quirks,
 	}
@@ -346,7 +385,7 @@ func (a *api) updateProviderData(id string, req patchProviderReq) (providerView,
 		return providerView{}, err
 	}
 	a.reloadAfterWrite()
-	return newProviderView(pvd, store.VendorStat{}, false), nil
+	return newProviderView(pvd, store.VendorStat{}, false, a.providerRouting(pvd.ID), a.providerCapacity(pvd)), nil
 }
 
 // handleDeleteProvider removes a provider and reloads the config.
@@ -533,4 +572,61 @@ func applyTestAuth(req *http.Request, adapter, key string) {
 		return
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
+}
+
+// providerRouting aggregates live router state across every vendor carrying
+// this provider's credential. Returns nil when the router has nothing to say.
+func (a *api) providerRouting(providerID string) *providerRoutingView {
+	if a.router == nil || a.snapshot == nil {
+		return nil
+	}
+	snap := a.snapshot()
+	if snap == nil {
+		return nil
+	}
+	mine := map[string]bool{}
+	for _, v := range snap.Vendors() {
+		if v.Credential.ID == providerID {
+			mine[v.Name] = true
+		}
+	}
+	if len(mine) == 0 {
+		return nil
+	}
+
+	var out providerRoutingView
+	seen := false
+	for _, rs := range a.router.Inspect() {
+		if !mine[rs.Vendor] {
+			continue
+		}
+		seen = true
+		out.Sessions += rs.Sessions
+		if rs.Dead {
+			out.Dead = true
+		}
+		if rs.Cooling {
+			out.Cooling = true
+		}
+		if rs.Dead || rs.Cooling {
+			out.Degraded = append(out.Degraded, rs.Vendor)
+		}
+	}
+	if !seen {
+		return nil
+	}
+	sort.Strings(out.Degraded)
+	return &out
+}
+
+// providerCapacity reports the provider's concurrency limit and live occupancy.
+// Occupancy is keyed by credential, which is exactly this provider's id.
+func (a *api) providerCapacity(pvd store.Provider) capacityView {
+	cv := capacityView{Limit: pvd.MaxConcurrency}
+	if a.gate == nil {
+		return cv
+	}
+	st := a.gate.Stats()[pvd.ID]
+	cv.InFlight, cv.Waiting = st.InFlight, st.Waiting
+	return cv
 }

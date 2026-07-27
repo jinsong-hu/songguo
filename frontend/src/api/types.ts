@@ -578,6 +578,23 @@ export interface RoutingState {
   sessions: number;
 }
 
+/**
+ * Provider concurrency occupancy. Keyed by credential upstream, so vendors that
+ * share one provider key report identical numbers — they share the quota.
+ *
+ * Distinct from RoutingState: capacity does not decide WHERE a request goes,
+ * only WHEN. A request to a full provider queues rather than being sent
+ * elsewhere, so the session keeps its prompt cache.
+ */
+export interface Capacity {
+  /** Configured ceiling; 0 = unlimited. */
+  limit: number;
+  /** Requests being served right now. */
+  in_flight: number;
+  /** Queued for a slot. Persistently non-zero means the limit is too low. */
+  waiting: number;
+}
+
 export interface Vendor {
   name: string;
   origin: string;
@@ -589,6 +606,7 @@ export interface Vendor {
   prices: Record<string, Price>;
   stats: VendorStats;
   routing?: RoutingState;
+  capacity: Capacity;
 }
 
 export interface VendorTestResult {
@@ -639,6 +657,28 @@ export interface ProviderEndpoint {
   adapter: string;
 }
 
+/**
+ * Routing health for a whole provider. A provider splits into several routing
+ * vendors by (origin, adapter) and those hosts fail independently, so this is
+ * the WORST state among them, with `degraded` naming which ones — a partial
+ * outage should not read as a total one.
+ */
+export interface ProviderRouting {
+  /**
+   * Presumed broken after repeated failures. Does NOT lapse on a timer: while
+   * any healthy provider exists this one will not be retried, so it clears only
+   * on a success or when an operator disables it. This is the state that wants
+   * a human.
+   */
+  dead: boolean;
+  /** Temporarily demoted; lapses on its own. */
+  cooling: boolean;
+  /** Vendors of this provider that are cooling or dead. */
+  degraded?: string[];
+  /** Agent sessions currently pinned here for prompt-cache locality. */
+  sessions: number;
+}
+
 export interface Provider {
   id: string;
   name: string;
@@ -651,6 +691,19 @@ export interface Provider {
   endpoints: ProviderEndpoint[];
   /** Forward unmatched paths metered-zero instead of denying them. */
   allow_unmatched: boolean;
+  /**
+   * Max in-flight requests to this provider's credential; 0 = unlimited.
+   * Callers WAIT for a free slot rather than being routed to another provider,
+   * which would discard the session's prompt cache.
+   */
+  max_concurrency: number;
+  /**
+   * Live routing health, aggregated across the vendors this provider projects
+   * to. Absent when the router has no opinion on any of them (live by default).
+   */
+  routing?: ProviderRouting;
+  /** Concurrency occupancy, shared by every vendor of this provider. */
+  capacity: Capacity;
   quirks: Record<string, string>;
   /** Masked preview of the provider's API key; "" when no key is set. */
   masked_key: string;

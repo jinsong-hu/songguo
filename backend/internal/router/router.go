@@ -21,6 +21,10 @@
 // already have a provider? Which tier is preferred? Within a tier, whose turn is
 // it? Each question only gets asked when the previous one ties.
 //
+// The health component also absorbs per-model rate limits: a 429 demotes the
+// (vendor, model) pair rather than the vendor, so one hot model cannot walk a
+// vendor's whole catalogue out of rotation. See SignalFailModel.
+//
 // Health first is what makes stickiness safe. Because a pin is only consulted
 // among vendors of equal health, it can never hold a session on a broken
 // provider — the guarantee is structural, not a property of how stickiness
@@ -97,6 +101,11 @@ const (
 	// ranked below merely-cooling vendors and, unlike a cooldown, never
 	// restored by the passage of time. See health.go.
 	defaultDeadAfter = 5
+	// defaultModelCooldown is how long one model stays demoted on one vendor
+	// after a 429. Longer than a demotion cooldown because a quota window is
+	// typically a minute, and unlike vendor health there is no streak to work
+	// through — a single 429 is already a definite statement.
+	defaultModelCooldown = time.Minute
 	// defaultStickyTTL is how long a session keeps its provider after its last
 	// request. Anthropic's prompt cache is 5m (1h extended), so a session idle
 	// this long has lost the cache the pin exists to protect.
@@ -175,6 +184,7 @@ type Options struct {
 	Cooldown      time.Duration    // first demotion's cooldown; default 30s
 	CooldownMax   time.Duration    // backoff ceiling; default 15m
 	DeadAfter     int              // consecutive demotions that mark dead; default 5
+	ModelCooldown time.Duration    // per-(vendor, model) 429 cooldown; default 60s
 	StickyTTL     time.Duration    // session affinity idle timeout; default 30m
 	StickyMax     int              // affinity map hard cap; default 50k
 	Logger        *slog.Logger     // demotion/restoration log; defaults to slog.Default
@@ -191,11 +201,17 @@ type Router struct {
 	cooldown      time.Duration
 	cooldownMax   time.Duration
 	deadAfter     int
+	modelCooldown time.Duration
 
 	affinity *affinity
 
 	mu     sync.Mutex
 	health map[string]*vendorHealth // vendor name -> cross-request health
+	// modelCooling holds per-(vendor, model) rate-limit cooldowns, kept apart
+	// from vendor health because a 429 on one model says nothing about the
+	// vendor's other models. Expiry is by timestamp, so stale entries are inert;
+	// ResetHealth clears them on config reload.
+	modelCooling map[string]time.Time
 }
 
 // New constructs a Router that reads config through snapshot on every call.
@@ -228,6 +244,9 @@ func New(snapshot func() *config.Snapshot, opts ...Options) *Router {
 	if opt.DeadAfter <= 0 {
 		opt.DeadAfter = defaultDeadAfter
 	}
+	if opt.ModelCooldown <= 0 {
+		opt.ModelCooldown = defaultModelCooldown
+	}
 	if opt.StickyTTL <= 0 {
 		opt.StickyTTL = defaultStickyTTL
 	}
@@ -246,8 +265,10 @@ func New(snapshot func() *config.Snapshot, opts ...Options) *Router {
 		cooldown:      opt.Cooldown,
 		cooldownMax:   opt.CooldownMax,
 		deadAfter:     opt.DeadAfter,
+		modelCooldown: opt.ModelCooldown,
 		affinity:      newAffinity(opt.Now, opt.StickyTTL, opt.StickyMax),
 		health:        make(map[string]*vendorHealth),
+		modelCooling:  make(map[string]time.Time),
 	}
 }
 
@@ -341,13 +362,21 @@ func (r *Router) order(sel Selector, vendors []config.Vendor) []Target {
 	now := r.now()
 	ranks := make([]rankedVendor, len(vendors))
 	for i, v := range vendors {
+		hr := r.healthRank(v.Name, now)
+		// A model-scoped rate limit demotes this vendor for THIS request without
+		// touching its health for any other model. Folding it into the health
+		// rank keeps the sort key at five components and preserves the
+		// permutation invariant — it demotes, it never excludes.
+		if hr == healthLive && r.modelIsCooling(v.Name, sel.Model, now) {
+			hr = healthCooling
+		}
 		ranks[i] = rankedVendor{
 			vendor: v,
 			// Stickiness is a pure fact — is this the session's vendor — with no
 			// health mixed in. Health outranks it in the sort, which is what
 			// guarantees a pin can never hold a session on a broken provider.
 			sticky:   boolRank(v.Name == pinned),
-			health:   r.healthRank(v.Name, now),
+			health:   hr,
 			priority: v.Priority,
 			draw:     weightedDraw(r.rand(), v.Weight),
 			decl:     i,

@@ -342,6 +342,9 @@ func (s *Store) migrate() error {
 		{"sessions", "utility_cache_creation_input_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"sessions", "utility_cost", "REAL NOT NULL DEFAULT 0"},
 		{"providers", "allow_unmatched", "INTEGER NOT NULL DEFAULT 0"},
+		// 0 = unlimited. Bounds in-flight requests to this provider's credential;
+		// callers WAIT for a slot rather than being routed elsewhere.
+		{"providers", "max_concurrency", "INTEGER NOT NULL DEFAULT 0"},
 		{"providers", "quirks", "TEXT NOT NULL DEFAULT '{}'"},
 		{"providers", "api_key", "TEXT NOT NULL DEFAULT ''"},
 		{"provider_models", "cached_input", "REAL NOT NULL DEFAULT 0"},

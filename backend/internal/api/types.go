@@ -8,6 +8,7 @@ import (
 	"github.com/songguo/songguo/internal/bodycodec"
 	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/compose"
+	"github.com/songguo/songguo/internal/concurrency"
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/store"
@@ -546,6 +547,7 @@ type vendorView struct {
 	Prices       map[string]priceView `json:"prices"`
 	Stats        vendorStatsView      `json:"stats"`
 	Routing      *routingStateView    `json:"routing,omitempty"`
+	Capacity     capacityView         `json:"capacity"`
 }
 
 // routingStateView is the live routing state of one vendor: what the router
@@ -567,10 +569,27 @@ type routingStateView struct {
 	Sessions int `json:"sessions"`
 }
 
+// capacityView is this vendor's provider-concurrency occupancy. It is keyed by
+// credential upstream, so vendors sharing one provider key report identical
+// numbers — that is the point: they share the quota.
+//
+// Distinct from routing state. Capacity does not steer WHERE a request goes; it
+// decides WHEN. A request to a full provider queues rather than being sent
+// somewhere else, so the session keeps its prompt cache.
+type capacityView struct {
+	// Limit is the configured ceiling; 0 means unlimited.
+	Limit int `json:"limit"`
+	// InFlight is how many requests are being served right now.
+	InFlight int `json:"in_flight"`
+	// Waiting is how many are queued for a slot. Persistently non-zero means
+	// the limit is below what the provider actually allows.
+	Waiting int `json:"waiting"`
+}
+
 // newVendorView builds a vendor view from config plus computed stats. The raw
 // api_key is intentionally dropped; only a masked preview is emitted. rs is the
 // vendor's live routing state, or nil when the router has no entry for it.
-func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool, rs *router.VendorState) vendorView {
+func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool, rs *router.VendorState, occ concurrency.State) vendorView {
 	models := v.ServedModels
 	if models == nil {
 		models = []string{}
@@ -600,6 +619,12 @@ func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool, rs *rou
 		sv.Healthy = stat.Errors == 0
 	}
 
+	capacity := capacityView{
+		Limit:    v.MaxConcurrency,
+		InFlight: occ.InFlight,
+		Waiting:  occ.Waiting,
+	}
+
 	var routing *routingStateView
 	if rs != nil {
 		routing = &routingStateView{
@@ -626,6 +651,7 @@ func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool, rs *rou
 		Prices:       prices,
 		Stats:        sv,
 		Routing:      routing,
+		Capacity:     capacity,
 	}
 }
 

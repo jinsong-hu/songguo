@@ -201,6 +201,21 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 		return
 	}
 
+	// Provider concurrency. A realtime session occupies a slot for its whole
+	// life, which is genuinely what it costs the account, so the release is
+	// deferred until the pipe closes. As on the HTTP path we WAIT rather than
+	// route elsewhere, bounded only by the client's own context.
+	release, gerr := h.gate.Acquire(r.Context(), t.Credential.ID, t.Vendor.MaxConcurrency)
+	if gerr != nil {
+		h.logger.Info("client canceled while waiting for provider capacity",
+			"vendor", t.Vendor.Name, "credential", t.Credential.ID,
+			"limit", t.Vendor.MaxConcurrency)
+		writeError(w, statusClientClosedRequest, "client_gone",
+			"client canceled while waiting for provider capacity")
+		return
+	}
+	defer release()
+
 	start := h.now()
 	conn, reader, resp, derr := h.dialWSUpstream(host, useTLS, requestTarget, r, t)
 	if derr != nil {

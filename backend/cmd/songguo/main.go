@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/songguo/songguo/internal/api"
+	"github.com/songguo/songguo/internal/concurrency"
 	"github.com/songguo/songguo/internal/configsvc"
 	"github.com/songguo/songguo/internal/janitor"
 	"github.com/songguo/songguo/internal/proxy"
@@ -71,10 +72,16 @@ func main() {
 	}
 
 	rt := router.New(manager.Current, router.Options{Logger: logger})
+	// One gate shared by the HTTP and WebSocket paths, and read by the admin API
+	// for live occupancy. It bounds in-flight requests per credential; the
+	// router never sees it, because capacity decides WHEN a request goes, not
+	// WHERE (see internal/concurrency).
+	gate := concurrency.New()
 	proxyDeps := proxy.Deps{
 		Snapshot: manager.Current,
 		Store:    st,
 		Router:   rt,
+		Gate:     gate,
 		Logger:   logger,
 	}
 	proxyHandler := proxy.NewHandler(proxyDeps)
@@ -84,6 +91,7 @@ func main() {
 		Store:    st,
 		Snapshot: manager.Current,
 		Router:   rt,
+		Gate:     gate,
 		Reload: func() error {
 			if err := manager.Reload(); err != nil {
 				return err

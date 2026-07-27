@@ -26,6 +26,10 @@ type Provider struct {
 	// AllowUnmatched forwards requests whose path matches no enabled wire
 	// (metered zero, confidence unknown) instead of denying them.
 	AllowUnmatched bool
+	// MaxConcurrency bounds in-flight requests to this provider's credential.
+	// 0 = unlimited. Callers WAIT for a free slot rather than being routed to a
+	// different provider, which would discard the session's prompt cache.
+	MaxConcurrency int
 	Quirks         map[string]string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
@@ -67,6 +71,7 @@ type NewProvider struct {
 	Enabled        bool
 	CatalogID      string
 	AllowUnmatched bool
+	MaxConcurrency int
 	Quirks         map[string]string
 	APIKey         string
 	Models         []ProviderModel
@@ -82,6 +87,7 @@ type ProviderUpdate struct {
 	Weight         *int
 	Enabled        *bool
 	AllowUnmatched *bool
+	MaxConcurrency *int
 	APIKey         *string
 	Quirks         *map[string]string
 	Models         []ProviderModel
@@ -100,7 +106,7 @@ func (s *Store) CountProviders() (int, error) {
 // ListProviders returns all providers, newest first, each with its models and
 // endpoints assembled. It uses bulk queries rather than per-provider follow-ups.
 func (s *Store) ListProviders() ([]Provider, error) {
-	rows, err := s.db.Query(`SELECT id, name, vendor, priority, weight, enabled, catalog_id, api_key, allow_unmatched, quirks, created_at, updated_at
+	rows, err := s.db.Query(`SELECT id, name, vendor, priority, weight, enabled, catalog_id, api_key, allow_unmatched, max_concurrency, quirks, created_at, updated_at
 		FROM providers ORDER BY created_at DESC, id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list providers: %w", err)
@@ -173,7 +179,7 @@ func (s *Store) ListProviders() ([]Provider, error) {
 
 // GetProvider returns one provider with its models and endpoints.
 func (s *Store) GetProvider(id string) (Provider, error) {
-	row := s.db.QueryRow(`SELECT id, name, vendor, priority, weight, enabled, catalog_id, api_key, allow_unmatched, quirks, created_at, updated_at
+	row := s.db.QueryRow(`SELECT id, name, vendor, priority, weight, enabled, catalog_id, api_key, allow_unmatched, max_concurrency, quirks, created_at, updated_at
 		FROM providers WHERE id = ?`, id)
 	pvd, err := scanProvider(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -231,7 +237,8 @@ func scanProvider(sc interface{ Scan(...any) error }) (Provider, error) {
 		updatedAt      int64
 	)
 	if err := sc.Scan(&pvd.ID, &pvd.Name, &pvd.Vendor,
-		&pvd.Priority, &pvd.Weight, &enabled, &pvd.CatalogID, &pvd.APIKey, &allowUnmatched, &quirks, &createdAt, &updatedAt); err != nil {
+		&pvd.Priority, &pvd.Weight, &enabled, &pvd.CatalogID, &pvd.APIKey, &allowUnmatched,
+		&pvd.MaxConcurrency, &quirks, &createdAt, &updatedAt); err != nil {
 		return Provider{}, err
 	}
 	pvd.Enabled = enabled != 0
@@ -271,9 +278,10 @@ func (s *Store) CreateProvider(np NewProvider) (Provider, error) {
 
 	// base_url and adapter are vestigial provider columns (NOT NULL); base_url
 	// and auth now live per-endpoint. Insert harmless placeholders.
-	_, err = tx.Exec(`INSERT INTO providers (id, name, vendor, base_url, priority, weight, enabled, catalog_id, api_key, allow_unmatched, quirks, created_at, updated_at)
-		VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, np.Name, np.Vendor, np.Priority, weight, boolToInt(np.Enabled), np.CatalogID, np.APIKey, boolToInt(np.AllowUnmatched), quirks, now.Unix(), now.Unix())
+	_, err = tx.Exec(`INSERT INTO providers (id, name, vendor, base_url, priority, weight, enabled, catalog_id, api_key, allow_unmatched, max_concurrency, quirks, created_at, updated_at)
+		VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, np.Name, np.Vendor, np.Priority, weight, boolToInt(np.Enabled), np.CatalogID, np.APIKey,
+		boolToInt(np.AllowUnmatched), maxZeroInt(np.MaxConcurrency), quirks, now.Unix(), now.Unix())
 	if err != nil {
 		return Provider{}, fmt.Errorf("store: insert provider: %w", err)
 	}
@@ -332,6 +340,10 @@ func (s *Store) UpdateProvider(id string, upd ProviderUpdate) (Provider, error) 
 	if upd.AllowUnmatched != nil {
 		sets = append(sets, "allow_unmatched = ?")
 		args = append(args, boolToInt(*upd.AllowUnmatched))
+	}
+	if upd.MaxConcurrency != nil {
+		sets = append(sets, "max_concurrency = ?")
+		args = append(args, maxZeroInt(*upd.MaxConcurrency))
 	}
 	if upd.APIKey != nil {
 		sets = append(sets, "api_key = ?")
@@ -448,4 +460,13 @@ func encodeQuirks(q map[string]string) (string, error) {
 		return "", fmt.Errorf("store: encode quirks: %w", err)
 	}
 	return string(b), nil
+}
+
+// maxZeroInt clamps a negative limit to 0 (unlimited), so a bad value degrades
+// to "no limit" rather than to "nothing may pass".
+func maxZeroInt(n int) int {
+	if n < 0 {
+		return 0
+	}
+	return n
 }

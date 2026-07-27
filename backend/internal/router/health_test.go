@@ -150,8 +150,12 @@ func TestClassify(t *testing.T) {
 		{"500", 500, nil, false, SignalFail},
 		{"502", 502, nil, false, SignalFail},
 		{"503", 503, nil, false, SignalFail},
-		{"429 no capacity", 429, nil, false, SignalFail},
 		{"403 rejected (overloaded meaning)", 403, nil, false, SignalFail},
+
+		// Narrower than any other failure: the vendor is serving, this model's
+		// quota is spent. Scoped to (vendor, model) so one hot model cannot walk
+		// the vendor's whole catalogue out of rotation.
+		{"429 model quota", 429, nil, false, SignalFailModel},
 
 		// The caller's fault: every vendor would reject these identically, so
 		// they must not demote anyone.
@@ -786,4 +790,120 @@ func TestConcurrentReportAndSelect(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+
+// --- Model-scoped rate limits ------------------------------------------------
+
+const twoVendorBothModelsYAML = `
+vendors:
+  - name: primary
+    origin: https://primary.example
+    served_models: [m, other]
+    priority: 1
+    credential: {id: p1, api_key: k}
+  - name: backup
+    origin: https://backup.example
+    served_models: [m, other]
+    priority: 2
+    credential: {id: b1, api_key: k}
+`
+
+func leadForModel(t *testing.T, r *Router, model string) string {
+	t.Helper()
+	got, err := r.Candidates(model)
+	if err != nil {
+		t.Fatalf("candidates(%s): %v", model, err)
+	}
+	return got[0].Vendor.Name
+}
+
+// A 429 on one model must not cost the vendor its other models. This is the
+// whole reason the signal is scoped rather than vendor-wide.
+func TestModelRateLimitSparesOtherModels(t *testing.T) {
+	clk := newFakeClock()
+	snap := buildSnapshot(t, twoVendorBothModelsYAML)
+	r := New(staticSnap(snap), Options{Now: clk.Now, Logger: quietLogger()})
+
+	r.ReportModel("primary", "p1", "m", SignalFailModel)
+
+	if got := leadForModel(t, r, "m"); got != "backup" {
+		t.Errorf("lead for m = %q, want backup: the rate-limited model moves", got)
+	}
+	if got := leadForModel(t, r, "other"); got != "primary" {
+		t.Errorf("lead for other = %q, want primary: an unrelated model must not move", got)
+	}
+}
+
+// It is a cooldown, not a demotion: vendor health is untouched, so a 429 can
+// never accumulate toward the dead state.
+func TestModelRateLimitLeavesVendorHealthAlone(t *testing.T) {
+	clk := newFakeClock()
+	snap := buildSnapshot(t, twoVendorBothModelsYAML)
+	r := New(staticSnap(snap), Options{Now: clk.Now, FailThreshold: 1, DeadAfter: 2, Logger: quietLogger()})
+
+	for i := 0; i < 10; i++ {
+		r.ReportModel("primary", "p1", "m", SignalFailModel)
+	}
+	for _, st := range r.Inspect() {
+		if st.Vendor == "primary" && (st.Cooling || st.Dead || st.ConsecFails > 0) {
+			t.Fatalf("state = %+v, want untouched vendor health", st)
+		}
+	}
+}
+
+func TestModelRateLimitExpires(t *testing.T) {
+	clk := newFakeClock()
+	snap := buildSnapshot(t, twoVendorBothModelsYAML)
+	r := New(staticSnap(snap), Options{Now: clk.Now, ModelCooldown: time.Minute, Logger: quietLogger()})
+
+	r.ReportModel("primary", "p1", "m", SignalFailModel)
+	if got := leadForModel(t, r, "m"); got != "backup" {
+		t.Fatalf("lead = %q, want backup", got)
+	}
+
+	clk.Advance(61 * time.Second)
+	if got := leadForModel(t, r, "m"); got != "primary" {
+		t.Fatalf("lead = %q, want primary once the quota window lapses", got)
+	}
+}
+
+// A model-less request (WebSocket upgrade, GET /v1/models) has nothing to scope
+// a 429 to. Widening it into a vendor-wide demotion would punish a healthy
+// vendor for a quota that may not even apply, so it is dropped instead.
+func TestModelRateLimitWithoutModelIsDropped(t *testing.T) {
+	clk := newFakeClock()
+	snap := buildSnapshot(t, twoVendorBothModelsYAML)
+	r := New(staticSnap(snap), Options{Now: clk.Now, FailThreshold: 1, Logger: quietLogger()})
+
+	r.ReportModel("primary", "p1", "", SignalFailModel)
+
+	if got := leadForModel(t, r, "m"); got != "primary" {
+		t.Fatalf("lead = %q, want primary: an unscoped 429 must not demote", got)
+	}
+	if len(r.Inspect()) != 0 {
+		t.Fatalf("inspect = %+v, want no health entries", r.Inspect())
+	}
+}
+
+// Never excludes, exactly like vendor health: if every vendor is rate-limited
+// for a model, the request still goes somewhere.
+func TestAllModelRateLimitedStillDispatches(t *testing.T) {
+	clk := newFakeClock()
+	snap := buildSnapshot(t, twoVendorBothModelsYAML)
+	r := New(staticSnap(snap), Options{Now: clk.Now, Logger: quietLogger()})
+
+	r.ReportModel("primary", "p1", "m", SignalFailModel)
+	r.ReportModel("backup", "b1", "m", SignalFailModel)
+
+	got, err := r.Candidates("m")
+	if err != nil {
+		t.Fatalf("candidates: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("candidates = %d, want 2", len(got))
+	}
+	if got[0].Vendor.Name != "primary" {
+		t.Fatalf("lead = %q, want primary (priority breaks the tie)", got[0].Vendor.Name)
+	}
 }

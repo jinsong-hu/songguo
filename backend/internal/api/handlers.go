@@ -10,6 +10,7 @@ import (
 
 	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/compose"
+	"github.com/songguo/songguo/internal/concurrency"
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/sessiontitle"
@@ -1845,6 +1846,14 @@ func (a *api) handleListVendors(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Live concurrency, keyed by CREDENTIAL rather than vendor: the limit
+	// belongs to the API key, so a provider split into several vendors reports
+	// the same shared occupancy on each.
+	var occupancy map[string]concurrency.State
+	if a.gate != nil {
+		occupancy = a.gate.Stats()
+	}
+
 	vendors := snap.Vendors()
 	views := make([]vendorView, 0, len(vendors))
 	for _, v := range vendors {
@@ -1853,7 +1862,8 @@ func (a *api) handleListVendors(w http.ResponseWriter, r *http.Request) {
 		if s, found := routing[v.Name]; found {
 			rs = &s
 		}
-		views = append(views, newVendorView(v, st, ok, rs))
+		occ := occupancy[v.Credential.ID]
+		views = append(views, newVendorView(v, st, ok, rs, occ))
 	}
 	writeJSON(w, http.StatusOK, views)
 }

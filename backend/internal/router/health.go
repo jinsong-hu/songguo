@@ -44,6 +44,17 @@ const (
 	// them simultaneously, and making each sibling rediscover that with its own
 	// failed client request would be re-proving a known fact.
 	SignalFailCredential
+	// SignalFailModel: the vendor is fine, but it will not serve THIS model
+	// right now — a 429 against one model's quota. Narrower than every other
+	// failure: it demotes the (vendor, model) pair for a fixed cooldown and
+	// leaves the vendor's own health untouched, so the rest of its catalogue
+	// keeps serving.
+	//
+	// It needs none of the machinery the other signals have. There is no
+	// corroboration streak, because a 429 is already a definite statement
+	// rather than an inference; and there is no dead state, because a rate
+	// limit is transient by construction.
+	SignalFailModel
 	// SignalNeutral: the vendor answered, but the failure belongs to the
 	// CALLER — every vendor would reject the request identically, so it says
 	// nothing about this one. Neutral outcomes neither demote nor restore.
@@ -61,6 +72,8 @@ func (s Signal) String() string {
 		return "fail_hard"
 	case SignalFailCredential:
 		return "fail_credential"
+	case SignalFailModel:
+		return "fail_model"
 	case SignalNeutral:
 		return "neutral"
 	}
@@ -110,11 +123,17 @@ func Classify(status int, err error, clientGone bool) Signal {
 		// common real one.
 		return SignalFailCredential
 
+	case status == http.StatusTooManyRequests:
+		// A 429 is about one model's quota far more often than the whole
+		// vendor's: providers meter per model tier, so a hot gpt-4o says
+		// nothing about text-embedding-3 on the same key. Scoping it to the
+		// model keeps one busy model from walking a vendor's entire catalogue
+		// out of rotation. A vendor that is genuinely rate-limited across the
+		// board simply accumulates one cooldown per model, converging on the
+		// same behavior without the collateral damage.
+		return SignalFailModel
+
 	case status >= 500,
-		// For us a 429 means "this credential has no capacity right now",
-		// which is precisely the state worth steering away from — but it is
-		// load-dependent, so one is not conclusive.
-		status == http.StatusTooManyRequests,
 		// 403 is a vendor-side rejection, but the meaning is overloaded: it can
 		// be a disabled key OR "this model is not on your plan", which would be
 		// per-model rather than vendor-wide. Too ambiguous to be conclusive.
@@ -186,10 +205,36 @@ type vendorHealth struct {
 // denials (budget, scope, rate limit, unmatched wire) can never reach it —
 // those are our refusals, not the vendor's.
 func (r *Router) Report(vendorName, credentialID string, sig Signal) {
+	r.ReportModel(vendorName, credentialID, "", sig)
+}
+
+// ReportModel is Report with the model the request named, which lets a 429 be
+// scoped to the (vendor, model) pair it actually concerns. A model-less request
+// (a WebSocket upgrade, GET /v1/models) passes "" and simply cannot produce a
+// model-scoped demotion.
+func (r *Router) ReportModel(vendorName, credentialID, model string, sig Signal) {
 	if vendorName == "" || sig == SignalNeutral {
 		return
 	}
 	now := r.now()
+
+	// A model-scoped failure never touches vendor health: the vendor is
+	// serving, it just will not serve this model right now.
+	if sig == SignalFailModel {
+		if model == "" {
+			// Nothing to scope it to. Rather than widen a per-model rate limit
+			// into a vendor-wide demotion, drop it — the alternative punishes
+			// a healthy vendor for a quota that may not even apply.
+			return
+		}
+		r.mu.Lock()
+		until := now.Add(r.modelCooldown)
+		r.modelCooling[modelKey(vendorName, model)] = until
+		r.mu.Unlock()
+		r.logger.Info("model demoted on vendor",
+			"vendor", vendorName, "model", model, "until", until)
+		return
+	}
 
 	// A credential-scoped failure lands on every vendor presenting that key, not
 	// just the one that happened to observe it. Resolved from the snapshot
@@ -333,6 +378,21 @@ const (
 	healthDead
 )
 
+// modelKey namespaces a per-(vendor, model) cooldown.
+func modelKey(vendorName, model string) string {
+	return vendorName + "\x00" + model
+}
+
+// modelCooling reports whether this vendor is currently rate-limited for this
+// specific model. Caller must hold r.mu.
+func (r *Router) modelIsCooling(vendorName, model string, now time.Time) bool {
+	if model == "" {
+		return false
+	}
+	until, ok := r.modelCooling[modelKey(vendorName, model)]
+	return ok && now.Before(until)
+}
+
 // healthRank places a vendor in one of the three tiers above.
 //
 // A demoted vendor is never excluded: it stays in the candidate list and leads
@@ -382,6 +442,7 @@ func (r *Router) nextCooldown(demotions int) time.Duration {
 func (r *Router) ResetHealth() {
 	r.mu.Lock()
 	clear(r.health)
+	clear(r.modelCooling)
 	r.mu.Unlock()
 
 	// Pins are dropped too: a reload may have renamed or removed the vendor a

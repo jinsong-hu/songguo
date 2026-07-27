@@ -169,6 +169,13 @@ type Vendor struct {
 	// ?api-version=…), which is merged with any inbound query.
 	Endpoints      map[string]string `yaml:"endpoints"`
 	AllowUnmatched bool              `yaml:"allow_unmatched"`
+	// MaxConcurrency bounds in-flight requests to this vendor's CREDENTIAL
+	// (0 = unlimited). Replicated onto every vendor a provider projects to,
+	// because the limit belongs to the API key, not the host: the (origin,
+	// adapter) split gives one credential several routing vendors that all
+	// draw on the same account quota. Enforced outside routing — see
+	// internal/concurrency.
+	MaxConcurrency int `yaml:"max_concurrency"`
 	Quirks         map[string]string `yaml:"quirks"`
 }
 
@@ -196,6 +203,11 @@ func normalize(cfg *Config) {
 	for i := range cfg.Vendors {
 		if cfg.Vendors[i].Weight <= 0 {
 			cfg.Vendors[i].Weight = 1
+		}
+		// A negative limit degrades to unlimited rather than to "nothing may
+		// pass": a typo must not take the provider offline.
+		if cfg.Vendors[i].MaxConcurrency < 0 {
+			cfg.Vendors[i].MaxConcurrency = 0
 		}
 		if cfg.Vendors[i].Adapter == "" {
 			cfg.Vendors[i].Adapter = AdapterOpenAI
