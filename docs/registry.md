@@ -66,7 +66,7 @@ Only the top candidate is forwarded to: songguo makes **one attempt** per reques
 
 Ranking is **health → sticky session → priority → weight**.
 
-A session pins to the provider that served its previous turn, so an agent conversation keeps one vendor and its prompt cache stays warm — on a large context that is the most expensive routing decision songguo makes. Health sorts above the pin, so it is only ever consulted among vendors of equal health and can never strand a session on a broken provider, and a client that sends no session header simply gets the ordinary ordering. Within a priority tier, selection is a **weighted random draw** rather than a rotation: correct in expectation, stateless, and approximate over short bursts.
+A session pins to the provider that served its previous turn, so an agent conversation keeps one vendor and its prompt cache stays warm — on a large context that is the most expensive routing decision songguo makes. Health sorts above the pin, so it is only ever consulted among vendors of equal health and can never strand a session on a broken provider, and a client that sends no session header simply gets the ordinary ordering. Within a priority tier, selection is a **weighted random draw** rather than a rotation: correct in expectation, stateless, and approximate over short bursts. The draw is taken once per **credential**, so a provider split across several protocol endpoints still gets a single share of traffic rather than one per endpoint.
 
 Health is learned passively from real requests — songguo never sends probe traffic.
 

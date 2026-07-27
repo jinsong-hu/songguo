@@ -101,7 +101,11 @@ Two of those four deserve stating plainly, because they are easy to get backward
   its prompt cache — on a 200k-token context that is roughly a 10× difference in
   input cost, which makes it the most expensive routing decision songguo makes.
   Weight therefore decides where a *new* session lands, not where each request
-  goes. Health sorts **above** stickiness, so a pin is only ever consulted among
+  goes — and the weighted draw is taken **per credential**, so a provider that
+  declares several protocols does not get several chances to win.
+  A config reload clears health but **keeps** pins: a stale pin matches nothing
+  and is overwritten on the next dispatch, whereas clearing pins would cost a
+  cold prompt per active session on every operator edit. Health sorts **above** stickiness, so a pin is only ever consulted among
   vendors of equal health and can never hold a session on a broken one — the
   guarantee is structural. A client that sends no session header just gets the
   ordinary ordering; we never *require* a header (see interface transparency).

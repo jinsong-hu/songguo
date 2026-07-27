@@ -5,6 +5,7 @@ import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
 import { ProviderForm } from '../components/ProviderForm';
+import { RoutingPanel } from '../components/RoutingPanel';
 import { Skeleton } from '../components/Skeleton';
 import { useToast } from '../components/Toast';
 import { useFetch } from '../lib/useFetch';
@@ -41,18 +42,21 @@ export function ProviderEditPage() {
           hint="It may have been removed. Go back to the providers page."
         />
       ) : (
-        <ProviderForm
-          editing={provider}
-          onCancel={() => navigate('/providers')}
-          onSaved={() => {
-            toast.success('Provider updated.');
-            navigate('/providers');
-          }}
-          onDeleted={() => {
-            toast.success(`Deleted "${provider.name}".`);
-            navigate('/providers');
-          }}
-        />
+        <>
+          <RoutingPanel provider={provider} />
+          <ProviderForm
+            editing={provider}
+            onCancel={() => navigate('/providers')}
+            onSaved={() => {
+              toast.success('Provider updated.');
+              navigate('/providers');
+            }}
+            onDeleted={() => {
+              toast.success(`Deleted "${provider.name}".`);
+              navigate('/providers');
+            }}
+          />
+        </>
       )}
     </Page>
   );

@@ -721,6 +721,8 @@ export interface CreateProviderBody {
   enabled?: boolean;
   catalog_id?: string;
   allow_unmatched?: boolean;
+  /** Max in-flight requests to this provider's credential; 0 = unlimited. */
+  max_concurrency?: number;
   quirks?: Record<string, string>;
   api_key?: string;
   models: ProviderModel[];
@@ -734,6 +736,8 @@ export type PatchProviderBody = Partial<{
   weight: number;
   enabled: boolean;
   allow_unmatched: boolean;
+  /** Max in-flight requests to this provider's credential; 0 = unlimited. */
+  max_concurrency: number;
   quirks: Record<string, string>;
   /** Replaces the provider's API key when present and non-empty. */
   api_key: string;

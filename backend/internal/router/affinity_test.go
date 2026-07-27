@@ -247,28 +247,41 @@ func TestAffinityIsBounded(t *testing.T) {
 	}
 }
 
-func TestAffinityResetDropsPins(t *testing.T) {
+// A config reload clears health but KEEPS session pins. Dropping them would
+// cost a cold prompt for every active session on every operator edit, to solve
+// a problem that resolves itself.
+func TestResetHealthKeepsPins(t *testing.T) {
 	clk := newFakeClock()
-	a := newAffinity(clk.Now, time.Hour, 100)
-	a.set("s", "alpha")
-	a.reset()
-	if got := a.get("s"); got != "" {
-		t.Fatalf("get = %q, want empty after reset", got)
+	snap := buildSnapshot(t, twoVendorYAML)
+	r := New(staticSnap(snap), Options{Now: clk.Now, FailThreshold: 1, Logger: quietLogger()})
+
+	sel := sessionSel("session-1")
+	r.Pin(sel, "backup")
+	r.Report("primary", "", SignalFail) // demote the p1 vendor
+	r.ResetHealth()
+
+	// Health was cleared...
+	if len(r.Inspect()) != 0 {
+		t.Fatalf("inspect = %+v, want health cleared", r.Inspect())
+	}
+	// ...but the session did not lose its warm provider.
+	if got := leadFor(t, r, sel); got != "backup" {
+		t.Fatalf("lead = %q, want backup: a reload must not drop session pins", got)
 	}
 }
 
-// Config reload clears pins as well as health: a reload may have renamed or
-// removed the vendor a session was pinned to.
-func TestResetHealthAlsoDropsPins(t *testing.T) {
+// A pin naming a vendor the reload removed is inert rather than harmful: it
+// matches nothing, so ordinary ordering decides and the next dispatch
+// overwrites it.
+func TestStalePinIsInert(t *testing.T) {
 	clk := newFakeClock()
 	snap := buildSnapshot(t, twoVendorYAML)
 	r := New(staticSnap(snap), Options{Now: clk.Now, Logger: quietLogger()})
 
 	sel := sessionSel("session-1")
-	r.Pin(sel, "backup")
-	r.ResetHealth()
+	r.Pin(sel, "vendor-that-no-longer-exists")
 
 	if got := leadFor(t, r, sel); got != "primary" {
-		t.Fatalf("lead = %q, want primary: reload must drop the pin", got)
+		t.Fatalf("lead = %q, want primary: a stale pin must not distort ordering", got)
 	}
 }

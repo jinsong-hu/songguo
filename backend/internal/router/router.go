@@ -358,8 +358,28 @@ type rankedVendor struct {
 func (r *Router) order(sel Selector, vendors []config.Vendor) []Target {
 	pinned := r.affinity.get(sel.affinityKey())
 
+	// One draw per CREDENTIAL, not per vendor. A provider is split into several
+	// routing vendors by (origin, adapter), and drawing for each of them would
+	// give that provider several chances to win — two equal-weight providers
+	// would split 2:1 rather than 1:1 purely because one declares two protocols.
+	// Sharing the draw makes `weight` mean "this provider's share of traffic",
+	// which is what the config UI says it means.
+	//
+	// Vendors of one credential therefore tie on draw, and the declaration-order
+	// tiebreak settles them. That is harmless: wire matching downstream keeps
+	// only the vendor that serves the requested path.
+	//
+	// Drawn under the lock so that an injected Rand need not be goroutine-safe.
 	r.mu.Lock()
 	now := r.now()
+
+	draws := make(map[string]float64, len(vendors))
+	for _, v := range vendors {
+		if _, seen := draws[v.Credential.ID]; !seen {
+			draws[v.Credential.ID] = weightedDraw(r.rand(), v.Weight)
+		}
+	}
+
 	ranks := make([]rankedVendor, len(vendors))
 	for i, v := range vendors {
 		hr := r.healthRank(v.Name, now)
@@ -378,7 +398,7 @@ func (r *Router) order(sel Selector, vendors []config.Vendor) []Target {
 			sticky:   boolRank(v.Name == pinned),
 			health:   hr,
 			priority: v.Priority,
-			draw:     weightedDraw(r.rand(), v.Weight),
+			draw:     draws[v.Credential.ID],
 			decl:     i,
 		}
 	}

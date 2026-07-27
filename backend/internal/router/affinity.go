@@ -135,12 +135,3 @@ func (a *affinity) countFor(vendorName string) int {
 	}
 	return n
 }
-
-// reset drops every pin. Called on config reload, where a vendor may have just
-// been renamed or removed underneath the pins.
-func (a *affinity) reset() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.entries = make(map[string]affinityEntry)
-	a.nextSweep = a.now().Add(sweepInterval)
-}

@@ -434,21 +434,26 @@ func (r *Router) nextCooldown(demotions int) time.Duration {
 	return d
 }
 
-// ResetHealth clears all cross-request health state. configsvc calls it after a
-// config reload: an operator edit is an explicit statement about a provider, so
-// a vendor gets a clean slate rather than inheriting a cooldown earned under
-// different config. It also drops entries for vendors the reload removed, so
-// the map cannot grow with config churn.
+// ResetHealth clears cross-request health state (vendor demotions and per-model
+// rate-limit cooldowns). configsvc calls it after a config reload: an operator
+// edit is an explicit statement about a provider, so a vendor gets a clean slate
+// rather than inheriting a cooldown earned under different config. It also drops
+// entries for vendors the reload removed, so the map cannot grow with config
+// churn.
+//
+// It does NOT clear session affinity — see the note below.
 func (r *Router) ResetHealth() {
 	r.mu.Lock()
 	clear(r.health)
 	clear(r.modelCooling)
 	r.mu.Unlock()
 
-	// Pins are dropped too: a reload may have renamed or removed the vendor a
-	// session was pinned to, and a stale pin would silently never match. The
-	// cost is one cold prompt per active session, paid only on operator edits.
-	r.affinity.reset()
+	// Session pins are deliberately KEPT. A stale pin cannot do harm: if its
+	// vendor was renamed or removed it simply matches no candidate, stickiness
+	// contributes nothing, and the next dispatch overwrites it with wherever the
+	// session actually landed. Clearing them would instead cost a cold prompt
+	// for every active session on every config edit — real money, to solve a
+	// problem that resolves itself.
 }
 
 // VendorState is a read-only view of one vendor's live routing state, for the

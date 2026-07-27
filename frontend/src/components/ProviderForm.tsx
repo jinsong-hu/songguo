@@ -216,6 +216,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
   const [weight, setWeight] = useState(String(editing.weight));
   const [enabled, setEnabled] = useState(editing.enabled);
   const [allowUnmatched, setAllowUnmatched] = useState(editing.allow_unmatched);
+  const [maxConcurrency, setMaxConcurrency] = useState(String(editing.max_concurrency ?? 0));
   const [quirks, setQuirks] = useState<Record<string, string>>(editing.quirks ?? {});
   const injectStreamUsage = quirks['inject_stream_usage'] === 'true';
   const setInjectStreamUsage = (on: boolean) =>
@@ -316,8 +317,13 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
 
     const prio = Number(priority || '0');
     const wt = Number(weight || '1');
-    if (Number.isNaN(prio) || Number.isNaN(wt)) {
-      setErr('Priority and weight must be numbers.');
+    const conc = Number(maxConcurrency || '0');
+    if (Number.isNaN(prio) || Number.isNaN(wt) || Number.isNaN(conc)) {
+      setErr('Priority, weight and max concurrency must be numbers.');
+      return;
+    }
+    if (conc < 0) {
+      setErr('Max concurrency cannot be negative. Use 0 for unlimited.');
       return;
     }
 
@@ -331,6 +337,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
         weight: wt,
         enabled,
         allow_unmatched: allowUnmatched,
+        max_concurrency: conc,
         quirks,
         models,
         endpoints,
@@ -462,6 +469,22 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
             onChange={(e) => setWeight(e.target.value)}
           />
           <span className={cards.hint}>Within a priority.</span>
+        </div>
+        <div className={cards.field}>
+          <label className={cards.label} htmlFor="s-conc">
+            Max concurrency
+          </label>
+          <input
+            id="s-conc"
+            className="input"
+            inputMode="numeric"
+            value={maxConcurrency}
+            onChange={(e) => setMaxConcurrency(e.target.value)}
+          />
+          <span className={cards.hint}>
+            0 = unlimited. Over the limit, requests <em>wait</em> for a slot rather than
+            moving to another provider — that would drop the session&rsquo;s prompt cache.
+          </span>
         </div>
         <div className={cards.field}>
           <span className={cards.label}>Enabled</span>
