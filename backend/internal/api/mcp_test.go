@@ -14,12 +14,12 @@ import (
 // buildMCPServer. Kept here so the test fails loudly if the catalogue changes.
 var mcpReadTools = []string{
 	"get_overview", "get_usage_series", "list_calls", "get_call_trace",
-	"list_users", "list_providers", "list_services", "list_pricing", "get_settings",
+	"list_users", "list_providers", "list_proxies", "list_services", "list_pricing", "get_settings",
 }
 
 var mcpWriteTools = []string{
-	"create_user", "update_user", "revoke_user", "create_provider",
-	"update_provider", "delete_provider", "test_provider",
+	"create_user", "update_user", "revoke_user", "create_proxy", "update_proxy",
+	"delete_proxy", "create_provider", "update_provider", "delete_provider", "test_provider",
 }
 
 // connectMCP wires an in-memory client to a server built from a, returning the
@@ -89,7 +89,7 @@ func TestMCPReadOnlyByDefault(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{"get_overview", "list_users", "list_providers", "get_settings"} {
+	for _, name := range []string{"get_overview", "list_users", "list_providers", "list_proxies", "get_settings"} {
 		res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 			Name:      name,
 			Arguments: map[string]any{},
@@ -126,6 +126,23 @@ func TestMCPWriteToolsWhenEnabled(t *testing.T) {
 	}
 	if res.IsError {
 		t.Fatalf("create_user returned a tool error: %s", contentText(res.Content))
+	}
+
+	res, err = cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "create_proxy",
+		Arguments: map[string]any{
+			"name": "agent-egress", "type": "socks5", "host": "127.0.0.1",
+			"port": 1080, "username": "agent", "password": "mcp-secret",
+		},
+	})
+	if err != nil {
+		t.Fatalf("call create_proxy: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("create_proxy returned a tool error: %s", contentText(res.Content))
+	}
+	if strings.Contains(contentText(res.Content), "mcp-secret") {
+		t.Fatal("create_proxy result leaked the password")
 	}
 }
 

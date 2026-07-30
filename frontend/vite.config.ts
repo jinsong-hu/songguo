@@ -30,6 +30,8 @@ export default defineConfig({
       '/v1':      { target: backendTarget, changeOrigin: true, ws: true },
       '/x':       { target: backendTarget, changeOrigin: true, ws: true },
       '/healthz': { target: backendTarget },
+      '/admin/mcp': { target: backendTarget },
+      '/mcp': { target: backendTarget },
       '/openapi.yaml': { target: backendTarget },
       '/openapi.json': { target: backendTarget },
     },

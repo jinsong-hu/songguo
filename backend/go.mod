@@ -10,6 +10,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/pkoukk/tiktoken-go v0.1.7
 	github.com/pkoukk/tiktoken-go-loader v0.0.2
+	golang.org/x/net v0.48.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.52.0
 )

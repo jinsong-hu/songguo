@@ -72,6 +72,17 @@ func (m *Manager) build() (*config.Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configsvc: list providers: %w", err)
 	}
+	proxies, err := m.store.ListProxies()
+	if err != nil {
+		return nil, fmt.Errorf("configsvc: list proxies: %w", err)
+	}
+	proxiesByID := make(map[string]config.Proxy, len(proxies))
+	for _, p := range proxies {
+		proxiesByID[p.ID] = config.Proxy{
+			ID: p.ID, Name: p.Name, Type: p.Type, Host: p.Host, Port: p.Port,
+			Username: p.Username, Password: p.Password,
+		}
+	}
 	cat, err := catalog.Load()
 	if err != nil {
 		return nil, fmt.Errorf("configsvc: load catalog: %w", err)
@@ -86,7 +97,15 @@ func (m *Manager) build() (*config.Snapshot, error) {
 				"provider", pvd.Name, "has_key", pvd.APIKey != "", "models", len(pvd.Models))
 			continue
 		}
-		cfg.Vendors = append(cfg.Vendors, vendorsFromProvider(pvd, cat, m.logger)...)
+		var outboundProxy *config.Proxy
+		if pvd.ProxyID != "" {
+			p, ok := proxiesByID[pvd.ProxyID]
+			if !ok {
+				return nil, fmt.Errorf("configsvc: provider %q references missing proxy %q", pvd.Name, pvd.ProxyID)
+			}
+			outboundProxy = &p
+		}
+		cfg.Vendors = append(cfg.Vendors, vendorsFromProvider(pvd, outboundProxy, cat, m.logger)...)
 	}
 
 	return config.Build(cfg)
@@ -101,7 +120,7 @@ func (m *Manager) build() (*config.Snapshot, error) {
 // stable for single-host providers); additional groups get an "-<adapter>"
 // suffix. Every group carries the provider id as its credential id, so an
 // X-Songguo-Provider pin resolves across the split.
-func vendorsFromProvider(pvd store.Provider, cat catalog.Catalog, logger *slog.Logger) []config.Vendor {
+func vendorsFromProvider(pvd store.Provider, outboundProxy *config.Proxy, cat catalog.Catalog, logger *slog.Logger) []config.Vendor {
 	// Pass 1: resolve each model's published price (catalog, or the stored row).
 	models := make([]string, 0, len(pvd.Models))
 	prices := make(map[string]config.Price, len(pvd.Models))
@@ -243,6 +262,7 @@ func vendorsFromProvider(pvd store.Provider, cat catalog.Catalog, logger *slog.L
 			Weight:         pvd.Weight,
 			ModelRoutes:    modelRoutes,
 			Credential:     config.Credential{ID: pvd.ID, APIKey: pvd.APIKey},
+			Proxy:          outboundProxy,
 			Prices:         prices,
 			Wires:          wires,
 			Endpoints:      endpoints,

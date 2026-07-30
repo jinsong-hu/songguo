@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/songguo/songguo/internal/catalog"
+	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/store"
 	"github.com/songguo/songguo/internal/wire"
 )
@@ -42,6 +43,7 @@ type providerView struct {
 	Weight         int                    `json:"weight"`
 	Enabled        bool                   `json:"enabled"`
 	CatalogID      string                 `json:"catalog_id"`
+	ProxyID        string                 `json:"proxy_id"`
 	Endpoints      []providerEndpointView `json:"endpoints"`
 	AllowUnmatched bool                   `json:"allow_unmatched"`
 	MaxConcurrency int                    `json:"max_concurrency"`
@@ -51,13 +53,13 @@ type providerView struct {
 	Routing *providerRoutingView `json:"routing,omitempty"`
 	// Capacity is shared by every vendor of this provider — they present one
 	// credential against one account quota.
-	Capacity capacityView `json:"capacity"`
-	Quirks         map[string]string      `json:"quirks"`
-	MaskedKey      string                 `json:"masked_key"`
-	Models         []providerModelView    `json:"models"`
-	CreatedAt      string                 `json:"created_at"`
-	UpdatedAt      string                 `json:"updated_at"`
-	Stats          vendorStatsView        `json:"stats"`
+	Capacity  capacityView        `json:"capacity"`
+	Quirks    map[string]string   `json:"quirks"`
+	MaskedKey string              `json:"masked_key"`
+	Models    []providerModelView `json:"models"`
+	CreatedAt string              `json:"created_at"`
+	UpdatedAt string              `json:"updated_at"`
+	Stats     vendorStatsView     `json:"stats"`
 }
 
 func newProviderView(pvd store.Provider, stat store.VendorStat, hasStat bool, routing *providerRoutingView, cap capacityView) providerView {
@@ -94,6 +96,7 @@ func newProviderView(pvd store.Provider, stat store.VendorStat, hasStat bool, ro
 		Weight:         pvd.Weight,
 		Enabled:        pvd.Enabled,
 		CatalogID:      pvd.CatalogID,
+		ProxyID:        pvd.ProxyID,
 		Endpoints:      endpoints,
 		AllowUnmatched: pvd.AllowUnmatched,
 		MaxConcurrency: pvd.MaxConcurrency,
@@ -148,6 +151,8 @@ type patchProviderReq struct {
 	Enabled        *bool   `json:"enabled,omitempty"`
 	AllowUnmatched *bool   `json:"allow_unmatched,omitempty"`
 	MaxConcurrency *int    `json:"max_concurrency,omitempty"`
+	// ProxyID selects a stored proxy. Empty means explicit direct access.
+	ProxyID *string `json:"proxy_id,omitempty"`
 	// APIKey replaces the provider's key when present and non-empty.
 	APIKey    *string                `json:"api_key,omitempty"`
 	Quirks    *map[string]string     `json:"quirks,omitempty"`
@@ -183,6 +188,7 @@ func sanitizeProvidersForUser(in []providerView) []providerView {
 	for _, p := range in {
 		p.MaskedKey = ""
 		p.Quirks = nil
+		p.ProxyID = ""
 		// Operational capacity and routing health are not a consumer's business,
 		// and leaking them would let a caller infer how loaded the account is.
 		p.MaxConcurrency = 0
@@ -346,6 +352,18 @@ func (a *api) updateProviderData(id string, req patchProviderReq) (providerView,
 		}
 		req.APIKey = &trimmed
 	}
+	if req.ProxyID != nil {
+		trimmed := strings.TrimSpace(*req.ProxyID)
+		if trimmed != "" {
+			if _, err := a.store.GetProxy(trimmed); err != nil {
+				if errors.Is(err, store.ErrNotFound) {
+					return providerView{}, badRequestErr("proxy_id does not reference an existing proxy")
+				}
+				return providerView{}, err
+			}
+		}
+		req.ProxyID = &trimmed
+	}
 	upd := store.ProviderUpdate{
 		Name:           req.Name,
 		Vendor:         req.Vendor,
@@ -355,6 +373,7 @@ func (a *api) updateProviderData(id string, req patchProviderReq) (providerView,
 		AllowUnmatched: req.AllowUnmatched,
 		MaxConcurrency: req.MaxConcurrency,
 		APIKey:         req.APIKey,
+		ProxyID:        req.ProxyID,
 		Quirks:         req.Quirks,
 	}
 	if req.Models != nil {
@@ -453,7 +472,18 @@ func (a *api) testProviderData(ctx context.Context, id string) (testVendorView, 
 	}
 
 	start := a.now()
-	resp, err := a.client.Do(req)
+	var outboundProxy *config.Proxy
+	if pvd.ProxyID != "" {
+		p, err := a.store.GetProxy(pvd.ProxyID)
+		if err != nil {
+			return testVendorView{Reachable: false, Error: "provider proxy is unavailable"}, nil
+		}
+		outboundProxy = &config.Proxy{
+			ID: p.ID, Name: p.Name, Type: p.Type, Host: p.Host, Port: p.Port,
+			Username: p.Username, Password: p.Password,
+		}
+	}
+	resp, err := a.outbound.Do(req, outboundProxy)
 	latency := a.now().Sub(start).Milliseconds()
 	if err != nil {
 		return testVendorView{Reachable: false, LatencyMS: latency, Error: err.Error()}, nil

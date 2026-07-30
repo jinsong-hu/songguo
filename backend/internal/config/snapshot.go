@@ -93,6 +93,10 @@ func (s *Snapshot) PriceFor(vendorName, model string) (Price, bool) {
 // shares no mutable state with the Snapshot.
 func cloneVendor(v Vendor) Vendor {
 	out := v
+	if v.Proxy != nil {
+		p := *v.Proxy
+		out.Proxy = &p
+	}
 	if v.ServedModels != nil {
 		out.ServedModels = append([]string(nil), v.ServedModels...)
 	}
@@ -106,6 +110,21 @@ func cloneVendor(v Vendor) Vendor {
 		out.Prices = make(map[string]Price, len(v.Prices))
 		for k, p := range v.Prices {
 			out.Prices[k] = p
+		}
+	}
+	if v.Wires != nil {
+		out.Wires = append([]string(nil), v.Wires...)
+	}
+	if v.Endpoints != nil {
+		out.Endpoints = make(map[string]string, len(v.Endpoints))
+		for k, endpoint := range v.Endpoints {
+			out.Endpoints[k] = endpoint
+		}
+	}
+	if v.Quirks != nil {
+		out.Quirks = make(map[string]string, len(v.Quirks))
+		for k, value := range v.Quirks {
+			out.Quirks[k] = value
 		}
 	}
 	return out

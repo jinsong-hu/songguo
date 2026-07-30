@@ -120,6 +120,10 @@
   border-top: 1px solid var(--border);
 }
 
+.proxySelect {
+  width: min(100%, 460px);
+}
+
 .advTitle {
   font-size: 13px;
   font-weight: 600;

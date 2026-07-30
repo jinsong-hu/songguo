@@ -534,3 +534,41 @@ func TestProviderExpandsByOriginAdapter(t *testing.T) {
 		t.Error("both groups should share the provider key")
 	}
 }
+
+func TestProviderProxyPropagatesToEveryVendorGroup(t *testing.T) {
+	st := openTestStore(t)
+	p, err := st.CreateProxy(store.NewProxy{
+		Name: "egress", Type: store.ProxyTypeSOCKS5, Host: "127.0.0.1", Port: 1080,
+		Username: "alice", Password: "secret",
+	})
+	if err != nil {
+		t.Fatalf("CreateProxy: %v", err)
+	}
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "multi", Enabled: true, APIKey: "sk-x", ProxyID: p.ID,
+		Models: []store.ProviderModel{{Model: "m1", Unit: "per_1m_tokens"}},
+		Endpoints: []store.ProviderEndpoint{
+			{Wire: "openai/chat", Endpoint: "https://one.example.com/v1/chat/completions", Adapter: "openai-compatible"},
+			{Wire: "anthropic/messages", Endpoint: "https://two.example.com/v1/messages", Adapter: "anthropic-compatible"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	vendors := m.Current().Vendors()
+	if len(vendors) != 2 {
+		t.Fatalf("vendors = %d, want 2", len(vendors))
+	}
+	for _, vendor := range vendors {
+		if vendor.Proxy == nil {
+			t.Fatalf("vendor %q has no proxy", vendor.Name)
+		}
+		if vendor.Proxy.ID != p.ID || vendor.Proxy.Password != "secret" {
+			t.Fatalf("vendor %q proxy = %+v", vendor.Name, vendor.Proxy)
+		}
+	}
+}

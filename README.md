@@ -26,6 +26,7 @@ Songguo is **single-tenant, multi-token**: one owner, many scoped keys. No accou
 - **Read-only metering** — usage sniffed from the native payload (with coarse fallback); a parse failure never blocks traffic. Per-model pricing yields true cost.
 - **Append-only call log** — one row per call attempt; every dashboard view is a query over it.
 - **WebSocket passthrough** — realtime APIs (OpenAI Realtime, streaming ASR/TTS) proxied at the native path with an `X-Songguo-Provider` pin: the handshake is replayed with the credential swapped, frames are piped untouched, and the session is metered by bytes + duration.
+- **Per-provider outbound routes** — manage reusable HTTPS/SOCKS5 proxies in Settings, then select Direct or a named proxy when editing a provider. Direct explicitly ignores process proxy environment variables.
 - **Per-user request/response capture** — store raw request + response bodies for selected user keys (headers redacted) and inspect them by expanding a call in the dashboard. Off by default.
 - **Dashboard** (light + dark, pine-green) — Overview (spend, runway, by-modality, latency percentiles, recent calls with filters + CSV/JSON export, expand a row to view its captured request/response), **Services** (manage upstreams: keys, models, prices, health/connectivity test), **Catalog** (browse known providers and add one in a click), Tokens (CRUD with budget bars), Settings.
 - **Vendor config in SQLite, managed from the dashboard** — add/edit services, rotate keys, and set prices on the **Services**/**Catalog** pages; changes apply immediately with no restart.
@@ -63,6 +64,12 @@ The call is forwarded to whichever vendor serves `gpt-4o`, metered into the call
 ## Configuration
 
 Services (an upstream's adapter, base URL, credential, and per-model prices) and tokens both live in **SQLite** and are managed from the dashboard — the **Services** page to add/edit them by hand, the **Catalog** page to add a known provider in one click. A new service speaks one of two adapters: `openai-compatible` (bearer auth) or `anthropic-compatible` (`x-api-key` + `anthropic-version`).
+
+Reusable HTTPS and SOCKS5 proxies are managed on **Settings**. New providers
+always start on **Direct**; edit a provider to assign a proxy. The selected route
+applies consistently to HTTP forwarding, WebSockets, and connectivity tests.
+Direct is explicit and does not inherit `HTTP_PROXY`, `HTTPS_PROXY`, or
+`ALL_PROXY`.
 
 ### Addressing
 
@@ -112,9 +119,10 @@ backend/
   cmd/songguo   main entrypoint
   internal/
     config/    config types + validation, projected into the routing snapshot
-    configsvc/  builds the live snapshot from SQLite service rows
+    configsvc/  builds the live snapshot from SQLite provider + proxy rows
     catalog/    embedded read-only preset directory (providers/services/models)
-    store/      SQLite: services + credentials + prices, call log, tokens, aggregations
+    outbound/   shared direct / HTTPS proxy / SOCKS5 connection manager
+    store/      SQLite: providers + proxies + prices, call log, users, aggregations
     calls/      call-log domain types
     pricing/    usage + price table -> cost
     meter/      read-only modality/usage sniffing (JSON + SSE)

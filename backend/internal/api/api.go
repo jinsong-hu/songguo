@@ -18,6 +18,7 @@ import (
 
 	"github.com/songguo/songguo/internal/concurrency"
 	"github.com/songguo/songguo/internal/config"
+	"github.com/songguo/songguo/internal/outbound"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/store"
 )
@@ -35,10 +36,11 @@ type Deps struct {
 	Reload     func() error // rebuild the live snapshot after a config write
 	AdminKey   string       // from SONGGUO_ADMIN_KEY; empty = unprotected (logged once)
 	Logger     *slog.Logger
-	HTTPClient *http.Client     // for vendor test-connection; default if nil
-	Now        func() time.Time // defaults to time.Now
-	Version    string           // build version string, default "dev"
-	ListenAddr string           // from SONGGUO_LISTEN; shown in settings
+	HTTPClient *http.Client      // for vendor test-connection; default if nil
+	Outbound   *outbound.Manager // optional; shared in production
+	Now        func() time.Time  // defaults to time.Now
+	Version    string            // build version string, default "dev"
+	ListenAddr string            // from SONGGUO_LISTEN; shown in settings
 	DBPath     string
 }
 
@@ -51,7 +53,7 @@ type api struct {
 	reload     func() error
 	adminKey   string
 	logger     *slog.Logger
-	client     *http.Client
+	outbound   *outbound.Manager
 	now        func() time.Time
 	version    string
 	listenAddr string
@@ -72,9 +74,9 @@ func newAPI(d Deps) *api {
 	if now == nil {
 		now = time.Now
 	}
-	client := d.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 5 * time.Second}
+	out := d.Outbound
+	if out == nil {
+		out = outbound.New(outbound.Options{DirectClient: d.HTTPClient})
 	}
 	version := d.Version
 	if version == "" {
@@ -93,7 +95,7 @@ func newAPI(d Deps) *api {
 		reload:     reload,
 		adminKey:   d.AdminKey,
 		logger:     logger,
-		client:     client,
+		outbound:   out,
 		now:        now,
 		version:    version,
 		listenAddr: d.ListenAddr,
@@ -165,6 +167,10 @@ var adminRoutes = []adminRoute{
 	{"PATCH", "/api/providers/{id}", (*api).handlePatchProvider, false},
 	{"DELETE", "/api/providers/{id}", (*api).handleDeleteProvider, false},
 	{"POST", "/api/providers/{id}/test", (*api).handleTestProvider, false},
+	{"GET", "/api/proxies", (*api).handleListProxies, false},
+	{"POST", "/api/proxies", (*api).handleCreateProxy, false},
+	{"PATCH", "/api/proxies/{id}", (*api).handlePatchProxy, false},
+	{"DELETE", "/api/proxies/{id}", (*api).handleDeleteProxy, false},
 	// Catalog + wire names are static model/wire metadata the test panel needs.
 	{"GET", "/api/catalog", (*api).handleCatalog, true},
 	{"GET", "/api/wires", (*api).handleWires, true},

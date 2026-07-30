@@ -61,8 +61,13 @@ func (a *api) buildMCPServer(enableWrites bool) *mcp.Server {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "list_providers",
-		Description: "List all configured upstream providers (one credential each) with their wire endpoints, models/prices, quirks and health stats. API keys are masked.",
+		Description: "List all configured upstream providers (one credential each) with their connection route, wire endpoints, models/prices, quirks and health stats. API keys are masked.",
 	}, a.mcpListProviders)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "list_proxies",
+		Description: "List reusable HTTPS and SOCKS5 outbound proxies, including host, port, username, whether a password is stored, and assigned-provider count. Passwords are never returned.",
+	}, a.mcpListProxies)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "list_services",
@@ -100,13 +105,28 @@ func (a *api) buildMCPServer(enableWrites bool) *mcp.Server {
 	}, a.mcpRevokeUser)
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "create_proxy",
+		Description: "Create a reusable outbound proxy. Fields: name, type ('https' or 'socks5'), host, port, and optional username/password. The password is stored but never returned.",
+	}, a.mcpCreateProxy)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "update_proxy",
+		Description: "Update a proxy by id using a patch object. Omit password to keep it, set password to replace it, or set clear_password to remove it.",
+	}, a.mcpUpdateProxy)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "delete_proxy",
+		Description: "Delete an unassigned proxy by id. A proxy assigned to any provider must be removed from those providers first.",
+	}, a.mcpDeleteProxy)
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "create_provider",
 		Description: "Create an upstream provider. Fields: name (required), vendor, api_key, priority, weight, enabled, allow_unmatched, quirks, models (name + input/output/cached_input prices + unit), and endpoints (each a wire + its full upstream URL + adapter/auth scheme).",
 	}, a.mcpCreateProvider)
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "update_provider",
-		Description: "Update a provider's mutable fields. Provide the provider id and a patch object with only the fields to change. Supplying api_key replaces the key; supplying models or endpoints replaces those lists wholesale.",
+		Description: "Update a provider's mutable fields. Provide the provider id and a patch object with only the fields to change. Set proxy_id to a proxy id or an empty string for Direct. Supplying api_key replaces the key; supplying models or endpoints replaces those lists wholesale.",
 	}, a.mcpUpdateProvider)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -243,6 +263,18 @@ func (a *api) mcpListProviders(_ context.Context, _ *mcp.CallToolRequest, _ noAr
 	return nil, providersOut{Providers: v}, nil
 }
 
+type proxiesOut struct {
+	Proxies []proxyView `json:"proxies"`
+}
+
+func (a *api) mcpListProxies(_ context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, proxiesOut, error) {
+	v, err := a.proxiesData()
+	if err != nil {
+		return nil, proxiesOut{}, err
+	}
+	return nil, proxiesOut{Proxies: v}, nil
+}
+
 type servicesOut struct {
 	Services []serviceView `json:"services"`
 }
@@ -300,6 +332,34 @@ func (a *api) mcpRevokeUser(_ context.Context, _ *mcp.CallToolRequest, args idAr
 		return nil, userView{}, err
 	}
 	return nil, v, nil
+}
+
+func (a *api) mcpCreateProxy(_ context.Context, _ *mcp.CallToolRequest, args createProxyReq) (*mcp.CallToolResult, proxyView, error) {
+	v, err := a.createProxyData(args)
+	if err != nil {
+		return nil, proxyView{}, err
+	}
+	return nil, v, nil
+}
+
+type updateProxyArgs struct {
+	ID    string        `json:"id" jsonschema:"the proxy id to update"`
+	Patch patchProxyReq `json:"patch" jsonschema:"fields to change; omit a field to leave it unchanged"`
+}
+
+func (a *api) mcpUpdateProxy(_ context.Context, _ *mcp.CallToolRequest, args updateProxyArgs) (*mcp.CallToolResult, proxyView, error) {
+	v, err := a.updateProxyData(args.ID, args.Patch)
+	if err != nil {
+		return nil, proxyView{}, err
+	}
+	return nil, v, nil
+}
+
+func (a *api) mcpDeleteProxy(_ context.Context, _ *mcp.CallToolRequest, args idArgs) (*mcp.CallToolResult, deletedOut, error) {
+	if err := a.deleteProxyData(args.ID); err != nil {
+		return nil, deletedOut{}, err
+	}
+	return nil, deletedOut{Deleted: true}, nil
 }
 
 func (a *api) mcpCreateProvider(_ context.Context, _ *mcp.CallToolRequest, args createProviderReq) (*mcp.CallToolResult, providerView, error) {

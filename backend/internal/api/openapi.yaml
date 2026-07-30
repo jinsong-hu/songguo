@@ -26,6 +26,8 @@ tags:
     description: Gateway users (consumer keys) — create, update, and revoke keys and track lifetime spend.
   - name: providers
     description: Upstream providers (one credential each) — configure wire endpoints, models and prices, and probe reachability.
+  - name: proxies
+    description: Reusable HTTPS and SOCKS5 outbound routes assigned to providers.
   - name: services
     description: The auto-derived, model-centric view of which providers serve each model.
   - name: config
@@ -623,6 +625,73 @@ paths:
               schema: { $ref: "#/components/schemas/TestResult" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/proxies:
+    get:
+      tags: [proxies]
+      summary: List reusable outbound proxies
+      operationId: listProxies
+      responses:
+        "200":
+          description: Proxies; passwords are never returned
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Proxy" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [proxies]
+      summary: Create an outbound proxy
+      operationId: createProxy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateProxy" }
+      responses:
+        "201":
+          description: Created proxy; the password is masked
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Proxy" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/proxies/{id}:
+    patch:
+      tags: [proxies]
+      summary: Update an outbound proxy
+      operationId: patchProxy
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PatchProxy" }
+      responses:
+        "200":
+          description: Updated proxy; the password is masked
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Proxy" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      tags: [proxies]
+      summary: Delete an unassigned outbound proxy
+      operationId: deleteProxy
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Proxy is still assigned to one or more providers
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /api/catalog:
     get:
       tags: [config]
@@ -1147,6 +1216,7 @@ components:
         weight: { type: integer }
         enabled: { type: boolean }
         catalog_id: { type: string }
+        proxy_id: { type: string, description: "Assigned outbound proxy id; empty means explicit direct access." }
         endpoints: { type: array, items: { $ref: "#/components/schemas/ProviderEndpoint" } }
         allow_unmatched: { type: boolean }
         max_concurrency: { type: integer, description: "Max in-flight requests to this provider's credential; 0 = unlimited. Callers WAIT for a slot rather than being routed to another provider, which would discard the session prompt cache." }
@@ -1181,12 +1251,48 @@ components:
         priority: { type: integer }
         weight: { type: integer }
         enabled: { type: boolean }
+        proxy_id: { type: string, description: "Stored proxy id, or an empty string for explicit direct access." }
         allow_unmatched: { type: boolean }
         max_concurrency: { type: integer, description: "Max in-flight requests to this provider's credential; 0 = unlimited. Callers WAIT for a slot rather than being routed to another provider, which would discard the session prompt cache." }
         api_key: { type: string, description: "Replaces the key when non-empty." }
         quirks: { type: object, additionalProperties: { type: string } }
         models: { type: array, items: { $ref: "#/components/schemas/ProviderModel" } }
         endpoints: { type: array, items: { $ref: "#/components/schemas/ProviderEndpoint" } }
+    Proxy:
+      type: object
+      description: A reusable outbound network route. The stored password is never serialized.
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [https, socks5] }
+        host: { type: string, description: "Hostname or IP address without scheme, credentials, port, or path." }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        username: { type: string }
+        has_password: { type: boolean }
+        provider_count: { type: integer, minimum: 0 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CreateProxy:
+      type: object
+      required: [name, type, host, port]
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [https, socks5] }
+        host: { type: string, description: "Hostname or IP address without scheme, credentials, port, or path." }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        username: { type: string }
+        password: { type: string, format: password, writeOnly: true }
+    PatchProxy:
+      type: object
+      description: Only present fields change. Password and clear_password cannot both be supplied.
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [https, socks5] }
+        host: { type: string, description: "Hostname or IP address without scheme, credentials, port, or path." }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        username: { type: string }
+        password: { type: string, format: password, writeOnly: true, description: "Replaces the stored password." }
+        clear_password: { type: boolean, description: "Remove the stored password." }
     ServiceProvider:
       type: object
       properties:

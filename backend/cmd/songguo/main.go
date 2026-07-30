@@ -14,6 +14,7 @@ import (
 	"github.com/songguo/songguo/internal/concurrency"
 	"github.com/songguo/songguo/internal/configsvc"
 	"github.com/songguo/songguo/internal/janitor"
+	"github.com/songguo/songguo/internal/outbound"
 	"github.com/songguo/songguo/internal/proxy"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/server"
@@ -77,12 +78,14 @@ func main() {
 	// router never sees it, because capacity decides WHEN a request goes, not
 	// WHERE (see internal/concurrency).
 	gate := concurrency.New()
+	out := outbound.New(outbound.Options{})
 	proxyDeps := proxy.Deps{
 		Snapshot: manager.Current,
 		Store:    st,
 		Router:   rt,
 		Gate:     gate,
 		Logger:   logger,
+		Outbound: out,
 	}
 	proxyHandler := proxy.NewHandler(proxyDeps)
 	testWSHandler := proxy.NewWSTestHandler(proxyDeps)
@@ -96,6 +99,7 @@ func main() {
 			if err := manager.Reload(); err != nil {
 				return err
 			}
+			out.Reset()
 			// An operator edit is an explicit statement about a provider, so
 			// clear routing health rather than let a vendor inherit a cooldown
 			// it earned under different config. This also drops health entries
@@ -105,6 +109,7 @@ func main() {
 		},
 		AdminKey:   adminKey,
 		Logger:     logger,
+		Outbound:   out,
 		Version:    "dev",
 		ListenAddr: listen,
 		DBPath:     dbPath,

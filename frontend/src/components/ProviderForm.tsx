@@ -50,6 +50,7 @@ interface ProviderFormProps {
  */
 export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: ProviderFormProps) {
   const catalog = useFetch(() => api.catalog(), []);
+  const proxies = useFetch(() => api.proxies(), []);
 
   const priceIndex = useMemo(() => buildPriceIndex(catalog.data), [catalog.data]);
 
@@ -215,6 +216,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
   const [priority, setPriority] = useState(String(editing.priority));
   const [weight, setWeight] = useState(String(editing.weight));
   const [enabled, setEnabled] = useState(editing.enabled);
+  const [proxyId, setProxyId] = useState(editing.proxy_id ?? '');
   const [allowUnmatched, setAllowUnmatched] = useState(editing.allow_unmatched);
   const [maxConcurrency, setMaxConcurrency] = useState(String(editing.max_concurrency ?? 0));
   const [quirks, setQuirks] = useState<Record<string, string>>(editing.quirks ?? {});
@@ -250,8 +252,17 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
     return ids;
   }, [modelWires, isCustom, customValue, checked]);
 
-  if (catalog.error) return <ErrorBanner message={catalog.error} onRetry={catalog.refetch} />;
-  if (catalog.initialLoading || !vendor)
+  if (catalog.error || proxies.error)
+    return (
+      <ErrorBanner
+        message={catalog.error ?? proxies.error ?? 'Request failed.'}
+        onRetry={() => {
+          catalog.refetch();
+          proxies.refetch();
+        }}
+      />
+    );
+  if (catalog.initialLoading || proxies.initialLoading || !vendor)
     return (
       <div className={`card ${cards.card}`}>
         {Array.from({ length: 4 }).map((_, i) => (
@@ -336,6 +347,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
         priority: prio,
         weight: wt,
         enabled,
+        proxy_id: proxyId,
         allow_unmatched: allowUnmatched,
         max_concurrency: conc,
         quirks,
@@ -442,6 +454,28 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
       </div>
 
       <div className={styles.divider} />
+
+      <div className={cards.field}>
+        <label className={cards.label} htmlFor="s-proxy">
+          Connection route
+        </label>
+        <select
+          id="s-proxy"
+          className={`select ${styles.proxySelect}`}
+          value={proxyId}
+          onChange={(e) => setProxyId(e.target.value)}
+        >
+          <option value="">Direct</option>
+          {(proxies.data ?? []).map((proxy) => (
+            <option key={proxy.id} value={proxy.id}>
+              {proxy.name} ({proxy.type.toUpperCase()})
+            </option>
+          ))}
+        </select>
+        <span className={cards.hint}>
+          Direct bypasses configured proxies and process proxy environment variables.
+        </span>
+      </div>
 
       <div className={styles.grid3}>
         <div className={cards.field}>

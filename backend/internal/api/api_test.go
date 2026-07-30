@@ -121,6 +121,10 @@ func TestAuthRequiredOnAllEndpoints(t *testing.T) {
 		{"POST", "/api/users/x/revoke"},
 		{"GET", "/api/vendors"},
 		{"POST", "/api/vendors/openai/test"},
+		{"GET", "/api/proxies"},
+		{"POST", "/api/proxies"},
+		{"PATCH", "/api/proxies/x"},
+		{"DELETE", "/api/proxies/x"},
 		{"GET", "/api/settings"},
 		{"GET", "/api/pricing"},
 	}

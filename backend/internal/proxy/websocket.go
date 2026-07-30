@@ -17,6 +17,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -260,19 +261,20 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 // owns closing conn. A non-nil error means the conn was never usable.
 func (h *handler) dialWSUpstream(host string, useTLS bool, requestTarget string, r *http.Request, t router.Target) (net.Conn, *bufio.Reader, *http.Response, error) {
 	hostname := hostOnly(host)
-	dialer := &net.Dialer{Timeout: wsHandshakeTimeout}
+	dialCtx, cancel := context.WithTimeout(r.Context(), wsHandshakeTimeout)
+	defer cancel()
 
-	var (
-		conn net.Conn
-		err  error
-	)
-	if useTLS {
-		conn, err = tls.DialWithDialer(dialer, "tcp", host, &tls.Config{ServerName: hostname})
-	} else {
-		conn, err = dialer.Dial("tcp", host)
-	}
+	conn, err := h.outbound.DialContext(dialCtx, t.Vendor.Proxy, "tcp", host)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("dial upstream %q: %w", host, err)
+	}
+	if useTLS {
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: hostname})
+		if err := tlsConn.HandshakeContext(dialCtx); err != nil {
+			_ = conn.Close()
+			return nil, nil, nil, fmt.Errorf("TLS handshake with upstream %q: %w", host, err)
+		}
+		conn = tlsConn
 	}
 
 	// Bound dial+handshake; cleared once we have the response so the pipe is

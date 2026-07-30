@@ -698,6 +698,8 @@ export interface Provider {
   weight: number;
   enabled: boolean;
   catalog_id: string;
+  /** Stored outbound proxy id; empty means explicit direct access. */
+  proxy_id: string;
   /** Configured endpoints; each binds one wire to its full upstream URL + adapter. */
   endpoints: ProviderEndpoint[];
   /** Forward unmatched paths metered-zero instead of denying them. */
@@ -746,6 +748,8 @@ export type PatchProviderBody = Partial<{
   priority: number;
   weight: number;
   enabled: boolean;
+  /** Empty selects explicit direct access. */
+  proxy_id: string;
   allow_unmatched: boolean;
   /** Max in-flight requests to this provider's credential; 0 = unlimited. */
   max_concurrency: number;
@@ -755,6 +759,36 @@ export type PatchProviderBody = Partial<{
   models: ProviderModel[];
   endpoints: ProviderEndpoint[];
 }>;
+
+// --- Outbound proxies ---
+
+export type ProxyType = 'https' | 'socks5';
+
+export interface Proxy {
+  id: string;
+  name: string;
+  type: ProxyType;
+  host: string;
+  port: number;
+  username: string;
+  has_password: boolean;
+  provider_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateProxyBody {
+  name: string;
+  type: ProxyType;
+  host: string;
+  port: number;
+  username?: string;
+  password?: string;
+}
+
+export type PatchProxyBody = Partial<CreateProxyBody> & {
+  clear_password?: boolean;
+};
 
 export interface PatchServiceProviderRoutingBody {
   model: string;

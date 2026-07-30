@@ -45,7 +45,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -59,6 +58,7 @@ import (
 	"github.com/songguo/songguo/internal/concurrency"
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/meter"
+	"github.com/songguo/songguo/internal/outbound"
 	"github.com/songguo/songguo/internal/parse"
 	"github.com/songguo/songguo/internal/pricing"
 	"github.com/songguo/songguo/internal/router"
@@ -88,8 +88,9 @@ type Deps struct {
 	Router     *router.Router
 	Gate       *concurrency.Gate // per-provider in-flight limit; a nil Gate is unlimited
 	Logger     *slog.Logger
-	HTTPClient *http.Client     // optional; default constructed if nil
-	Now        func() time.Time // optional; defaults to time.Now (for tests)
+	HTTPClient *http.Client      // optional; default constructed if nil
+	Outbound   *outbound.Manager // optional; shared in production
+	Now        func() time.Time  // optional; defaults to time.Now (for tests)
 }
 
 // handler is the concrete http.Handler returned by NewHandler.
@@ -98,7 +99,7 @@ type handler struct {
 	store    *store.Store
 	router   *router.Router
 	logger   *slog.Logger
-	client   *http.Client
+	outbound *outbound.Manager
 	now      func() time.Time
 	gate     *concurrency.Gate
 	limiter  *rateLimiter
@@ -116,9 +117,9 @@ func NewHandler(d Deps) http.Handler {
 	if now == nil {
 		now = time.Now
 	}
-	client := d.HTTPClient
-	if client == nil {
-		client = defaultHTTPClient()
+	out := d.Outbound
+	if out == nil {
+		out = outbound.New(outbound.Options{DirectClient: d.HTTPClient})
 	}
 	gate := d.Gate
 	if gate == nil {
@@ -129,7 +130,7 @@ func NewHandler(d Deps) http.Handler {
 		store:    d.Store,
 		router:   d.Router,
 		logger:   logger,
-		client:   client,
+		outbound: out,
 		now:      now,
 		gate:     gate,
 		limiter:  newRateLimiter(now),
@@ -142,29 +143,6 @@ func NewHandler(d Deps) http.Handler {
 // It never blocks or fails the forward; see docs/arch-insights.md.
 func (h *handler) insights(e calls.Entry, title string) {
 	h.insight.submit(e, title)
-}
-
-// defaultHTTPClient returns a client tuned for proxying, including long-lived
-// streams: it sets short connect/TLS timeouts but a generous (1h) header
-// timeout for slow upstreams, and NO overall Client.Timeout, which would
-// truncate streaming responses. Per-request cancellation is honored through
-// the request context.
-func defaultHTTPClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{
-				Timeout:   10 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			ResponseHeaderTimeout: 1 * time.Hour,
-		},
-	}
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -329,7 +307,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := h.now()
-	resp, err := h.client.Do(upReq)
+	resp, err := h.outbound.Do(upReq, t.Vendor.Proxy)
 	headerLatency := h.now().Sub(start).Milliseconds()
 
 	// Transport error: we have no upstream response to forward, so surface the
@@ -579,7 +557,7 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 	sel := router.Selector{Session: attr.session}
 	switch {
 	case pin != "":
-		sel.Scope, sel.ProviderID = router.ScopeProvider, pin
+		sel.Scope, sel.ProviderID, sel.Model = router.ScopeProvider, pin, routingModel
 	case routingModel != "":
 		sel.Scope, sel.Model = router.ScopeModel, routingModel
 	default:

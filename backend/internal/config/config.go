@@ -24,6 +24,23 @@ type Credential struct {
 	APIKey string `yaml:"api_key"`
 }
 
+const (
+	ProxyHTTPS  = "https"
+	ProxySOCKS5 = "socks5"
+)
+
+// Proxy is a resolved outbound route copied into each vendor in the immutable
+// snapshot. A nil *Proxy on Vendor means explicit direct access.
+type Proxy struct {
+	ID       string `yaml:"id"`
+	Name     string `yaml:"name"`
+	Type     string `yaml:"type"`
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
 // Price is the true per-model cost used for metering and cheapest-route.
 // CachedInput is the rate for cache-hit input tokens; non-positive means
 // "charge the full Input rate" (no cache discount configured).
@@ -163,6 +180,7 @@ type Vendor struct {
 	// the service-specific policy.
 	ModelRoutes map[string]ModelRoute `yaml:"model_routes,omitempty"`
 	Credential  Credential            `yaml:"credential"`
+	Proxy       *Proxy                `yaml:"proxy,omitempty"`
 	Prices      map[string]Price      `yaml:"prices"`
 	// Wires is the allowlist of wire names (see internal/wire) the proxy may
 	// serve for this vendor; paths matching none are denied unless
@@ -277,10 +295,31 @@ func validate(cfg *Config) error {
 		if v.Credential.APIKey == "" {
 			problems = append(problems, fmt.Errorf("%s: credential api_key must be non-empty", who))
 		}
+		problems = append(problems, validateProxy(who, v.Proxy)...)
 		problems = append(problems, validatePrices(who, v.Prices)...)
 	}
 
 	return errors.Join(problems...)
+}
+
+func validateProxy(who string, p *Proxy) []error {
+	if p == nil {
+		return nil
+	}
+	var problems []error
+	if p.ID == "" {
+		problems = append(problems, fmt.Errorf("%s: proxy id must be non-empty", who))
+	}
+	if p.Type != ProxyHTTPS && p.Type != ProxySOCKS5 {
+		problems = append(problems, fmt.Errorf("%s: proxy type %q must be https or socks5", who, p.Type))
+	}
+	if p.Host == "" {
+		problems = append(problems, fmt.Errorf("%s: proxy host must be non-empty", who))
+	}
+	if p.Port < 1 || p.Port > 65535 {
+		problems = append(problems, fmt.Errorf("%s: proxy port must be between 1 and 65535", who))
+	}
+	return problems
 }
 
 // validateOrigin checks a vendor's scheme://host origin, used for passthrough

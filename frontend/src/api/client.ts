@@ -8,6 +8,7 @@ import type {
   Catalog,
   ContextComposition,
   CreateProviderBody,
+  CreateProxyBody,
   CreateUserBody,
   ErrorBreakdown,
   ErrorCodesBreakdown,
@@ -15,9 +16,11 @@ import type {
   Me,
   Overview,
   PatchProviderBody,
+  PatchProxyBody,
   PatchServiceProviderRoutingBody,
   PatchUserBody,
   PricingRow,
+  Proxy,
   Provider,
   Service,
   SessionContext,
@@ -293,6 +296,22 @@ export const api = {
     request<VendorTestResult>(`/providers/${encodeURIComponent(id)}/test`, {
       method: 'POST',
     }),
+
+  // --- Outbound proxies ---
+
+  proxies: () => request<Proxy[]>('/proxies'),
+
+  createProxy: (body: CreateProxyBody) =>
+    request<Proxy>('/proxies', { method: 'POST', body: JSON.stringify(body) }),
+
+  patchProxy: (id: string, body: PatchProxyBody) =>
+    request<Proxy>(`/proxies/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  deleteProxy: (id: string) =>
+    request<void>(`/proxies/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   catalog: () => request<Catalog>('/catalog'),
 

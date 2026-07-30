@@ -64,6 +64,12 @@ Every request resolves the same way — there are **no addressing "modes."** Onc
 
 Only the top candidate is forwarded to: songguo makes **one attempt** per request and surfaces the vendor's response verbatim. There is no per-call retry or failover — the remaining candidates are a ranked pool, not a replay list.
 
+After provider selection, that provider's connection route is applied. The
+route is either **Direct** or one reusable HTTPS/SOCKS5 proxy configured in
+Settings. Direct is explicit and does not inherit `HTTP_PROXY`, `HTTPS_PROXY`,
+or `ALL_PROXY` from the process environment. The same route is used for normal
+HTTP requests, WebSocket handshakes, and provider connectivity probes.
+
 Ranking is **health → sticky session → priority → weight**.
 
 A session pins to the provider that served its previous turn, so an agent conversation keeps one vendor and its prompt cache stays warm — on a large context that is the most expensive routing decision songguo makes. Health sorts above the pin, so it is only ever consulted among vendors of equal health and can never strand a session on a broken provider, and a client that sends no session header simply gets the ordinary ordering. Within a priority tier, selection is a **weighted random draw** rather than a rotation: correct in expectation, stateless, and approximate over short bursts. The draw is taken once per **credential**, so a provider split across several protocol endpoints still gets a single share of traffic rather than one per endpoint.
@@ -233,4 +239,3 @@ credential headers are stripped before the vendor key is written upstream.
 - **Full per-wire endpoints — done.** Provider config stores an explicit full upstream URL per wire (DB column `provider_endpoints.endpoint`), used as-is — no base+suffix join. `{model}` in the path is substituted with the request's model, and an endpoint query (e.g. Azure's `?api-version=…`) is merged with any inbound query, so non-uniform vendors like **Azure OpenAI** (`/openai/deployments/{model}/chat/completions?api-version=…`) work. Model-less / WebSocket forwarding uses the vendor's `origin` (scheme://host) with the inbound native path. Runtime vendors group by `(origin, adapter)`. A one-time idempotent migration renames `base_url`→`endpoint` and rewrites legacy bases to full URLs.
 - **Unified addressing — done.** One resolution path: match the wire by suffix, then select the provider `header → model → default`. `X-Songguo-Provider` (provider id) is a control header, stripped before forwarding. The default reuses provider priority — no separate flag. The `/x/<provider>/` passthrough is **removed**; the proxy is mounted at the native prefixes `/v1/` and `/api/v3/` (the latter is more specific than the admin `/api/`, so ServeMux routes it to the proxy). WebSocket upgrades carry the pin in the same header. `router.Candidates`/`CandidatesForProvider`/`AllCandidates` back the three selectors.
 - **Still open:** `prd.md` §4.1 still models `Channel.base_url`; "Channel" (PRD) ≈ "provider"/"vendor" (config) should be reconciled when the PRD is next revised. A new native top-level path prefix (beyond `/v1/`, `/api/v3/`) would need an added proxy mount in `server.go`.
-

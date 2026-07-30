@@ -27,6 +27,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/songguo/songguo/internal/config"
+	"github.com/songguo/songguo/internal/outbound"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/store"
 )
@@ -53,9 +55,10 @@ const (
 )
 
 type wsTestHandler struct {
-	store  *store.Store
-	router *router.Router
-	logger *slog.Logger
+	store    *store.Store
+	router   *router.Router
+	logger   *slog.Logger
+	outbound *outbound.Manager
 }
 
 // NewWSTestHandler builds the browser-facing streaming-ASR test endpoint.
@@ -64,7 +67,11 @@ func NewWSTestHandler(d Deps) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &wsTestHandler{store: d.Store, router: d.Router, logger: logger}
+	out := d.Outbound
+	if out == nil {
+		out = outbound.New(outbound.Options{DirectClient: d.HTTPClient})
+	}
+	return &wsTestHandler{store: d.Store, router: d.Router, logger: logger, outbound: out}
 }
 
 func (h *wsTestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -128,14 +135,14 @@ func (h *wsTestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer browser.CloseNow()
 
-	if err := h.driveASR(r.Context(), browser, upstreamURL, t.Credential.APIKey, resourceID); err != nil {
+	if err := h.driveASR(r.Context(), browser, upstreamURL, t.Credential.APIKey, resourceID, t.Vendor.Proxy); err != nil {
 		h.logger.Warn("ws test asr session failed", "err", err, "vendor", t.Vendor.Name)
 	}
 }
 
 // driveASR opens a clean native WS to the vendor, sends the config frame, then
 // bridges browser PCM up (as audio frames) and vendor responses down (as JSON).
-func (h *wsTestHandler) driveASR(ctx context.Context, browser *websocket.Conn, upstreamURL, apiKey, resourceID string) error {
+func (h *wsTestHandler) driveASR(ctx context.Context, browser *websocket.Conn, upstreamURL, apiKey, resourceID string, outboundProxy *config.Proxy) error {
 	hdr := http.Header{}
 	hdr.Set("X-Api-Key", apiKey)
 	hdr.Set("X-Api-Resource-Id", resourceID)
@@ -145,6 +152,7 @@ func (h *wsTestHandler) driveASR(ctx context.Context, browser *websocket.Conn, u
 
 	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	up, _, err := websocket.Dial(dialCtx, upstreamURL, &websocket.DialOptions{
+		HTTPClient:      h.outbound.Client(outboundProxy),
 		HTTPHeader:      hdr,
 		CompressionMode: websocket.CompressionDisabled,
 	})

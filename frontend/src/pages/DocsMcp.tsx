@@ -12,7 +12,8 @@ const READ_TOOLS: ReadonlyArray<[string, string]> = [
   ['list_calls', 'Browse individual gateway calls (the per-request ledger), newest first, with filters by user, model, vendor, status and time. Returns entries plus total count.'],
   ['get_call_trace', 'Return the captured request/response payload for one call id (only when capture is enabled for that call).'],
   ['list_users', 'List all gateway users (consumer keys) with budget, scope, RPM limit, capture setting, lifetime spend and active state. Plaintext keys are never returned.'],
-  ['list_providers', 'List all configured upstream providers with their wire endpoints, models/prices, quirks and health stats. API keys are masked.'],
+  ['list_providers', 'List all configured upstream providers with their connection route, wire endpoints, models/prices, quirks and health stats. API keys are masked.'],
+  ['list_proxies', 'List reusable HTTPS and SOCKS5 outbound proxies, whether credentials are stored, and how many providers use each one. Passwords are never returned.'],
   ['list_services', 'List the auto-derived, model-centric services: each unique model name and the providers behind it, with aggregate call stats.'],
   ['list_pricing', 'List every per-provider model price (input, output, unit) currently configured.'],
   ['get_settings', 'Return non-secret runtime settings: listen address, db path, whether the admin API is protected, and version.'],
@@ -22,15 +23,18 @@ const WRITE_TOOLS: ReadonlyArray<[string, string]> = [
   ['create_user', 'Create a gateway user (consumer key). Returns the plaintext key once. Fields: name (required), budget, scope, rpm, capture.'],
   ['update_user', 'Update a user’s mutable fields via a patch object (name, budget, scope, rpm, capture).'],
   ['revoke_user', 'Revoke a user by id, immediately disabling its key.'],
+  ['create_proxy', 'Create a reusable HTTPS or SOCKS5 outbound proxy with optional username/password authentication.'],
+  ['update_proxy', 'Update a proxy. Omit password to keep it, replace it, or set clear_password to remove it.'],
+  ['delete_proxy', 'Delete an unassigned proxy; providers using it must be moved first.'],
   ['create_provider', 'Create an upstream provider: name, vendor, api_key, priority, weight, enabled, quirks, models and wire endpoints.'],
-  ['update_provider', 'Update a provider’s mutable fields. Supplying models or endpoints replaces those lists wholesale.'],
+  ['update_provider', 'Update a provider’s mutable fields, including proxy_id (empty means Direct). Supplying models or endpoints replaces those lists wholesale.'],
   ['delete_provider', 'Delete a provider by id; services it backed are re-derived without it.'],
   ['test_provider', 'Probe a provider’s host for reachability using its API key. Returns reachability, status and latency.'],
 ];
 
 export function DocsMcpPage() {
   const { settings } = useSettings();
-  const mcpUrl = `${window.location.origin}/mcp`;
+  const mcpUrl = `${window.location.origin}/admin/mcp`;
   const protectedApi = settings.admin_protected;
 
   const clientConfig = JSON.stringify(
@@ -102,7 +106,7 @@ export function DocsMcpPage() {
           <div className={styles.panelTitle}>Read tools</div>
           <div className={styles.panelDesc}>
             Always available. Read-only views over usage, the call ledger, users,
-            providers, services and settings.
+            providers, proxies, services and settings.
           </div>
           <ToolTable tools={READ_TOOLS} />
         </div>

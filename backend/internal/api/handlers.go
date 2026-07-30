@@ -1902,7 +1902,7 @@ func (a *api) handleTestVendor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := a.now()
-	resp, err := a.client.Do(req)
+	resp, err := a.outbound.Do(req, v.Proxy)
 	latency := a.now().Sub(start).Milliseconds()
 	if err != nil {
 		// DNS/connection/timeout: host did not answer.

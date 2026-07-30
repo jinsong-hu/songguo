@@ -48,9 +48,11 @@ served **without** auth — it describes shapes only and carries no secrets.
 | `GET /api/calls/{id}/trace` | Captured request/response payload for a call (when capture is enabled for that user). Covers gateway-denied calls too — an unmatched `404`, scope `403`, budget `402`, or rate-limit `429` saves the request plus the synthesized error body, so a rejected request is as inspectable as a forwarded one. (Upstream transport/build `502` failures record a row but no payload — there is no served response to pair.) |
 | `GET /api/users` · `POST /api/users` | List / create users (keys). Create returns the plaintext key once. |
 | `PATCH /api/users/{id}` · `POST /api/users/{id}/revoke` | Update / revoke a user. |
-| `GET /api/providers` · `POST /api/providers` | List / create upstream providers. |
-| `GET /api/providers/{id}` · `PATCH` · `DELETE` | Get / update / delete a provider. |
+| `GET /api/providers` · `POST /api/providers` | List / create upstream providers. New providers use direct access. |
+| `GET /api/providers/{id}` · `PATCH` · `DELETE` | Get / update / delete a provider. `PATCH proxy_id` selects a stored proxy; `""` means Direct. |
 | `POST /api/providers/{id}/test` | Probe a provider host for reachability. |
+| `GET /api/proxies` · `POST /api/proxies` | List / create reusable HTTPS or SOCKS5 outbound proxies. Passwords are never returned. |
+| `PATCH /api/proxies/{id}` · `DELETE` | Update / delete a proxy. Assigned proxies cannot be deleted until their providers are set to Direct or another proxy. |
 | `GET /api/services` | Auto-derived, model-centric services (each model → the providers behind it). |
 | `PATCH /api/services/routing/{provider_id}` | Override priority/weight or enable/disable one provider within a model service. |
 | `GET /api/vendors` · `POST /api/vendors/{name}/test` | List snapshot vendors / probe one. |
@@ -91,6 +93,7 @@ never drifts from the dashboard.
 | `get_call_trace` | one captured payload (args: `id`) |
 | `list_users` | users + lifetime spend |
 | `list_providers` | configured providers (keys masked) |
+| `list_proxies` | reusable HTTPS/SOCKS5 routes (passwords omitted) |
 | `list_services` | auto-derived model → providers |
 | `list_pricing` | per-provider model prices |
 | `get_settings` | non-secret runtime settings |
@@ -99,8 +102,9 @@ never drifts from the dashboard.
 because the admin key already controls budgets and upstream credentials and an
 agent should not get write access implicitly:
 
-`create_user`, `update_user`, `revoke_user`, `create_provider`,
-`update_provider`, `delete_provider`, `test_provider`.
+`create_user`, `update_user`, `revoke_user`, `create_proxy`, `update_proxy`,
+`delete_proxy`, `create_provider`, `update_provider`, `delete_provider`,
+`test_provider`.
 
 ```
 # enable agent writes (default: off)
@@ -109,7 +113,8 @@ SONGGUO_MCP_WRITE=1 songguo
 
 For `create_provider` / `update_provider`, each endpoint is `{ wire, endpoint,
 adapter }` — a wire bound to its **full upstream URL** and auth scheme (no
-provider-level base URL; see `registry.md`).
+provider-level base URL; see `registry.md`). `update_provider.patch.proxy_id`
+selects a stored proxy; use an empty string for explicit direct access.
 
 ## Services MCP
 

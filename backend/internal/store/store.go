@@ -205,6 +205,20 @@ func (s *Store) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_last_ts ON sessions(last_ts)`,
 
+		// Reusable outbound routes. Credentials are stored plaintext because
+		// they must be replayed to the proxy, but are masked at every API edge.
+		`CREATE TABLE IF NOT EXISTS proxies (
+			id         TEXT PRIMARY KEY,
+			name       TEXT NOT NULL UNIQUE,
+			type       TEXT NOT NULL,
+			host       TEXT NOT NULL,
+			port       INTEGER NOT NULL,
+			username   TEXT NOT NULL DEFAULT '',
+			password   TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+
 		// Provider config lives in SQLite (managed from the dashboard),
 		// the source of truth for routing. A provider
 		// is one configured upstream: an adapter + base_url + a single API key +
@@ -347,6 +361,9 @@ func (s *Store) migrate() error {
 		{"providers", "max_concurrency", "INTEGER NOT NULL DEFAULT 0"},
 		{"providers", "quirks", "TEXT NOT NULL DEFAULT '{}'"},
 		{"providers", "api_key", "TEXT NOT NULL DEFAULT ''"},
+		// NULL is an explicit direct connection. RESTRICT prevents deleting a
+		// route and silently sending formerly-proxied traffic direct.
+		{"providers", "proxy_id", "TEXT REFERENCES proxies(id) ON DELETE RESTRICT"},
 		{"provider_models", "cached_input", "REAL NOT NULL DEFAULT 0"},
 		{"provider_models", "price_override", "INTEGER NOT NULL DEFAULT 0"},
 		// Per-service routing. Enabled defaults on; NULL priority/weight inherit

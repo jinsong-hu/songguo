@@ -23,6 +23,9 @@ type Provider struct {
 	Enabled   bool
 	CatalogID string // provenance: which catalog preset this came from, if any
 	APIKey    string
+	// ProxyID selects a stored outbound proxy. Empty means explicit direct
+	// access; it never falls back to process HTTP_PROXY/HTTPS_PROXY variables.
+	ProxyID string
 	// AllowUnmatched forwards requests whose path matches no enabled wire
 	// (metered zero, confidence unknown) instead of denying them.
 	AllowUnmatched bool
@@ -82,6 +85,7 @@ type NewProvider struct {
 	MaxConcurrency int
 	Quirks         map[string]string
 	APIKey         string
+	ProxyID        string
 	Models         []ProviderModel
 	Endpoints      []ProviderEndpoint
 }
@@ -97,9 +101,12 @@ type ProviderUpdate struct {
 	AllowUnmatched *bool
 	MaxConcurrency *int
 	APIKey         *string
-	Quirks         *map[string]string
-	Models         []ProviderModel
-	Endpoints      []ProviderEndpoint
+	// ProxyID points to a proxy id; an empty value clears the assignment and
+	// restores direct access.
+	ProxyID   *string
+	Quirks    *map[string]string
+	Models    []ProviderModel
+	Endpoints []ProviderEndpoint
 }
 
 // CountProviders returns the number of configured providers.
@@ -114,7 +121,7 @@ func (s *Store) CountProviders() (int, error) {
 // ListProviders returns all providers, newest first, each with its models and
 // endpoints assembled. It uses bulk queries rather than per-provider follow-ups.
 func (s *Store) ListProviders() ([]Provider, error) {
-	rows, err := s.db.Query(`SELECT id, name, vendor, priority, weight, enabled, catalog_id, api_key, allow_unmatched, max_concurrency, quirks, created_at, updated_at
+	rows, err := s.db.Query(`SELECT id, name, vendor, priority, weight, enabled, catalog_id, api_key, proxy_id, allow_unmatched, max_concurrency, quirks, created_at, updated_at
 		FROM providers ORDER BY created_at DESC, id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list providers: %w", err)
@@ -197,7 +204,7 @@ func (s *Store) ListProviders() ([]Provider, error) {
 
 // GetProvider returns one provider with its models and endpoints.
 func (s *Store) GetProvider(id string) (Provider, error) {
-	row := s.db.QueryRow(`SELECT id, name, vendor, priority, weight, enabled, catalog_id, api_key, allow_unmatched, max_concurrency, quirks, created_at, updated_at
+	row := s.db.QueryRow(`SELECT id, name, vendor, priority, weight, enabled, catalog_id, api_key, proxy_id, allow_unmatched, max_concurrency, quirks, created_at, updated_at
 		FROM providers WHERE id = ?`, id)
 	pvd, err := scanProvider(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -261,16 +268,20 @@ func scanProvider(sc interface{ Scan(...any) error }) (Provider, error) {
 		enabled        int64
 		allowUnmatched int64
 		quirks         string
+		proxyID        sql.NullString
 		createdAt      int64
 		updatedAt      int64
 	)
 	if err := sc.Scan(&pvd.ID, &pvd.Name, &pvd.Vendor,
-		&pvd.Priority, &pvd.Weight, &enabled, &pvd.CatalogID, &pvd.APIKey, &allowUnmatched,
+		&pvd.Priority, &pvd.Weight, &enabled, &pvd.CatalogID, &pvd.APIKey, &proxyID, &allowUnmatched,
 		&pvd.MaxConcurrency, &quirks, &createdAt, &updatedAt); err != nil {
 		return Provider{}, err
 	}
 	pvd.Enabled = enabled != 0
 	pvd.AllowUnmatched = allowUnmatched != 0
+	if proxyID.Valid {
+		pvd.ProxyID = proxyID.String
+	}
 	if quirks != "" {
 		if err := json.Unmarshal([]byte(quirks), &pvd.Quirks); err != nil {
 			return Provider{}, fmt.Errorf("decode quirks: %w", err)
@@ -306,10 +317,10 @@ func (s *Store) CreateProvider(np NewProvider) (Provider, error) {
 
 	// base_url and adapter are vestigial provider columns (NOT NULL); base_url
 	// and auth now live per-endpoint. Insert harmless placeholders.
-	_, err = tx.Exec(`INSERT INTO providers (id, name, vendor, base_url, priority, weight, enabled, catalog_id, api_key, allow_unmatched, max_concurrency, quirks, created_at, updated_at)
-		VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err = tx.Exec(`INSERT INTO providers (id, name, vendor, base_url, priority, weight, enabled, catalog_id, api_key, proxy_id, allow_unmatched, max_concurrency, quirks, created_at, updated_at)
+		VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, np.Name, np.Vendor, np.Priority, weight, boolToInt(np.Enabled), np.CatalogID, np.APIKey,
-		boolToInt(np.AllowUnmatched), maxZeroInt(np.MaxConcurrency), quirks, now.Unix(), now.Unix())
+		nullableID(np.ProxyID), boolToInt(np.AllowUnmatched), maxZeroInt(np.MaxConcurrency), quirks, now.Unix(), now.Unix())
 	if err != nil {
 		return Provider{}, fmt.Errorf("store: insert provider: %w", err)
 	}
@@ -377,6 +388,10 @@ func (s *Store) UpdateProvider(id string, upd ProviderUpdate) (Provider, error) 
 		sets = append(sets, "api_key = ?")
 		args = append(args, *upd.APIKey)
 	}
+	if upd.ProxyID != nil {
+		sets = append(sets, "proxy_id = ?")
+		args = append(args, nullableID(*upd.ProxyID))
+	}
 	if upd.Quirks != nil {
 		quirks, err := encodeQuirks(*upd.Quirks)
 		if err != nil {
@@ -431,6 +446,13 @@ func (s *Store) UpdateProvider(id string, upd ProviderUpdate) (Provider, error) 
 		return Provider{}, fmt.Errorf("store: commit: %w", err)
 	}
 	return s.GetProvider(id)
+}
+
+func nullableID(id string) any {
+	if id == "" {
+		return nil
+	}
+	return id
 }
 
 // DeleteProvider removes a provider; its models and wires cascade.

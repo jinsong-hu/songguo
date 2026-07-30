@@ -9,6 +9,18 @@
   padding: 18px;
 }
 
+.panelHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.panelHead .panelDesc {
+  margin-bottom: 0;
+}
+
 .panelTitle {
   font-size: 14px;
   font-weight: 600;
@@ -148,4 +160,139 @@
 .tableScroll {
   overflow-x: auto;
   margin-top: 4px;
+}
+
+.proxySkeletons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.proxyEmpty {
+  padding: 8px 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.proxyActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.proxyEditor {
+  margin: 0 0 18px;
+  padding: 16px 0 18px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.proxyFormGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 0.6fr);
+  gap: 12px;
+}
+
+.proxyField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.proxyHost {
+  min-width: 0;
+}
+
+.proxyLabel {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.protocolSwitch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+}
+
+.protocolSwitch button {
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.protocolSwitch .protocolActive {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.passwordField {
+  position: relative;
+  display: block;
+}
+
+.passwordField input {
+  width: 100%;
+  padding-right: 36px;
+}
+
+.passwordToggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.clearAuth {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12.5px;
+}
+
+.proxyError {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  background: var(--danger-weak);
+  color: var(--danger);
+  font-size: 12.5px;
+}
+
+.proxyFormActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+@media (max-width: 640px) {
+  .panelHead {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .panelHead > button {
+    align-self: flex-start;
+  }
+
+  .proxyFormGrid {
+    grid-template-columns: 1fr;
+  }
 }

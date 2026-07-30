@@ -57,7 +57,7 @@ ServeHTTP
   ├─ 4. budget check    (402 denial recorded + captured)              │
   ├─ 5. rate limit      (429 denial recorded + captured)              │
   ├─ 6. forward one attempt                                           │
-  │       buildUpstreamRequest → client.Do → stream/copy response    │
+  │       buildUpstreamRequest → outbound.Do(route) → stream response │
   │       sniff usage in flight (wire extractor, read-only)          │
   │                                                                    │
   ├─ ── update-at-end: UPDATE calls row (status, usage, cost, ...) ───┘
@@ -123,6 +123,27 @@ The client is served **before** phase 2 touches the ledger, and phase 2 happens
 before the insights fork. Metering, pricing, ledger finalization, and the
 insights hand-off are all strictly after the client already has its bytes. A
 slow or failing write never delays or corrupts the response.
+
+## Outbound connection routes
+
+Each provider stores either no `proxy_id` (explicit **Direct**) or the id of one
+reusable HTTPS/SOCKS5 proxy. `configsvc` resolves that reference while building
+the immutable snapshot, so the hot path receives a complete route and never
+queries SQLite while forwarding.
+
+`internal/outbound` owns every provider-facing connection:
+
+- Direct uses a transport with no proxy callback, so process-level
+  `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` variables are ignored.
+- HTTPS proxies use TLS to the proxy and CONNECT for tunneled destinations,
+  with optional Basic authentication.
+- SOCKS5 proxies support optional username/password authentication.
+- HTTP forwarding, transparent WebSockets, browser WebSocket tests, and
+  provider connectivity probes all use the same route.
+
+There is no silent fallback to Direct when a configured proxy fails. The single
+attempt fails as an upstream transport error, preserving the gateway's routing
+and observability semantics.
 
 ## `raw` capture
 
