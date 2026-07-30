@@ -15,6 +15,7 @@ import type {
   Me,
   Overview,
   PatchProviderBody,
+  PatchServiceProviderRoutingBody,
   PatchUserBody,
   PricingRow,
   Provider,
@@ -265,6 +266,12 @@ export const api = {
   // --- Services (auto-derived, model-centric) ---
 
   services: () => request<Service[]>('/services'),
+
+  patchServiceProviderRouting: (providerId: string, body: PatchServiceProviderRoutingBody) =>
+    request<void>(`/services/routing/${encodeURIComponent(providerId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
 
   // --- Providers (SQLite-backed upstream config) ---
 

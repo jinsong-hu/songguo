@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { ArrowLeft, Layers } from 'lucide-react';
 import { api } from '../api/client';
@@ -8,10 +8,16 @@ import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
 import { Playground } from '../components/Playground';
+import {
+  RoutingConfigCard,
+  type RoutingConfigItem,
+} from '../components/RoutingConfigCard';
 import { Skeleton } from '../components/Skeleton';
+import { useToast } from '../components/Toast';
 import { useFetch } from '../lib/useFetch';
+import { useSession } from '../lib/sessionContext';
 import { contextLabel, indexCatalog, MODALITY_LABEL, type CatalogInfo } from '../lib/catalogIndex';
-import { ModelIcon, modelMeta } from '../lib/modelBrand';
+import { BrandIcon, ModelIcon, modelMeta, providerBrand } from '../lib/modelBrand';
 import styles from './ServiceDetail.module.css';
 
 export function ServiceDetailPage() {
@@ -19,6 +25,7 @@ export function ServiceDetailPage() {
   const { data, error, initialLoading, refetch } = useFetch(() => api.services(), []);
   const { data: catalog } = useFetch(() => api.catalog(), []);
   const { data: providers } = useFetch(() => api.providers(), []);
+  const { me } = useSession();
 
   const service = data?.find((s) => s.model === model);
   const info = indexCatalog(catalog).get(model);
@@ -55,6 +62,14 @@ export function ServiceDetailPage() {
       ) : (
         <div className={styles.stack}>
           <Hero model={model} info={info} />
+          {me.role === 'admin' && (
+            <ServiceRouting
+              model={model}
+              service={service}
+              providers={providers ?? []}
+              onSaved={refetch}
+            />
+          )}
           <TestSection
             services={data ?? []}
             providers={providers ?? []}
@@ -64,6 +79,107 @@ export function ServiceDetailPage() {
         </div>
       )}
     </Page>
+  );
+}
+
+function ServiceRouting({
+  model,
+  service,
+  providers,
+  onSaved,
+}: {
+  model: string;
+  service: Service;
+  providers: Provider[];
+  onSaved: () => void;
+}) {
+  const toast = useToast();
+  const initial = useMemo(
+    () =>
+      service.providers.map((route): RoutingConfigItem => {
+        const provider = providers.find((item) => item.id === route.id);
+        const brand = providerBrand(
+          provider?.vendor ?? route.name,
+          provider?.models.map((item) => item.model) ?? [model],
+        );
+        const complete =
+          !!provider &&
+          provider.masked_key !== '' &&
+          provider.endpoints.length > 0 &&
+          provider.models.length > 0;
+        return {
+          id: route.id,
+          name: route.name,
+          icon: <BrandIcon brand={brand} label={route.name} size={17} />,
+          color: brand?.color ?? '#3f8f5b',
+          enabled: route.enabled,
+          available: route.provider_enabled && complete,
+          custom: route.priority_override !== null || route.weight_override !== null,
+          priority: String(route.priority),
+          weight: String(route.weight),
+          defaultPriority: route.default_priority,
+          defaultWeight: route.default_weight,
+          unavailableLabel: !route.provider_enabled ? 'Provider off' : 'Incomplete',
+        };
+      }),
+    [model, providers, service.providers],
+  );
+  const [items, setItems] = useState(initial);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => setItems(initial), [initial]);
+
+  const dirty = JSON.stringify(items) !== JSON.stringify(initial);
+  const change = (id: string, patch: Partial<RoutingConfigItem>) => {
+    setItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  };
+
+  const save = async () => {
+    for (const item of items) {
+      const priority = Number(item.priority);
+      const weight = Number(item.weight);
+      if (item.custom && (!Number.isInteger(priority) || priority < 0)) {
+        toast.error(`${item.name}: priority must be a whole number of 0 or greater.`);
+        return;
+      }
+      if (item.custom && (!Number.isInteger(weight) || weight < 1)) {
+        toast.error(`${item.name}: weight must be a whole number of 1 or greater.`);
+        return;
+      }
+    }
+
+    setSaving(true);
+    try {
+      for (const item of items) {
+        await api.patchServiceProviderRouting(item.id, {
+          model,
+          enabled: item.enabled,
+          ...(item.custom
+            ? { priority: Number(item.priority), weight: Number(item.weight) }
+            : { inherit_priority: true, inherit_weight: true }),
+        });
+      }
+      toast.success('Service routing updated.');
+      onSaved();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not update service routing.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <RoutingConfigCard
+      title="Routing"
+      hint="Lower priority numbers are strict failover tiers. Weight controls the share of new sessions within one priority; existing sessions stay pinned while their provider is healthy."
+      items={items}
+      saving={saving}
+      dirty={dirty}
+      editableEnabled
+      inherited
+      onChange={change}
+      onSave={save}
+    />
   );
 }
 

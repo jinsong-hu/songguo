@@ -210,6 +210,36 @@ vendors:
 	}
 }
 
+func TestProviderPinHonorsDisabledModelRoute(t *testing.T) {
+	snap, err := config.Build(config.Config{Vendors: []config.Vendor{
+		{
+			Name:         "pool",
+			Origin:       "https://pool.example",
+			ServedModels: []string{"m"},
+			ModelRoutes: map[string]config.ModelRoute{
+				"m": {Enabled: false, Priority: 0, Weight: 1},
+			},
+			Credential: config.Credential{ID: "p1", APIKey: "k"},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(staticSnap(snap))
+
+	if _, err := r.Select(Selector{
+		Scope: ScopeProvider, ProviderID: "p1", Model: "m",
+	}); !errors.Is(err, ErrNoVendor) {
+		t.Fatalf("disabled model pin error = %v, want ErrNoVendor", err)
+	}
+	// Explicit pins to undeclared models retain their historical behavior.
+	if got, err := r.Select(Selector{
+		Scope: ScopeProvider, ProviderID: "p1", Model: "other",
+	}); err != nil || len(got) != 1 {
+		t.Fatalf("undeclared model pin = %+v, %v", got, err)
+	}
+}
+
 func TestCandidatesForProviderMissing(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:

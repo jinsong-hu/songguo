@@ -287,9 +287,21 @@ func (r *Router) Select(sel Selector) ([]Target, error) {
 		vendors = snap.VendorsForModel(sel.Model)
 	case ScopeProvider:
 		for _, v := range snap.Vendors() {
-			if v.Credential.ID == sel.ProviderID {
-				vendors = append(vendors, v)
+			if v.Credential.ID != sel.ProviderID {
+				continue
 			}
+			// A provider pin still honors an explicit per-service disable when
+			// the request carries that model. An undeclared model remains
+			// pinnable for backward compatibility: only a configured
+			// model/provider relationship can be disabled here.
+			if route, ok := v.ModelRoutes[sel.Model]; ok && sel.Model != "" {
+				if !route.Enabled {
+					continue
+				}
+				v.Priority = route.Priority
+				v.Weight = route.Weight
+			}
+			vendors = append(vendors, v)
 		}
 	default:
 		vendors = snap.Vendors()

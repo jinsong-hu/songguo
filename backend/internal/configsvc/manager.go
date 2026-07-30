@@ -105,9 +105,27 @@ func vendorsFromProvider(pvd store.Provider, cat catalog.Catalog, logger *slog.L
 	// Pass 1: resolve each model's published price (catalog, or the stored row).
 	models := make([]string, 0, len(pvd.Models))
 	prices := make(map[string]config.Price, len(pvd.Models))
+	modelRoutes := make(map[string]config.ModelRoute, len(pvd.Models))
 	for _, m := range pvd.Models {
 		models = append(models, m.Model)
 		prices[m.Model] = effectivePrice(pvd.CatalogID, m, cat)
+		priority := pvd.Priority
+		if m.PriorityOverride != nil {
+			priority = *m.PriorityOverride
+		}
+		weight := pvd.Weight
+		if m.WeightOverride != nil {
+			weight = *m.WeightOverride
+		}
+		enabled := true
+		if m.RoutingConfigured {
+			enabled = m.RoutingEnabled
+		}
+		modelRoutes[m.Model] = config.ModelRoute{
+			Enabled:  enabled,
+			Priority: priority,
+			Weight:   weight,
+		}
 	}
 
 	// Pass 2: a model with no published rate would meter every call as $0, which
@@ -223,6 +241,7 @@ func vendorsFromProvider(pvd store.Provider, cat catalog.Catalog, logger *slog.L
 			ServedModels:   models,
 			Priority:       pvd.Priority,
 			Weight:         pvd.Weight,
+			ModelRoutes:    modelRoutes,
 			Credential:     config.Credential{ID: pvd.ID, APIKey: pvd.APIKey},
 			Prices:         prices,
 			Wires:          wires,

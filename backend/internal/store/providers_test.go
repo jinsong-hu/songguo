@@ -109,6 +109,59 @@ func TestProviderCRUDRoundTrip(t *testing.T) {
 	}
 }
 
+func TestProviderModelRoutingRoundTripAndPreserve(t *testing.T) {
+	s := openTestStore(t)
+	pvd, err := s.CreateProvider(NewProvider{
+		Name: "pool", Enabled: true, Priority: 1, Weight: 2, APIKey: "sk-a",
+		Models: []ProviderModel{{Model: "m", Input: 1, Output: 2}},
+		Endpoints: []ProviderEndpoint{{
+			Wire: "openai/chat", Endpoint: "https://example.com/v1/chat/completions",
+			Adapter: "openai-compatible",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+
+	disabled := false
+	priority, weight := 4, 9
+	if err := s.UpdateProviderModelRouting(
+		pvd.ID, "m", &disabled, &priority, true, &weight, true,
+	); err != nil {
+		t.Fatalf("UpdateProviderModelRouting: %v", err)
+	}
+	got, err := s.GetProvider(pvd.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := got.Models[0]
+	if route.RoutingEnabled || route.PriorityOverride == nil || *route.PriorityOverride != 4 ||
+		route.WeightOverride == nil || *route.WeightOverride != 9 {
+		t.Fatalf("routing = %+v", route)
+	}
+
+	// Replacing model pricing through the provider editor preserves the route.
+	got, err = s.UpdateProvider(pvd.ID, ProviderUpdate{
+		Models: []ProviderModel{{Model: "m", Input: 3, Output: 6}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateProvider: %v", err)
+	}
+	route = got.Models[0]
+	if route.RoutingEnabled || route.PriorityOverride == nil || *route.PriorityOverride != 4 ||
+		route.WeightOverride == nil || *route.WeightOverride != 9 {
+		t.Fatalf("routing after model replace = %+v", route)
+	}
+
+	if err := s.UpdateProviderModelRouting(pvd.ID, "m", nil, nil, true, nil, true); err != nil {
+		t.Fatalf("clear routing overrides: %v", err)
+	}
+	got, _ = s.GetProvider(pvd.ID)
+	if got.Models[0].PriorityOverride != nil || got.Models[0].WeightOverride != nil {
+		t.Fatalf("overrides not cleared: %+v", got.Models[0])
+	}
+}
+
 // TestEndpointBackfillOnMigration simulates a database that predates the
 // provider_endpoints table: a provider with the legacy per-provider base_url +
 // adapter columns and provider_wires rows. When migrate() creates

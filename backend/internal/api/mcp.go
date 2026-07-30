@@ -248,7 +248,7 @@ type servicesOut struct {
 }
 
 func (a *api) mcpListServices(_ context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, servicesOut, error) {
-	v, err := a.servicesData()
+	v, err := a.servicesData(true)
 	if err != nil {
 		return nil, servicesOut{}, err
 	}

@@ -60,6 +60,14 @@ type ProviderModel struct {
 	// override. When false, catalog-backed providers can resolve pricing from
 	// the current catalog while this row only declares the served model.
 	PriceOverride bool
+	// RoutingEnabled controls whether this provider participates in routing for
+	// this model. RoutingConfigured distinguishes loaded rows from older callers
+	// constructing ProviderModel values directly; the latter inherit enabled.
+	RoutingEnabled    bool
+	RoutingConfigured bool
+	// Nil overrides inherit the provider-level priority/weight defaults.
+	PriorityOverride *int
+	WeightOverride   *int
 }
 
 // NewProvider describes a provider to create. APIKey carries the plaintext key.
@@ -130,7 +138,9 @@ func (s *Store) ListProviders() ([]Provider, error) {
 		return nil, nil
 	}
 
-	modelRows, err := s.db.Query(`SELECT provider_id, model, input, output, cached_input, unit, price_override FROM provider_models ORDER BY model`)
+	modelRows, err := s.db.Query(`SELECT provider_id, model, input, output, cached_input, unit, price_override,
+		routing_enabled, priority_override, weight_override
+		FROM provider_models ORDER BY model`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list models: %w", err)
 	}
@@ -140,11 +150,19 @@ func (s *Store) ListProviders() ([]Provider, error) {
 			m   ProviderModel
 			pid string
 		)
-		var priceOverride int64
-		if err := modelRows.Scan(&pid, &m.Model, &m.Input, &m.Output, &m.CachedInput, &m.Unit, &priceOverride); err != nil {
+		var priceOverride, routingEnabled int64
+		var priorityOverride, weightOverride sql.NullInt64
+		if err := modelRows.Scan(
+			&pid, &m.Model, &m.Input, &m.Output, &m.CachedInput, &m.Unit, &priceOverride,
+			&routingEnabled, &priorityOverride, &weightOverride,
+		); err != nil {
 			return nil, fmt.Errorf("store: scan model: %w", err)
 		}
 		m.PriceOverride = priceOverride != 0
+		m.RoutingEnabled = routingEnabled != 0
+		m.RoutingConfigured = true
+		m.PriorityOverride = nullInt(priorityOverride)
+		m.WeightOverride = nullInt(weightOverride)
 		if i, ok := index[pid]; ok {
 			pvds[i].Models = append(pvds[i].Models, m)
 		}
@@ -189,18 +207,28 @@ func (s *Store) GetProvider(id string) (Provider, error) {
 		return Provider{}, fmt.Errorf("store: get provider: %w", err)
 	}
 
-	modelRows, err := s.db.Query(`SELECT model, input, output, cached_input, unit, price_override FROM provider_models WHERE provider_id = ? ORDER BY model`, id)
+	modelRows, err := s.db.Query(`SELECT model, input, output, cached_input, unit, price_override,
+		routing_enabled, priority_override, weight_override
+		FROM provider_models WHERE provider_id = ? ORDER BY model`, id)
 	if err != nil {
 		return Provider{}, fmt.Errorf("store: get models: %w", err)
 	}
 	defer modelRows.Close()
 	for modelRows.Next() {
 		var m ProviderModel
-		var priceOverride int64
-		if err := modelRows.Scan(&m.Model, &m.Input, &m.Output, &m.CachedInput, &m.Unit, &priceOverride); err != nil {
+		var priceOverride, routingEnabled int64
+		var priorityOverride, weightOverride sql.NullInt64
+		if err := modelRows.Scan(
+			&m.Model, &m.Input, &m.Output, &m.CachedInput, &m.Unit, &priceOverride,
+			&routingEnabled, &priorityOverride, &weightOverride,
+		); err != nil {
 			return Provider{}, fmt.Errorf("store: scan model: %w", err)
 		}
 		m.PriceOverride = priceOverride != 0
+		m.RoutingEnabled = routingEnabled != 0
+		m.RoutingConfigured = true
+		m.PriorityOverride = nullInt(priorityOverride)
+		m.WeightOverride = nullInt(weightOverride)
 		pvd.Models = append(pvd.Models, m)
 	}
 	if err := modelRows.Err(); err != nil {
@@ -378,10 +406,14 @@ func (s *Store) UpdateProvider(id string, upd ProviderUpdate) (Provider, error) 
 	}
 
 	if upd.Models != nil {
+		routes, err := loadModelRouting(tx, id)
+		if err != nil {
+			return Provider{}, err
+		}
 		if _, err := tx.Exec(`DELETE FROM provider_models WHERE provider_id = ?`, id); err != nil {
 			return Provider{}, fmt.Errorf("store: clear models: %w", err)
 		}
-		if err := insertModels(tx, id, upd.Models); err != nil {
+		if err := insertModelsWithRouting(tx, id, upd.Models, routes); err != nil {
 			return Provider{}, err
 		}
 	}
@@ -415,6 +447,47 @@ func (s *Store) DeleteProvider(id string) error {
 
 // insertModels writes a provider's model rows within a transaction.
 func insertModels(tx *sql.Tx, providerID string, models []ProviderModel) error {
+	return insertModelsWithRouting(tx, providerID, models, nil)
+}
+
+type modelRouting struct {
+	enabled          bool
+	priorityOverride *int
+	weightOverride   *int
+}
+
+// loadModelRouting captures service-specific policy before a provider form
+// replaces its model rows, so editing prices or endpoints cannot silently reset
+// routing overrides for models that remain selected.
+func loadModelRouting(tx *sql.Tx, providerID string) (map[string]modelRouting, error) {
+	rows, err := tx.Query(`SELECT model, routing_enabled, priority_override, weight_override
+		FROM provider_models WHERE provider_id = ?`, providerID)
+	if err != nil {
+		return nil, fmt.Errorf("store: load model routing: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]modelRouting)
+	for rows.Next() {
+		var model string
+		var enabled int64
+		var priorityOverride, weightOverride sql.NullInt64
+		if err := rows.Scan(&model, &enabled, &priorityOverride, &weightOverride); err != nil {
+			return nil, fmt.Errorf("store: scan model routing: %w", err)
+		}
+		out[model] = modelRouting{
+			enabled:          enabled != 0,
+			priorityOverride: nullInt(priorityOverride),
+			weightOverride:   nullInt(weightOverride),
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: load model routing: %w", err)
+	}
+	return out, nil
+}
+
+func insertModelsWithRouting(tx *sql.Tx, providerID string, models []ProviderModel, routes map[string]modelRouting) error {
 	for _, m := range models {
 		if m.Model == "" {
 			continue
@@ -423,10 +496,76 @@ func insertModels(tx *sql.Tx, providerID string, models []ProviderModel) error {
 		if unit == "" {
 			unit = "per_1m_tokens"
 		}
-		if _, err := tx.Exec(`INSERT OR REPLACE INTO provider_models (provider_id, model, input, output, cached_input, unit, price_override) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			providerID, m.Model, m.Input, m.Output, m.CachedInput, unit, boolToInt(m.PriceOverride)); err != nil {
+		route := modelRouting{enabled: true}
+		if saved, ok := routes[m.Model]; ok {
+			route = saved
+		}
+		if _, err := tx.Exec(`INSERT INTO provider_models
+			(provider_id, model, input, output, cached_input, unit, price_override,
+			 routing_enabled, priority_override, weight_override)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			providerID, m.Model, m.Input, m.Output, m.CachedInput, unit, boolToInt(m.PriceOverride),
+			boolToInt(route.enabled), route.priorityOverride, route.weightOverride); err != nil {
 			return fmt.Errorf("store: insert model: %w", err)
 		}
+	}
+	return nil
+}
+
+// UpdateProviderModelRouting changes one provider's policy within one model
+// service. setPriority/setWeight distinguish "leave unchanged" from "clear the
+// override and inherit the provider default" (nil override).
+func (s *Store) UpdateProviderModelRouting(
+	providerID, model string,
+	enabled *bool,
+	priorityOverride *int,
+	setPriority bool,
+	weightOverride *int,
+	setWeight bool,
+) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	var sets []string
+	var args []any
+	if enabled != nil {
+		sets = append(sets, "routing_enabled = ?")
+		args = append(args, boolToInt(*enabled))
+	}
+	if setPriority {
+		sets = append(sets, "priority_override = ?")
+		args = append(args, priorityOverride)
+	}
+	if setWeight {
+		sets = append(sets, "weight_override = ?")
+		args = append(args, weightOverride)
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+
+	query := "UPDATE provider_models SET " + sets[0]
+	for _, set := range sets[1:] {
+		query += ", " + set
+	}
+	query += " WHERE provider_id = ? AND model = ?"
+	args = append(args, providerID, model)
+
+	res, err := tx.Exec(query, args...)
+	if err != nil {
+		return fmt.Errorf("store: update model routing: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("store: provider model %q/%q: %w", providerID, model, ErrNotFound)
+	}
+	if _, err := tx.Exec(`UPDATE providers SET updated_at = ? WHERE id = ?`, time.Now().Unix(), providerID); err != nil {
+		return fmt.Errorf("store: touch provider: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit: %w", err)
 	}
 	return nil
 }
@@ -469,4 +608,12 @@ func maxZeroInt(n int) int {
 		return 0
 	}
 	return n
+}
+
+func nullInt(v sql.NullInt64) *int {
+	if !v.Valid {
+		return nil
+	}
+	n := int(v.Int64)
+	return &n
 }

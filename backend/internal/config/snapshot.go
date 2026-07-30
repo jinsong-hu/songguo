@@ -24,7 +24,15 @@ func newSnapshot(cfg Config) *Snapshot {
 		v := s.vendors[i]
 		s.byName[v.Name] = i
 		for _, m := range v.ServedModels {
-			s.byModel[m] = append(s.byModel[m], v)
+			routed := v
+			if route, ok := v.ModelRoutes[m]; ok {
+				if !route.Enabled {
+					continue
+				}
+				routed.Priority = route.Priority
+				routed.Weight = route.Weight
+			}
+			s.byModel[m] = append(s.byModel[m], routed)
 		}
 	}
 	return s
@@ -87,6 +95,12 @@ func cloneVendor(v Vendor) Vendor {
 	out := v
 	if v.ServedModels != nil {
 		out.ServedModels = append([]string(nil), v.ServedModels...)
+	}
+	if v.ModelRoutes != nil {
+		out.ModelRoutes = make(map[string]ModelRoute, len(v.ModelRoutes))
+		for k, route := range v.ModelRoutes {
+			out.ModelRoutes[k] = route
+		}
 	}
 	if v.Prices != nil {
 		out.Prices = make(map[string]Price, len(v.Prices))

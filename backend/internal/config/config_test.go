@@ -94,6 +94,39 @@ func TestVendorsForModel_MultiVendor(t *testing.T) {
 	}
 }
 
+func TestVendorsForModelAppliesModelRouting(t *testing.T) {
+	snap, err := Build(Config{Vendors: []Vendor{
+		{
+			Name:         "primary",
+			Origin:       "https://primary.example",
+			ServedModels: []string{"chat", "embed"},
+			Priority:     1,
+			Weight:       2,
+			ModelRoutes: map[string]ModelRoute{
+				"chat":  {Enabled: true, Priority: 3, Weight: 7},
+				"embed": {Enabled: false, Priority: 0, Weight: 1},
+			},
+			Credential: Credential{ID: "p1", APIKey: "sk-a"},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	chat := snap.VendorsForModel("chat")
+	if len(chat) != 1 || chat[0].Priority != 3 || chat[0].Weight != 7 {
+		t.Fatalf("chat route = %+v, want priority 3 weight 7", chat)
+	}
+	if got := snap.VendorsForModel("embed"); got != nil {
+		t.Fatalf("disabled model route = %+v, want nil", got)
+	}
+
+	all := snap.Vendors()
+	if len(all) != 1 || all[0].Priority != 1 || all[0].Weight != 2 {
+		t.Fatalf("provider defaults changed = %+v", all)
+	}
+}
+
 func TestSnapshotReturnsCopies(t *testing.T) {
 	cfg := Config{
 		Vendors: []Vendor{

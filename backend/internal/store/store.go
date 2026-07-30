@@ -349,6 +349,11 @@ func (s *Store) migrate() error {
 		{"providers", "api_key", "TEXT NOT NULL DEFAULT ''"},
 		{"provider_models", "cached_input", "REAL NOT NULL DEFAULT 0"},
 		{"provider_models", "price_override", "INTEGER NOT NULL DEFAULT 0"},
+		// Per-service routing. Enabled defaults on; NULL priority/weight inherit
+		// the provider-level defaults.
+		{"provider_models", "routing_enabled", "INTEGER NOT NULL DEFAULT 1"},
+		{"provider_models", "priority_override", "INTEGER"},
+		{"provider_models", "weight_override", "INTEGER"},
 		// key_full stores the plaintext key so the dashboard can display and copy
 		// it after creation. Empty for rows created before this column existed.
 		{"users", "key_full", "TEXT NOT NULL DEFAULT ''"},

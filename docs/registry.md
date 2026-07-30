@@ -68,6 +68,14 @@ Ranking is **health → sticky session → priority → weight**.
 
 A session pins to the provider that served its previous turn, so an agent conversation keeps one vendor and its prompt cache stays warm — on a large context that is the most expensive routing decision songguo makes. Health sorts above the pin, so it is only ever consulted among vendors of equal health and can never strand a session on a broken provider, and a client that sends no session header simply gets the ordinary ordering. Within a priority tier, selection is a **weighted random draw** rather than a rotation: correct in expectation, stateless, and approximate over short bursts. The draw is taken once per **credential**, so a provider split across several protocol endpoints still gets a single share of traffic rather than one per endpoint.
 
+Provider `priority` and `weight` are the defaults for model-less requests and
+for every declared model. A `(model, provider)` relationship may override both
+values or disable that provider for only that model. Lower numeric priority is
+a strict failover tier; weight is a proportional share within one tier. A
+service-specific disable also applies to an explicit provider pin when that
+request carries the model, but does not disable the provider's other models or
+its model-less submit/poll endpoints.
+
 Health is learned passively from real requests — songguo never sends probe traffic.
 
 Failures are graded by the question *"would an identical retry fail identically?"*:

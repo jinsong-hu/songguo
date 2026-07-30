@@ -57,7 +57,7 @@ const AUTO = '__auto__';
 /** The providers (full objects) that serve a model, matched by id. */
 function servingProviders(service: Service | undefined, providers: Provider[]): Provider[] {
   if (!service) return [];
-  const ids = new Set(service.providers.map((p) => p.id));
+  const ids = new Set(service.providers.filter((p) => p.routable).map((p) => p.id));
   return providers.filter((p) => ids.has(p.id));
 }
 

@@ -502,7 +502,7 @@ paths:
   /api/services:
     get:
       tags: [services]
-      summary: Auto-derived, model-centric services
+      summary: Model-centric services and effective provider routing
       operationId: listServices
       responses:
         "200":
@@ -511,6 +511,27 @@ paths:
             application/json:
               schema: { type: array, items: { $ref: "#/components/schemas/Service" } }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/services/routing/{id}:
+    patch:
+      tags: [services]
+      summary: Update one provider's routing policy within a model service
+      operationId: updateServiceProviderRouting
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: Provider id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PatchServiceProviderRouting" }
+      responses:
+        "204": { description: Updated }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/providers:
     get:
       tags: [providers]
@@ -1171,8 +1192,25 @@ components:
       properties:
         id: { type: string }
         name: { type: string }
+        enabled: { type: boolean, description: "Whether this provider is enabled for this service." }
+        provider_enabled: { type: boolean, description: "Whole-provider enabled state." }
+        routable: { type: boolean, description: "True when the provider is complete, globally enabled, and enabled for this service." }
         priority: { type: integer }
         weight: { type: integer }
+        default_priority: { type: integer }
+        default_weight: { type: integer }
+        priority_override: { type: integer, nullable: true }
+        weight_override: { type: integer, nullable: true }
+    PatchServiceProviderRouting:
+      type: object
+      required: [model]
+      properties:
+        model: { type: string }
+        enabled: { type: boolean }
+        priority: { type: integer, minimum: 0 }
+        weight: { type: integer, minimum: 1 }
+        inherit_priority: { type: boolean, description: "Clear the service override and inherit the provider default." }
+        inherit_weight: { type: boolean, description: "Clear the service override and inherit the provider default." }
     ServiceStats:
       type: object
       properties:

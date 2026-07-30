@@ -52,6 +52,7 @@ served **without** auth — it describes shapes only and carries no secrets.
 | `GET /api/providers/{id}` · `PATCH` · `DELETE` | Get / update / delete a provider. |
 | `POST /api/providers/{id}/test` | Probe a provider host for reachability. |
 | `GET /api/services` | Auto-derived, model-centric services (each model → the providers behind it). |
+| `PATCH /api/services/routing/{provider_id}` | Override priority/weight or enable/disable one provider within a model service. |
 | `GET /api/vendors` · `POST /api/vendors/{name}/test` | List snapshot vendors / probe one. |
 | `GET /api/catalog` · `GET /api/wires` | Provider presets / registered wire names. |
 | `GET /api/settings` | Read runtime settings. |

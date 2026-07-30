@@ -4,6 +4,11 @@
   gap: 14px;
 }
 
+.routing {
+  max-width: 980px;
+  margin-bottom: 14px;
+}
+
 .providerCard {
   display: flex;
   flex-direction: column;

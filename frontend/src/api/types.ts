@@ -621,8 +621,19 @@ export interface VendorTestResult {
 export interface ServiceProvider {
   id: string;
   name: string;
+  /** Per-service provider switch. */
+  enabled: boolean;
+  /** Whole-provider switch. */
+  provider_enabled: boolean;
+  /** True when the provider is complete, globally enabled, and enabled here. */
+  routable: boolean;
+  /** Effective routing values after applying optional service overrides. */
   priority: number;
   weight: number;
+  default_priority: number;
+  default_weight: number;
+  priority_override: number | null;
+  weight_override: number | null;
 }
 
 export interface ServiceStats {
@@ -744,6 +755,15 @@ export type PatchProviderBody = Partial<{
   models: ProviderModel[];
   endpoints: ProviderEndpoint[];
 }>;
+
+export interface PatchServiceProviderRoutingBody {
+  model: string;
+  enabled?: boolean;
+  priority?: number;
+  weight?: number;
+  inherit_priority?: boolean;
+  inherit_weight?: boolean;
+}
 
 // --- Catalog (read-only preset directory) ---
 

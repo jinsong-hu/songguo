@@ -151,14 +151,19 @@ const (
 
 // Vendor is an upstream AI provider.
 type Vendor struct {
-	Name         string           `yaml:"name"`
-	Origin       string           `yaml:"origin"`  // scheme://host, used for passthrough/WebSocket and forwarding unmatched paths
-	Adapter      string           `yaml:"adapter"` // auth scheme; default openai-compatible
-	ServedModels []string         `yaml:"served_models"`
-	Priority     int              `yaml:"priority"` // lower = preferred; default 0
-	Weight       int              `yaml:"weight"`   // share of traffic within a priority tier; normalized to >=1
-	Credential   Credential       `yaml:"credential"`
-	Prices       map[string]Price `yaml:"prices"`
+	Name         string   `yaml:"name"`
+	Origin       string   `yaml:"origin"`  // scheme://host, used for passthrough/WebSocket and forwarding unmatched paths
+	Adapter      string   `yaml:"adapter"` // auth scheme; default openai-compatible
+	ServedModels []string `yaml:"served_models"`
+	Priority     int      `yaml:"priority"` // lower = preferred; default 0
+	Weight       int      `yaml:"weight"`   // share of traffic within a priority tier; normalized to >=1
+	// ModelRoutes optionally overrides the provider defaults for a specific
+	// model. It is applied while building Snapshot.byModel, so model-less
+	// routing continues to use Priority/Weight while model-scoped routing gets
+	// the service-specific policy.
+	ModelRoutes map[string]ModelRoute `yaml:"model_routes,omitempty"`
+	Credential  Credential            `yaml:"credential"`
+	Prices      map[string]Price      `yaml:"prices"`
 	// Wires is the allowlist of wire names (see internal/wire) the proxy may
 	// serve for this vendor; paths matching none are denied unless
 	// AllowUnmatched forwards them metered-zero.
@@ -175,8 +180,17 @@ type Vendor struct {
 	// adapter) split gives one credential several routing vendors that all
 	// draw on the same account quota. Enforced outside routing — see
 	// internal/concurrency.
-	MaxConcurrency int `yaml:"max_concurrency"`
+	MaxConcurrency int               `yaml:"max_concurrency"`
 	Quirks         map[string]string `yaml:"quirks"`
+}
+
+// ModelRoute is the routing policy for one provider within one model service.
+// Disabled removes only this model/provider relationship; the provider remains
+// available for its other models and model-less endpoints.
+type ModelRoute struct {
+	Enabled  bool `yaml:"enabled"`
+	Priority int  `yaml:"priority"`
+	Weight   int  `yaml:"weight"`
 }
 
 // Config is the root configuration assembled from stored service rows.
@@ -203,6 +217,12 @@ func normalize(cfg *Config) {
 	for i := range cfg.Vendors {
 		if cfg.Vendors[i].Weight <= 0 {
 			cfg.Vendors[i].Weight = 1
+		}
+		for model, route := range cfg.Vendors[i].ModelRoutes {
+			if route.Weight <= 0 {
+				route.Weight = 1
+				cfg.Vendors[i].ModelRoutes[model] = route
+			}
 		}
 		// A negative limit degrades to unlimited rather than to "nothing may
 		// pass": a typo must not take the provider offline.

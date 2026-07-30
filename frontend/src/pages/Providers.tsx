@@ -1,11 +1,16 @@
-import { useMemo, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AlertTriangle, Check } from 'lucide-react';
 import { api } from '../api/client';
 import type { CatalogVendor, Provider, ProviderRouting } from '../api/types';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
+import {
+  RoutingConfigCard,
+  type RoutingConfigItem,
+} from '../components/RoutingConfigCard';
 import { Skeleton } from '../components/Skeleton';
+import { useToast } from '../components/Toast';
 import { useFetch } from '../lib/useFetch';
 import { BrandIcon, providerBrand } from '../lib/modelBrand';
 import styles from './Providers.module.css';
@@ -47,11 +52,14 @@ export function ProvidersPage() {
       ) : (
         <>
           {existing.length > 0 && (
-            <div className={styles.grid}>
-              {existing.map((p) => (
-                <ProviderCard key={p.id} provider={p} />
-              ))}
-            </div>
+            <>
+              <DefaultRouting providers={existing} onSaved={providers.refetch} />
+              <div className={styles.grid}>
+                {existing.map((p) => (
+                  <ProviderCard key={p.id} provider={p} />
+                ))}
+              </div>
+            </>
           )}
 
           <div className={styles.divider}>
@@ -70,6 +78,95 @@ export function ProvidersPage() {
         </>
       )}
     </Page>
+  );
+}
+
+function DefaultRouting({
+  providers,
+  onSaved,
+}: {
+  providers: Provider[];
+  onSaved: () => void;
+}) {
+  const toast = useToast();
+  const initial = useMemo(
+    () =>
+      providers.map((provider): RoutingConfigItem => {
+        const brand = providerBrand(
+          provider.vendor,
+          provider.models.map((model) => model.model),
+        );
+        const complete =
+          provider.masked_key !== '' &&
+          provider.endpoints.length > 0 &&
+          provider.models.length > 0;
+        return {
+          id: provider.id,
+          name: provider.name,
+          icon: <BrandIcon brand={brand} label={provider.name} size={17} />,
+          color: brand?.color ?? '#3f8f5b',
+          enabled: provider.enabled,
+          available: complete,
+          priority: String(provider.priority),
+          weight: String(provider.weight),
+          unavailableLabel: 'Incomplete',
+        };
+      }),
+    [providers],
+  );
+  const [items, setItems] = useState(initial);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => setItems(initial), [initial]);
+
+  const dirty = JSON.stringify(items) !== JSON.stringify(initial);
+  const change = (id: string, patch: Partial<RoutingConfigItem>) => {
+    setItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  };
+
+  const save = async () => {
+    for (const item of items) {
+      const priority = Number(item.priority);
+      const weight = Number(item.weight);
+      if (!Number.isInteger(priority) || priority < 0) {
+        toast.error(`${item.name}: priority must be a whole number of 0 or greater.`);
+        return;
+      }
+      if (!Number.isInteger(weight) || weight < 1) {
+        toast.error(`${item.name}: weight must be a whole number of 1 or greater.`);
+        return;
+      }
+    }
+
+    setSaving(true);
+    try {
+      for (const item of items) {
+        await api.patchProvider(item.id, {
+          priority: Number(item.priority),
+          weight: Number(item.weight),
+        });
+      }
+      toast.success('Default routing updated.');
+      onSaved();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not update default routing.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className={styles.routing}>
+      <RoutingConfigCard
+        title="Default routing"
+        hint="These values apply to model-less requests and to services that use provider defaults. Lower priority numbers are strict failover tiers; weight splits new sessions within one tier."
+        items={items}
+        saving={saving}
+        dirty={dirty}
+        onChange={change}
+        onSave={save}
+      />
+    </div>
   );
 }
 

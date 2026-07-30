@@ -155,6 +155,7 @@ var adminRoutes = []adminRoute{
 	// Services: auto-derived, model-centric view. Shared: scoped to the caller's
 	// allowed models when a user key is used (see handleListServices).
 	{"GET", "/api/services", (*api).handleListServices, true},
+	{"PATCH", "/api/services/routing/{id}", (*api).handlePatchServiceProviderRouting, false},
 	// Providers: SQLite-backed upstream config. The list is Shared but sanitized
 	// for a user key (no endpoint URLs or key previews — see handleListProviders);
 	// every mutating/detail route below stays admin-only.
