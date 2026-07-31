@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/rand"
@@ -157,15 +158,19 @@ func TestClassify(t *testing.T) {
 		// the vendor's whole catalogue out of rotation.
 		{"429 model quota", 429, nil, false, SignalFailModel},
 
-		// The caller's fault: every vendor would reject these identically, so
-		// they must not demote anyone.
-		{"400 bad body", 400, nil, false, SignalNeutral},
-		{"404 bad path", 404, nil, false, SignalNeutral},
-		{"408 timeout", 408, nil, false, SignalNeutral},
-		{"422 unprocessable", 422, nil, false, SignalNeutral},
+		// Probably the caller, possibly this relay missing an endpoint its
+		// siblings serve. Too weak to count per request; resolved by counting
+		// distinct sessions instead.
+		{"400 bad body", 400, nil, false, SignalFailClient},
+		{"404 bad path", 404, nil, false, SignalFailClient},
+		{"408 timeout", 408, nil, false, SignalFailClient},
+		{"422 unprocessable", 422, nil, false, SignalFailClient},
+		{"451 unavailable for legal reasons", 451, nil, false, SignalFailClient},
 
 		// A client that hangs up must never be blamed on the vendor — not even
-		// when the abort surfaces as a hard-looking transport error.
+		// when the abort surfaces as a hard-looking transport error. This is
+		// now the ONLY route to neutral: everything the vendor actually said
+		// carries some weight.
 		{"client aborted", 0, context.Canceled, true, SignalNeutral},
 		{"client gone during conn refused", 0, connRefused, true, SignalNeutral},
 		{"context canceled alone", 0, context.Canceled, false, SignalNeutral},
@@ -792,7 +797,6 @@ func TestConcurrentReportAndSelect(t *testing.T) {
 	wg.Wait()
 }
 
-
 // --- Model-scoped rate limits ------------------------------------------------
 
 const twoVendorBothModelsYAML = `
@@ -883,6 +887,195 @@ func TestModelRateLimitWithoutModelIsDropped(t *testing.T) {
 	}
 	if len(r.Inspect()) != 0 {
 		t.Fatalf("inspect = %+v, want no health entries", r.Inspect())
+	}
+}
+
+// --- Client errors (4xx), counted per distinct session ----------------------
+
+// clientFail reports a 4xx from one session against one vendor.
+func clientFail(r *Router, vendor, session string) {
+	r.ReportAttempt(Attempt{Vendor: vendor, Credential: "p1", Model: "m", Session: session}, SignalFailClient)
+}
+
+// clientFailFrom reports a 4xx from each of n distinct sessions.
+func clientFailFrom(r *Router, vendor string, n int) {
+	for i := range n {
+		clientFail(r, vendor, fmt.Sprintf("sess-%d", i))
+	}
+}
+
+// clientFailCount reports how many distinct sessions are recorded against
+// vendor. Read straight off the health map because the count is deliberately
+// NOT exported: it is an implementation detail of how a 4xx demotion is
+// reached, and the reachable outcome is the ordinary cooling/dead state.
+func clientFailCount(r *Router, vendor string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	h := r.health[vendor]
+	if h == nil {
+		return 0
+	}
+	return len(h.clientFails)
+}
+
+// THE property the whole distinct-session design exists for. One client with a
+// malformed body retries in a loop; every request 400s; the vendor is fine.
+// Counting requests would demote it (and then every other vendor the same
+// client touched, taking the fleet down). Counting sessions cannot.
+func TestOneSessionCannotDemoteHoweverManyTimesItFails(t *testing.T) {
+	clk := newFakeClock()
+	snap := buildSnapshot(t, twoVendorYAML)
+	r := New(staticSnap(snap), Options{Now: clk.Now, Logger: quietLogger()})
+
+	for range 500 {
+		clientFail(r, "primary", "one-broken-client")
+	}
+
+	if got := leadName(t, r); got != "primary" {
+		t.Fatalf("lead = %q, want primary: one session must never demote a vendor", got)
+	}
+	if st, n := stateOf(t, r, "primary"), clientFailCount(r, "primary"); st.Demotions != 0 || n != 1 {
+		t.Fatalf("state = %+v, sessions = %d, want 0 demotions and 1 session", st, n)
+	}
+}
+
+// The other half: enough independent callers hitting the same wall IS the
+// vendor's problem, and it must move the next request.
+func TestDistinctSessionsDemoteOnClientErrors(t *testing.T) {
+	clk := newFakeClock()
+	snap := buildSnapshot(t, twoVendorYAML)
+	r := New(staticSnap(snap), Options{Now: clk.Now, Logger: quietLogger()})
+
+	// One short of the default threshold: still leading.
+	clientFailFrom(r, "primary", defaultClientFailThreshold-1)
+	if got := leadName(t, r); got != "primary" {
+		t.Fatalf("lead = %q after %d sessions, want primary: below threshold",
+			got, defaultClientFailThreshold-1)
+	}
+
+	// The threshold'th distinct session tips it.
+	clientFail(r, "primary", "the-tenth")
+	if got := leadName(t, r); got != "backup" {
+		t.Fatalf("lead = %q after %d sessions, want backup",
+			got, defaultClientFailThreshold)
+	}
+	if st := stateOf(t, r, "primary"); !st.Cooling || st.Demotions != 1 {
+		t.Fatalf("state = %+v, want cooling with 1 demotion", st)
+	}
+}
+
+// A 4xx with no session cannot be attributed, so it is dropped rather than
+// widened — the same choice ReportModel makes for a model-less 429. Clients
+// that send no session header therefore cannot demote anyone on 4xx.
+func TestClientFailWithoutSessionIsDropped(t *testing.T) {
+	clk := newFakeClock()
+	snap := buildSnapshot(t, twoVendorYAML)
+	r := New(staticSnap(snap), Options{Now: clk.Now, ClientFailThreshold: 1, Logger: quietLogger()})
+
+	for range 50 {
+		r.ReportAttempt(Attempt{Vendor: "primary", Credential: "p1", Model: "m"}, SignalFailClient)
+	}
+	// The legacy entry points carry no session either.
+	r.ReportModel("primary", "p1", "m", SignalFailClient)
+	r.Report("primary", "p1", SignalFailClient)
+
+	if got := leadName(t, r); got != "primary" {
+		t.Fatalf("lead = %q, want primary: an unattributable 4xx must not demote", got)
+	}
+	if len(r.Inspect()) != 0 {
+		t.Fatalf("inspect = %+v, want no health entries", r.Inspect())
+	}
+}
+
+// This is what keeps a busy, healthy vendor from ever accumulating a demotion
+// out of scattered client mistakes: reaching the threshold requires distinct
+// sessions to fail with NO success anywhere among them.
+func TestSuccessClearsTheSessionSet(t *testing.T) {
+	clk := newFakeClock()
+	snap := buildSnapshot(t, twoVendorYAML)
+	r := New(staticSnap(snap), Options{Now: clk.Now, Logger: quietLogger()})
+
+	for i := range defaultClientFailThreshold * 3 {
+		clientFail(r, "primary", fmt.Sprintf("sess-%d", i))
+		r.ReportModel("primary", "p1", "m", SignalOK) // ordinary traffic succeeding
+	}
+
+	if got := leadName(t, r); got != "primary" {
+		t.Fatalf("lead = %q, want primary: interleaved successes must reset the set", got)
+	}
+	if st, n := stateOf(t, r, "primary"), clientFailCount(r, "primary"); n != 0 || st.Demotions != 0 {
+		t.Fatalf("state = %+v, sessions = %d, want an empty set and no demotions", st, n)
+	}
+}
+
+// The ladder is driven by NEW sessions, so escalation to dead costs
+// clientFailThreshold + deadAfter - 1 distinct callers — and a session already
+// in the set can never push it further.
+func TestClientErrorsReachDeadOnNewSessionsOnly(t *testing.T) {
+	clk := newFakeClock()
+	snap := buildSnapshot(t, twoVendorYAML)
+	r := New(staticSnap(snap), Options{Now: clk.Now, Logger: quietLogger()})
+
+	// The Nth distinct session past the threshold is the Nth demotion, so dead
+	// arrives on this many distinct callers and not one fewer.
+	deadAt := defaultClientFailThreshold + defaultDeadAfter - 1
+
+	clientFailFrom(r, "primary", deadAt-1)
+	if st := stateOf(t, r, "primary"); st.Dead || st.Demotions != defaultDeadAfter-1 {
+		t.Fatalf("state = %+v, want %d demotions and not dead", st, defaultDeadAfter-1)
+	}
+	// Re-failing from sessions already counted must not advance the ladder.
+	for range 100 {
+		clientFailFrom(r, "primary", deadAt-1)
+	}
+	if st := stateOf(t, r, "primary"); st.Dead || st.Demotions != defaultDeadAfter-1 {
+		t.Fatalf("state = %+v, want unchanged: repeats are not new evidence", st)
+	}
+
+	clientFail(r, "primary", "one-more-new-session")
+	st := stateOf(t, r, "primary")
+	if !st.Dead || st.Demotions != defaultDeadAfter {
+		t.Fatalf("state = %+v, want dead after %d demotions", st, defaultDeadAfter)
+	}
+	// Dead still never excludes, and a success still revives.
+	r.ReportModel("primary", "p1", "m", SignalOK)
+	if st, n := stateOf(t, r, "primary"), clientFailCount(r, "primary"); st.Dead || n != 0 {
+		t.Fatalf("state = %+v, sessions = %d, want revived with an empty set", st, n)
+	}
+}
+
+// The session set is bounded: past the cap a vendor is dead several times over
+// and another client-supplied session name buys no information, so it must not
+// be stored. Without this the map grows with whatever a client puts in a header.
+func TestSessionSetIsBounded(t *testing.T) {
+	clk := newFakeClock()
+	snap := buildSnapshot(t, twoVendorYAML)
+	r := New(staticSnap(snap), Options{Now: clk.Now, Logger: quietLogger()})
+
+	clientFailFrom(r, "primary", 10_000)
+
+	want := defaultClientFailThreshold + defaultDeadAfter
+	if n := clientFailCount(r, "primary"); n != want {
+		t.Fatalf("tracked %d sessions, want the cap of %d", n, want)
+	}
+}
+
+// The two failure classes are separate axes: a 4xx must not fill the streak
+// that 5xx uses (3 would demote far too fast), and a 5xx must not fill the
+// session set. Only their demotions share a ladder.
+func TestClientErrorsAndVendorFailuresAreSeparateAxes(t *testing.T) {
+	clk := newFakeClock()
+	snap := buildSnapshot(t, twoVendorYAML)
+	r := New(staticSnap(snap), Options{Now: clk.Now, Logger: quietLogger()})
+
+	clientFailFrom(r, "primary", defaultClientFailThreshold-1)
+	if st := stateOf(t, r, "primary"); st.ConsecFails != 0 {
+		t.Fatalf("state = %+v, want consec_fails 0: a 4xx is not a 5xx strike", st)
+	}
+
+	r.ReportModel("backup", "b1", "m", SignalFail)
+	if n := clientFailCount(r, "backup"); n != 0 {
+		t.Fatalf("sessions = %d, want an empty session set: a 5xx is not a 4xx", n)
 	}
 }
 

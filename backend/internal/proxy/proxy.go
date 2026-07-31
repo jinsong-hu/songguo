@@ -317,7 +317,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// dead vendor, it does not retry this one. A client that hung up
 		// mid-stream cancels our upstream request too, so pass whether the
 		// client is gone — that outcome must not be blamed on the vendor.
-		h.router.ReportModel(t.Vendor.Name, t.Credential.ID, rt.model, router.Classify(0, err, r.Context().Err() != nil))
+		h.router.ReportAttempt(router.Attempt{
+			Vendor: t.Vendor.Name, Credential: t.Credential.ID,
+			Model: rt.model, Session: rt.sel.Session,
+		}, router.Classify(0, err, r.Context().Err() != nil))
 		h.logger.Warn("upstream request failed",
 			"vendor", t.Vendor.Name, "model", rt.model, "credential", t.Credential.ID,
 			"url", upReq.URL.String(), "latency_ms", headerLatency, "err", err)
@@ -804,8 +807,10 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	var bodyErr error
 	defer func() {
 		clientGone := r.Context().Err() != nil || errors.Is(bodyErr, errClientGone)
-		h.router.ReportModel(t.Vendor.Name, t.Credential.ID, model,
-			router.Classify(resp.StatusCode, upstreamBodyErr(bodyErr), clientGone))
+		h.router.ReportAttempt(router.Attempt{
+			Vendor: t.Vendor.Name, Credential: t.Credential.ID,
+			Model: model, Session: sel.Session,
+		}, router.Classify(resp.StatusCode, upstreamBodyErr(bodyErr), clientGone))
 
 		// Pin the session to the vendor we actually used, so its next request
 		// reuses this provider's warm prompt cache. Done on every dispatch

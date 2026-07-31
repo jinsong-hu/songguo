@@ -222,7 +222,9 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 	if derr != nil {
 		// Cross-request health only — steers the next upgrade, never retries
 		// this one.
-		h.router.Report(t.Vendor.Name, t.Credential.ID, router.Classify(0, derr, r.Context().Err() != nil))
+		h.router.ReportAttempt(router.Attempt{
+			Vendor: t.Vendor.Name, Credential: t.Credential.ID, Session: sel.Session,
+		}, router.Classify(0, derr, r.Context().Err() != nil))
 		h.logger.Error("websocket dial failed", "err", derr, "vendor", t.Vendor.Name)
 		writeError(w, http.StatusBadGateway, "upstream_error", derr.Error())
 		return
@@ -231,7 +233,9 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 
 	// Judge the vendor on the HANDSHAKE only. A pipe that ends an hour later
 	// says nothing about whether this vendor can accept a new connection now.
-	h.router.Report(t.Vendor.Name, t.Credential.ID, router.Classify(resp.StatusCode, nil, false))
+	h.router.ReportAttempt(router.Attempt{
+		Vendor: t.Vendor.Name, Credential: t.Credential.ID, Session: sel.Session,
+	}, router.Classify(resp.StatusCode, nil, false))
 	h.router.Pin(sel, t.Vendor.Name)
 
 	if resp.StatusCode == http.StatusSwitchingProtocols {

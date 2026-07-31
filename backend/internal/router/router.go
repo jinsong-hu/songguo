@@ -105,6 +105,17 @@ const (
 	// ~4 failed requests an hour instead of 120, short enough that a recovered
 	// one is noticed the same afternoon.
 	defaultCooldownMax = 15 * time.Minute
+	// defaultClientFailThreshold is how many DISTINCT SESSIONS must see a 4xx
+	// from a vendor, with no success in between, before it is demoted.
+	//
+	// Much higher than defaultFailThreshold because the evidence is much
+	// weaker: a 4xx usually is the caller's fault, and only the fact that it
+	// happened to many independent callers makes it the vendor's. Ten is a
+	// deliberate over-correction — every homogeneous-backend proxy discards
+	// this signal entirely (nginx hard-codes 403/404 out of max_fails; Envoy's
+	// outlier detection cannot see 4xx at all), and the reseller fleets songguo
+	// routes across are the one setting where discarding it is wrong.
+	defaultClientFailThreshold = 10
 	// defaultDeadAfter is how many consecutive demotions mark a vendor DEAD:
 	// ranked below merely-cooling vendors and, unlike a cooldown, never
 	// restored by the passage of time. See health.go.
@@ -189,13 +200,16 @@ type Options struct {
 	Now           func() time.Time // injectable clock; defaults to time.Now
 	Rand          func() float64   // injectable [0,1) source; defaults to rand.Float64
 	FailThreshold int              // consecutive failures that demote; default 3
-	Cooldown      time.Duration    // first demotion's cooldown; default 30s
-	CooldownMax   time.Duration    // backoff ceiling; default 15m
-	DeadAfter     int              // consecutive demotions that mark dead; default 5
-	ModelCooldown time.Duration    // per-(vendor, model) 429 cooldown; default 60s
-	StickyTTL     time.Duration    // session affinity idle timeout; default 30m
-	StickyMax     int              // affinity map hard cap; default 50k
-	Logger        *slog.Logger     // demotion/restoration log; defaults to slog.Default
+	// ClientFailThreshold is how many distinct sessions must see a 4xx before
+	// it demotes; default 10.
+	ClientFailThreshold int
+	Cooldown            time.Duration // first demotion's cooldown; default 30s
+	CooldownMax         time.Duration // backoff ceiling; default 15m
+	DeadAfter           int           // consecutive demotions that mark dead; default 5
+	ModelCooldown       time.Duration // per-(vendor, model) 429 cooldown; default 60s
+	StickyTTL           time.Duration // session affinity idle timeout; default 30m
+	StickyMax           int           // affinity map hard cap; default 50k
+	Logger              *slog.Logger  // demotion/restoration log; defaults to slog.Default
 }
 
 // Router selects ordered upstream attempts for a request.
@@ -205,7 +219,12 @@ type Router struct {
 	rand     func() float64
 	logger   *slog.Logger
 
-	failThreshold int
+	failThreshold       int
+	clientFailThreshold int
+	// clientFailMax bounds the per-vendor session set. Past
+	// clientFailThreshold + deadAfter the vendor is dead several times over, so
+	// further session names carry no information and are not stored.
+	clientFailMax int
 	cooldown      time.Duration
 	cooldownMax   time.Duration
 	deadAfter     int
@@ -240,6 +259,9 @@ func New(snapshot func() *config.Snapshot, opts ...Options) *Router {
 	if opt.FailThreshold <= 0 {
 		opt.FailThreshold = defaultFailThreshold
 	}
+	if opt.ClientFailThreshold <= 0 {
+		opt.ClientFailThreshold = defaultClientFailThreshold
+	}
 	if opt.Cooldown <= 0 {
 		opt.Cooldown = defaultCooldown
 	}
@@ -265,11 +287,14 @@ func New(snapshot func() *config.Snapshot, opts ...Options) *Router {
 		opt.Logger = slog.Default()
 	}
 	return &Router{
-		snapshot:      snapshot,
-		now:           opt.Now,
-		rand:          opt.Rand,
-		logger:        opt.Logger,
-		failThreshold: opt.FailThreshold,
+		snapshot:            snapshot,
+		now:                 opt.Now,
+		rand:                opt.Rand,
+		logger:              opt.Logger,
+		failThreshold:       opt.FailThreshold,
+		clientFailThreshold: opt.ClientFailThreshold,
+		clientFailMax:       opt.ClientFailThreshold + opt.DeadAfter,
+
 		cooldown:      opt.Cooldown,
 		cooldownMax:   opt.CooldownMax,
 		deadAfter:     opt.DeadAfter,

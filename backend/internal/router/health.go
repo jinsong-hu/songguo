@@ -55,9 +55,30 @@ const (
 	// rather than an inference; and there is no dead state, because a rate
 	// limit is transient by construction.
 	SignalFailModel
-	// SignalNeutral: the vendor answered, but the failure belongs to the
-	// CALLER — every vendor would reject the request identically, so it says
-	// nothing about this one. Neutral outcomes neither demote nor restore.
+	// SignalFailClient: the vendor answered and rejected the request with a 4xx
+	// that is not one of the cases above — 400, 404, 408, 422, and the rest.
+	//
+	// The status code says "the caller's fault", and usually it is. But songguo
+	// balances across RESELLERS, not across replicas of one service, and that
+	// makes the status code a liar often enough to matter: a relay that has not
+	// implemented an endpoint, rejects a parameter its siblings accept, or
+	// carries a stale model alias returns exactly these codes while a healthy
+	// sibling returns 200. Discarding them outright — which is what every
+	// homogeneous-backend proxy does, and what songguo did until now — makes
+	// that class of breakage permanently invisible to routing.
+	//
+	// The reason it cannot simply be counted like SignalFail is blast radius. A
+	// single client with a malformed body produces identical 4xx against every
+	// vendor it touches, so an ordinary streak would let one broken caller walk
+	// the entire fleet to dead in about a dozen requests. So this signal is
+	// counted along the axis that actually separates the two cases: DISTINCT
+	// SESSIONS. One session failing a hundred times is one client's bug and
+	// demotes nothing; ten different sessions failing once each is the vendor's
+	// bug and demotes it. See applyReport.
+	SignalFailClient
+	// SignalNeutral: the CALLER went away — hung up mid-stream, cancelled the
+	// context. Not an outcome the vendor produced at all, so it neither demotes
+	// nor restores.
 	SignalNeutral
 )
 
@@ -74,6 +95,8 @@ func (s Signal) String() string {
 		return "fail_credential"
 	case SignalFailModel:
 		return "fail_model"
+	case SignalFailClient:
+		return "fail_client"
 	case SignalNeutral:
 		return "neutral"
 	}
@@ -141,10 +164,11 @@ func Classify(status int, err error, clientGone bool) Signal {
 		return SignalFail
 
 	case status >= 400:
-		// The caller's body or path is wrong, and every vendor would reject it
-		// the same way. Demoting here would let one malformed client walk the
-		// entire fleet down.
-		return SignalNeutral
+		// Probably the caller's body or path. Possibly this relay missing an
+		// endpoint its siblings serve. The status code cannot tell the two
+		// apart, so the signal is deliberately weak and is resolved by
+		// correlation instead — see SignalFailClient.
+		return SignalFailClient
 	}
 
 	return SignalOK
@@ -195,6 +219,20 @@ type vendorHealth struct {
 	openUntil  time.Time // zero while live; otherwise the end of the cooldown
 	demotions  int       // consecutive demotions since the last success
 	dead       bool      // demoted deadAfter times running; see healthDead
+
+	// clientFails is the set of distinct agent sessions that have seen a
+	// SignalFailClient from this vendor since its last success. Its SIZE is the
+	// evidence, not its contents: a set answers "how many independent callers
+	// hit this" where a counter can only answer "how many requests failed", and
+	// only the former distinguishes a broken vendor from a broken client.
+	//
+	// A set rather than a counter is the whole point, so re-failing from an
+	// already-recorded session adds nothing — which is what makes one client
+	// retrying in a loop unable to move this vendor at all.
+	//
+	// Bounded at clientFailMax entries. Cleared by any success, like every
+	// other failure state.
+	clientFails map[string]struct{}
 }
 
 // Report records the outcome of the single attempt that was dispatched to
@@ -205,7 +243,7 @@ type vendorHealth struct {
 // denials (budget, scope, rate limit, unmatched wire) can never reach it —
 // those are our refusals, not the vendor's.
 func (r *Router) Report(vendorName, credentialID string, sig Signal) {
-	r.ReportModel(vendorName, credentialID, "", sig)
+	r.ReportAttempt(Attempt{Vendor: vendorName, Credential: credentialID}, sig)
 }
 
 // ReportModel is Report with the model the request named, which lets a 429 be
@@ -213,10 +251,45 @@ func (r *Router) Report(vendorName, credentialID string, sig Signal) {
 // (a WebSocket upgrade, GET /v1/models) passes "" and simply cannot produce a
 // model-scoped demotion.
 func (r *Router) ReportModel(vendorName, credentialID, model string, sig Signal) {
+	r.ReportAttempt(Attempt{Vendor: vendorName, Credential: credentialID, Model: model}, sig)
+}
+
+// Attempt identifies the single dispatched attempt an outcome belongs to. Each
+// field is a scope some signal needs: a 429 demotes (Vendor, Model), a 401
+// demotes every vendor on Credential, and a 4xx is counted per distinct
+// Session. Fields the caller cannot supply are "", and the signals that need
+// them degrade to doing nothing rather than widening their blast radius.
+type Attempt struct {
+	Vendor     string
+	Credential string
+	Model      string // billing model; "" for model-less wires
+	Session    string // caller's agent session; "" when the client sent none
+}
+
+// ReportAttempt is the full form of Report: it records the outcome of one
+// dispatched attempt with every scope the signal might need.
+func (r *Router) ReportAttempt(a Attempt, sig Signal) {
+	vendorName, credentialID, model := a.Vendor, a.Credential, a.Model
 	if vendorName == "" || sig == SignalNeutral {
 		return
 	}
 	now := r.now()
+
+	// A client-error failure is counted per distinct session, so a request that
+	// carries no session identity cannot contribute to it. Dropping it is the
+	// same choice ReportModel makes for a model-less 429: when the scope that
+	// makes a weak signal safe is missing, the signal is discarded rather than
+	// widened into something stronger than its evidence supports.
+	//
+	// Consequence worth knowing: traffic from clients that send no session
+	// header (curl, most WebSocket upgrades) can never demote a vendor on 4xx.
+	if sig == SignalFailClient {
+		if a.Session == "" {
+			return
+		}
+		r.logTransition(vendorName, sig, r.applyClientFail(vendorName, a.Session, now))
+		return
+	}
 
 	// A model-scoped failure never touches vendor health: the vendor is
 	// serving, it just will not serve this model right now.
@@ -298,6 +371,12 @@ func (r *Router) applyReport(vendorName string, sig Signal, now time.Time) (tr h
 		h.demotions = 0
 		h.openUntil = time.Time{}
 		h.dead = false
+		// The session set is evidence of the same kind, so it clears with the
+		// rest. This is what keeps a vendor that serves ordinary traffic fine
+		// from ever accumulating a demotion out of scattered 4xx: every success
+		// in between wipes the slate, so reaching the threshold requires ten
+		// distinct sessions to fail with NO success anywhere among them.
+		clear(h.clientFails)
 	case SignalFail, SignalFailHard, SignalFailCredential:
 		h.consecFail++
 		// A conclusive failure short-circuits the streak: there is nothing to
@@ -307,14 +386,7 @@ func (r *Router) applyReport(vendorName string, sig Signal, now time.Time) (tr h
 			h.consecFail = r.failThreshold
 		}
 		if h.consecFail >= r.failThreshold {
-			h.demotions++
-			h.openUntil = now.Add(r.nextCooldown(h.demotions))
-			tr.demoted, tr.until = true, h.openUntil
-			// Enough consecutive demotions, with no success anywhere in
-			// between, stops being a blip and starts being a broken provider.
-			if h.demotions >= r.deadAfter && !h.dead {
-				h.dead, tr.died = true, true
-			}
+			tr = r.demoteLocked(h, now)
 		}
 		// consecFail is deliberately NOT reset here. It stays at or above the
 		// threshold, which puts the vendor on PROBATION once its cooldown
@@ -327,6 +399,57 @@ func (r *Router) applyReport(vendorName string, sig Signal, now time.Time) (tr h
 		// supposed to cost. Only a success clears the streak.
 	}
 	return tr
+}
+
+// demoteLocked opens the next cooldown on h and marks it dead once the
+// demotions have piled up. Every failure path funnels through here, so all of
+// them back off on the same doubling ladder and reach dead by the same rule —
+// the signals differ in what it takes to GET here, never in what happens after.
+// Caller must hold r.mu.
+func (r *Router) demoteLocked(h *vendorHealth, now time.Time) (tr healthTransition) {
+	h.demotions++
+	h.openUntil = now.Add(r.nextCooldown(h.demotions))
+	tr.demoted, tr.until = true, h.openUntil
+	// Enough consecutive demotions, with no success anywhere in between, stops
+	// being a blip and starts being a broken provider.
+	if h.demotions >= r.deadAfter && !h.dead {
+		h.dead, tr.died = true, true
+	}
+	return tr
+}
+
+// applyClientFail folds one 4xx into the vendor's distinct-session set and
+// demotes once enough independent callers have hit it.
+//
+// The ladder is driven by NEW sessions only: the clientFailThreshold'th distinct
+// session opens the first cooldown, the next one the second, and so on, so it
+// takes clientFailThreshold + deadAfter distinct sessions to mark a vendor dead.
+// A session already in the set contributes nothing however many times it
+// retries — that is the property that makes counting 4xx safe at all, and it is
+// why this cannot be folded into the consecFail streak.
+func (r *Router) applyClientFail(vendorName, session string, now time.Time) (tr healthTransition) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	h := r.health[vendorName]
+	if h == nil {
+		h = &vendorHealth{}
+		r.health[vendorName] = h
+	}
+	if h.clientFails == nil {
+		h.clientFails = make(map[string]struct{})
+	}
+	// Past the cap the vendor is already dead several times over and another
+	// session name buys no information, so stop growing rather than keep an
+	// unbounded set keyed by something a client controls.
+	if _, seen := h.clientFails[session]; seen || len(h.clientFails) >= r.clientFailMax {
+		return tr
+	}
+	h.clientFails[session] = struct{}{}
+	if len(h.clientFails) < r.clientFailThreshold {
+		return tr
+	}
+	return r.demoteLocked(h, now)
 }
 
 // logTransition reports a health change. Called outside the lock. These

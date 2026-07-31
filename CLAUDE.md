@@ -159,7 +159,7 @@ There are three health tiers, and only the middle one is time-based:
 | tier | entered by | left by |
 |---|---|---|
 | **live** | default | — |
-| **cooling** | `failThreshold` consecutive failures | the cooldown lapsing, or a success |
+| **cooling** | `failThreshold` consecutive failures, or `clientFailThreshold` distinct sessions seeing a 4xx | the cooldown lapsing, or a success |
 | **dead** | `deadAfter` consecutive *demotions* with no success between them | a success, or an operator |
 
 Cooldowns **double** on each repeat demotion (30s → 1m → 2m → … → 15m), so a
@@ -190,7 +190,8 @@ Two invariants keep the first from sliding into the second:
 2. **Detection is passive.** Health is learned from requests clients actually
    made. We never probe: inventing traffic to a credential the operator pays for
    is the sibling of inventing attempts and inventing bytes. The accepted price
-   is real client failures — 3 to trip the first demotion, then 1 per cooldown
+   is real client failures — 3 to trip the first demotion (10 distinct sessions
+   for a 4xx), then 1 per cooldown
    window for as long as the vendor stays dead (the failure streak survives the
    cooldown, so a vendor that fails its first request back is re-demoted at
    once). Only a success clears the streak.
@@ -200,8 +201,9 @@ signal answers is **"would an identical retry fail identically?"**
 
 | | | |
 |---|---|---|
-| **neutral** | caller's fault | 400/404/408/422, client hung up mid-stream. Every vendor rejects these identically, so counting them would let one broken client walk the whole fleet out of rotation |
+| **neutral** | not an outcome at all | the client hung up mid-stream or cancelled. The vendor never got to answer, so there is nothing to judge |
 | **fail** | vendor's fault, ambiguous | timeouts, connection resets, unexpected EOF, temporary DNS failure, 5xx, 403. Real, but as plausibly about this request or the network as about the vendor. Needs corroboration — 3 in a row |
+| **fail_client** | probably the caller, possibly this relay | 400/404/408/422 and the rest of 4xx. Counted per **distinct session**, 10 to demote — see below |
 | **fail_model** | vendor is fine, this model is not | 429. Demotes the `(vendor, model)` pair for a fixed cooldown and leaves vendor health untouched — providers meter per model tier, so a hot `gpt-4o` must not walk `text-embedding-3` out of rotation |
 | **fail_hard** | vendor's fault, conclusive | connection refused, DNS NXDOMAIN, unverifiable TLS certificate. Properties of the *endpoint*, not the request: one is enough to demote |
 | **fail_credential** | credential's fault, conclusive | 401. Like fail_hard, but demotes **every vendor sharing that credential**, not just the one that observed it |
@@ -211,6 +213,52 @@ A transport failure carries **no status code** (the vendor never answered), so
 value instead — `syscall.ECONNREFUSED`, `net.DNSError.IsNotFound`,
 `tls.CertificateVerificationError`. This is why "timeout" and "connection
 refused" get different weights despite both arriving as `status = 0`.
+
+#### 4xx counts, but per session — not per request
+
+Every homogeneous-backend proxy throws this signal away. nginx hard-codes 403
+and 404 out of `max_fails`; Envoy's outlier detection cannot see 4xx at all;
+the canonical resilience4j config is `ignoreExceptions: HttpClientErrorException`.
+They are right for their setting: those systems balance across **replicas of one
+service**, where "every backend would reject it identically" is true by
+construction.
+
+songguo balances across **resellers**, and there it is false. A relay that has
+not implemented `/v1/messages/count_tokens`, rejects a parameter its siblings
+accept, or carries a stale model alias answers 400/404 while a healthy sibling
+answers 200. Discarding the signal makes that entire class of breakage
+permanently invisible to routing.
+
+What makes counting it safe is **not** a higher threshold — it is counting along
+a different axis. A single client with a malformed body produces identical 4xx
+against every vendor it touches, so any per-request streak would let one broken
+caller walk the whole fleet to dead. So the unit of evidence is the **distinct
+agent session**:
+
+- One session failing 500 times is **one client's bug** and demotes nothing. A
+  session already recorded contributes nothing however many times it retries.
+- Ten *different* sessions failing once each is **the vendor's bug** and demotes
+  it, on the same doubling cooldown ladder as every other failure.
+- Any success **clears the set**, so reaching ten requires ten distinct callers
+  to fail with no success anywhere among them. A vendor serving ordinary traffic
+  fine can never accumulate a demotion out of scattered client mistakes.
+- Past the threshold the ladder advances only on **new** sessions, so dead costs
+  14 distinct callers and one hammering client can never escalate it.
+- A request with **no session** (curl, most WS upgrades) is dropped rather than
+  counted — the same choice `ReportModel` makes for a model-less 429. When the
+  scope that makes a weak signal safe is missing, the signal goes, not the
+  safety.
+
+None of this adds a health state. A 4xx demotion lands in the ordinary
+**cooling**, and then the ordinary **dead** — same `demoteLocked`, same doubling
+ladder, same revival rule. The session set is an input to that decision, not a
+state to look at, so it is deliberately unexported: the reachable surface stays
+the three tiers that were already there.
+
+> History: 400/404/408/422 were **neutral** until 2026-07-31 — discarded on the
+> reasoning that "every vendor would reject it identically". That premise is
+> sound for replicas and wrong for resellers, which is what songguo actually
+> routes across. Neutral now means exactly one thing: the caller went away.
 
 Two deliberate asymmetries:
 
