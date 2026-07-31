@@ -11,7 +11,6 @@ import {
   rangeFromInputs,
   rangeLabel,
   rangeToInputs,
-  resolveRange,
 } from '../lib/timeRange';
 import styles from './TimeRangePicker.module.css';
 
@@ -81,17 +80,6 @@ export function TimeRangePicker({
     setOpen(false);
   };
 
-  // A live preview of what the typed range resolves to, so an expression can be
-  // checked before it is applied.
-  const preview = (() => {
-    const candidate = rangeFromInputs(from, to);
-    if (!candidate) return null;
-    const resolved = resolveRange(candidate);
-    if (!resolved) return null;
-    const span = resolved.until - resolved.since;
-    return { label: rangeLabel(candidate), span };
-  })();
-
   const activeLabel = rangeLabel(value);
 
   // Take react-day-picker's own layout classes and append ours, rather than
@@ -133,8 +121,6 @@ export function TimeRangePicker({
       {open && (
         <div className={styles.panel} role="dialog" aria-label="Time range">
           <div className={styles.absolute}>
-            <div className={styles.sectionTitle}>Absolute or relative</div>
-
             <label className={styles.field}>
               <span className={styles.fieldLabel}>From</span>
               <input
@@ -188,24 +174,13 @@ export function TimeRangePicker({
               />
             </div>
 
-            {error ? (
+            {error && (
               <div className={styles.error} role="alert">{error}</div>
-            ) : preview ? (
-              <div className={styles.preview}>
-                {preview.label} · {formatSpan(preview.span)}
-              </div>
-            ) : (
-              <div className={styles.preview}>&nbsp;</div>
             )}
 
             <button type="button" className={styles.apply} onClick={apply}>
               Apply time range
             </button>
-
-            <p className={styles.hint}>
-              Supports <code>now</code>, <code>now-24h</code>, <code>now-1d/d</code>. Units:
-              s, m, h, d, w, M, y — <code>m</code> is minutes, <code>M</code> is months.
-            </p>
           </div>
 
           <div className={styles.presets}>
@@ -233,13 +208,3 @@ export function TimeRangePicker({
     </div>
   );
 }
-
-/** Compact span for the preview line, e.g. "7d" or "45m". */
-function formatSpan(seconds: number): string {
-  if (seconds >= 86_400) return `${round(seconds / 86_400)}d`;
-  if (seconds >= 3_600) return `${round(seconds / 3_600)}h`;
-  if (seconds >= 60) return `${round(seconds / 60)}m`;
-  return `${seconds}s`;
-}
-
-const round = (n: number) => Math.round(n * 10) / 10;

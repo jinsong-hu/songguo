@@ -33,19 +33,30 @@
 
 /* An absolutely-positioned box shrink-to-fits its containing block, and .root is
    only as wide as the trigger button — so without an explicit width the panel
-   collapses to ~150px and both columns wrap into each other. The width is
-   stated here rather than left to the content for exactly that reason. */
+   collapses to ~150px and both columns wrap into each other. Hence an explicit
+   width.
+
+   That width is *derived from the calendar* rather than picked: the month grid is
+   the one thing here with a fixed intrinsic size (7 × --cal-day), so making the
+   left column exactly that wide is what puts the grid, the two fields and the
+   Apply button on the same pair of edges. Choosing the column width
+   independently is what left the calendar floating short of the fields' right
+   edge. Every term below is inside a border-box, so the 1px divider and the
+   panel's own 1px border have to be added back explicitly. */
 .panel {
+  --cal-day: 36px;
+  --cal-width: calc(var(--cal-day) * 7);
+  --pad: 14px;
+  --rail: 168px;
+
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
   z-index: 40;
-  width: 496px;
+  width: calc(var(--cal-width) + var(--pad) * 2 + 1px + var(--rail) + 2px);
   max-width: calc(100vw - 24px);
   display: grid;
-  /* Fixed preset rail; the calendar column takes the rest. Neither may collapse
-     below its content — the calendar needs 7 × 30px plus padding. */
-  grid-template-columns: minmax(266px, 1fr) 176px;
+  grid-template-columns: calc(var(--cal-width) + var(--pad) * 2 + 1px) var(--rail);
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--surface);
@@ -54,13 +65,13 @@
 }
 
 .absolute {
-  padding: 14px;
+  padding: var(--pad);
   border-right: 1px solid var(--border);
   min-width: 0;
 }
 
 .presets {
-  padding: 14px 0;
+  padding: var(--pad) 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -75,26 +86,28 @@
   letter-spacing: 0.04em;
   color: var(--text-muted);
   margin-bottom: 10px;
-}
-
-.presets .sectionTitle {
-  padding: 0 14px;
+  padding: 0 var(--pad);
 }
 
 .field {
-  display: block;
-  margin-bottom: 9px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
+/* Fixed width so both inputs start at the same x — "From" is the wider label, so
+   it sets the column and "To" pads out to it. */
 .fieldLabel {
-  display: block;
+  flex: none;
+  width: 30px;
   font-size: 11.5px;
   color: var(--text-muted);
-  margin-bottom: 4px;
 }
 
 .input {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   height: 30px;
   padding: 0 9px;
   border: 1px solid var(--border);
@@ -110,25 +123,19 @@
   border-color: var(--accent);
 }
 
-.preview,
+/* Only rendered when there is something to say, so it needs no reserved slot —
+   the panel growing by a line is itself part of the signal. */
 .error {
-  min-height: 16px;
   font-size: 11.5px;
-  margin-bottom: 10px;
-  font-variant-numeric: tabular-nums;
-}
-
-.preview {
-  color: var(--text-muted);
-}
-
-.error {
+  margin: 10px 0;
   color: var(--danger);
 }
 
 .apply {
   width: 100%;
   height: 30px;
+  /* The error line above is conditional, so the gap has to live here. */
+  margin-top: 12px;
   border: 1px solid var(--accent);
   border-radius: var(--radius-control);
   background: var(--accent);
@@ -166,11 +173,13 @@
   --rdp-selected-border: 1px solid var(--accent);
 
   /* Both pairs matter — the cell and the button inside it are sized separately,
-     and leaving the button at its 42px default overflows a 32px cell. */
-  --rdp-day-width: 32px;
-  --rdp-day-height: 32px;
-  --rdp-day_button-width: 30px;
-  --rdp-day_button-height: 30px;
+     and leaving the button at its 42px default overflows the cell. The cell takes
+     --cal-day unchanged: it is what the panel's width was derived from, so any
+     other value here would put the grid back out of step with the fields. */
+  --rdp-day-width: var(--cal-day);
+  --rdp-day-height: var(--cal-day);
+  --rdp-day_button-width: calc(var(--cal-day) - 2px);
+  --rdp-day_button-height: calc(var(--cal-day) - 2px);
   --rdp-day_button-border-radius: var(--radius-control);
   --rdp-day_button-border: 1px solid transparent;
 
@@ -217,21 +226,6 @@
   color: var(--text);
 }
 
-.hint {
-  margin: 10px 0 0;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--text-muted);
-}
-
-.hint code {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  padding: 1px 3px;
-  border-radius: 3px;
-  background: var(--surface-2);
-}
-
 .presetList {
   list-style: none;
   margin: 0;
@@ -251,7 +245,7 @@
   background: transparent;
   color: var(--text);
   font-size: 12.5px;
-  padding: 6px 14px;
+  padding: 6px var(--pad);
   /* Labels are short and known; keeping them on one line makes a too-narrow
      rail obvious instead of quietly wrapping into three lines. */
   white-space: nowrap;
@@ -269,9 +263,21 @@
 
 @media (max-width: 640px) {
   .panel {
-    /* Stack, and drop the 266px floor — below this width the viewport clamp
-       from max-width would otherwise fight the column minimum. */
-    width: auto;
+    /* Drop the rail alongside and stack, but keep deriving the width from the
+       calendar — `width: auto` cannot be used here. Shrink-to-fit measures the
+       space between the containing block and `right: 0`, and .root is only as
+       wide as the trigger, so auto collapses the panel to ~130px and spills the
+       calendar out of it. Same trap as the two-column width above.
+
+       The scrollbar gutter is part of that width and reserved unconditionally:
+       this is the branch that scrolls, and the app's scrollbars take real space
+       (global.css styles ::-webkit-scrollbar at 10px), so a scrollbar appearing
+       inside the content box would shave 10px off the calendar's last column
+       while the flex-sized fields quietly absorbed it. */
+    --sb: 10px;
+
+    width: calc(var(--cal-width) + var(--pad) * 2 + 2px + var(--sb));
+    scrollbar-gutter: stable;
     grid-template-columns: minmax(0, 1fr);
     max-height: calc(100vh - 96px);
     overflow-y: auto;

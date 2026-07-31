@@ -98,26 +98,25 @@ export interface Preset {
  * The preset rail. Snapped entries ("Today", "Yesterday") use the same
  * expression on both ends and lean on resolveRange's roundUp to cover the unit.
  *
- * Nothing reaches past 90 days because the janitor prunes calls at 90d — an
- * older window would render an honest but entirely empty chart.
+ * Deliberately a coarse ~4× ladder rather than every window someone might want:
+ * the two free-text fields already cover the in-between rungs, so listing
+ * 30 minutes beside 15 and 60 buys nothing and costs a rail long enough to have
+ * to scan. Only the ends are load-bearing — 5 minutes because that is "is it
+ * working right now", 90 days because the janitor prunes calls at 90d and so
+ * that is the widest window with any data in it.
  */
 export const PRESETS: Preset[] = [
   { label: 'Last 5 minutes', range: { kind: 'rolling', from: 'now-5m', to: 'now' } },
   { label: 'Last 15 minutes', range: { kind: 'rolling', from: 'now-15m', to: 'now' } },
-  { label: 'Last 30 minutes', range: { kind: 'rolling', from: 'now-30m', to: 'now' } },
   { label: 'Last 1 hour', range: { kind: 'rolling', from: 'now-1h', to: 'now' } },
-  { label: 'Last 3 hours', range: { kind: 'rolling', from: 'now-3h', to: 'now' } },
   { label: 'Last 6 hours', range: { kind: 'rolling', from: 'now-6h', to: 'now' } },
-  { label: 'Last 12 hours', range: { kind: 'rolling', from: 'now-12h', to: 'now' } },
   { label: 'Last 24 hours', range: { kind: 'rolling', from: 'now-24h', to: 'now' } },
-  { label: 'Last 2 days', range: { kind: 'rolling', from: 'now-2d', to: 'now' } },
   { label: 'Last 7 days', range: { kind: 'rolling', from: 'now-7d', to: 'now' } },
   { label: 'Last 30 days', range: { kind: 'rolling', from: 'now-30d', to: 'now' } },
   { label: 'Last 90 days', range: { kind: 'rolling', from: 'now-90d', to: 'now' } },
   { label: 'Today', range: { kind: 'rolling', from: 'now/d', to: 'now/d' } },
   { label: 'Yesterday', range: { kind: 'rolling', from: 'now-1d/d', to: 'now-1d/d' } },
   { label: 'This month', range: { kind: 'rolling', from: 'now/M', to: 'now/M' } },
-  { label: 'Last month', range: { kind: 'rolling', from: 'now-1M/M', to: 'now-1M/M' } },
 ];
 
 /** The default on first load — what the old three-tab control started on. */
