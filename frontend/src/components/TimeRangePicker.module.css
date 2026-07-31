@@ -132,6 +132,67 @@
   border-color: var(--accent-hover);
 }
 
+/* react-day-picker ships its own CSS module (no bare element selectors, so it
+   does not lean on the Tailwind preflight this app skips). We take its layout
+   and retheme it through the --rdp-* variables it exposes, overriding only the
+   few pieces those variables do not reach. */
+.calendar {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+
+  --rdp-accent-color: var(--accent);
+  --rdp-accent-background-color: var(--accent-weak);
+  --rdp-today-color: var(--accent);
+  --rdp-day-width: 30px;
+  --rdp-day-height: 30px;
+  --rdp-nav-height: 26px;
+  --rdp-weekday-opacity: 1;
+  --rdp-outside-opacity: 0.35;
+  --rdp-disabled-opacity: 0.28;
+  --rdp-selected-border: 1px solid var(--accent);
+
+  font-size: 12px;
+  color: var(--text);
+}
+
+.calendarWeekday {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.calendarCaption {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.calendarDayButton {
+  border-radius: var(--radius-control);
+  font-size: 12px;
+}
+
+.calendarDayButton:hover {
+  background: var(--surface-2);
+}
+
+.calendarMiddle {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+.calendarNav {
+  color: var(--text-muted);
+  border-radius: var(--radius-control);
+}
+
+.calendarNav:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
 .hint {
   margin: 10px 0 0;
   font-size: 11px;

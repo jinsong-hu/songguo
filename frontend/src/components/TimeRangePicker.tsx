@@ -1,8 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Clock } from 'lucide-react';
+import { DayPicker } from 'react-day-picker';
+import rdp from 'react-day-picker/style.module.css';
 import {
   PRESETS,
   type TimeRange,
+  calendarBounds,
+  calendarSelection,
+  rangeFromCalendar,
   rangeFromInputs,
   rangeLabel,
   rangeToInputs,
@@ -89,6 +94,26 @@ export function TimeRangePicker({
 
   const activeLabel = rangeLabel(value);
 
+  // Take react-day-picker's own layout classes and append ours, rather than
+  // replacing them — the library's grid geometry is worth keeping.
+  const calendarClassNames = useMemo(
+    () => ({
+      ...rdp,
+      weekday: `${rdp.weekday} ${styles.calendarWeekday}`,
+      caption_label: `${rdp.caption_label} ${styles.calendarCaption}`,
+      day_button: `${rdp.day_button} ${styles.calendarDayButton}`,
+      range_middle: `${rdp.range_middle} ${styles.calendarMiddle}`,
+      button_next: `${rdp.button_next} ${styles.calendarNav}`,
+      button_previous: `${rdp.button_previous} ${styles.calendarNav}`,
+    }),
+    [],
+  );
+
+  // Recomputed from the fields, so the grid shades whatever they currently mean
+  // — including a relative expression's implied window.
+  const selected = useMemo(() => calendarSelection(from, to), [from, to]);
+  const bounds = useMemo(() => calendarBounds(), []);
+
   return (
     <div className={styles.root} ref={rootRef}>
       <button
@@ -137,6 +162,28 @@ export function TimeRangePicker({
                 onKeyDown={(e) => e.key === 'Enter' && apply()}
               />
             </label>
+
+            <div className={styles.calendar}>
+              <DayPicker
+                mode="range"
+                classNames={calendarClassNames}
+                selected={selected}
+                defaultMonth={selected?.from}
+                startMonth={bounds.fromDate}
+                endMonth={bounds.toDate}
+                disabled={{ before: bounds.fromDate, after: bounds.toDate }}
+                showOutsideDays
+                onSelect={(next) => {
+                  if (!next?.from) return;
+                  // Writing back into the fields keeps them the single source of
+                  // truth; the grid is an input method, not a parallel state.
+                  const picked = rangeFromCalendar(next.from, next.to);
+                  setFrom(picked.from);
+                  setTo(picked.to);
+                  setError(null);
+                }}
+              />
+            </div>
 
             {error ? (
               <div className={styles.error} role="alert">{error}</div>

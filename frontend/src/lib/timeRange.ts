@@ -200,3 +200,54 @@ export function rangeToInputs(range: TimeRange): { from: string; to: string } {
     to: dayjs(range.to * 1000).format(ABSOLUTE_FMT),
   };
 }
+
+/** Render a Date in the form the picker's fields use. */
+export function formatInput(d: Date): string {
+  return dayjs(d).format(ABSOLUTE_FMT);
+}
+
+/**
+ * The window the calendar should highlight for the current field contents.
+ *
+ * Deliberately resolves the fields rather than reading only absolute ranges, so
+ * the grid also shades what a relative expression currently covers — typing
+ * `now-7d` lights up the last seven days. Undefined when the fields do not yet
+ * make a range.
+ */
+export function calendarSelection(
+  from: string,
+  to: string,
+  now?: Date,
+): { from: Date; to: Date } | undefined {
+  const candidate = rangeFromInputs(from, to);
+  if (!candidate) return undefined;
+  const resolved = resolveRange(candidate, now);
+  if (!resolved) return undefined;
+  return { from: new Date(resolved.since * 1000), to: new Date(resolved.until * 1000) };
+}
+
+/**
+ * Field contents for a range picked on the calendar. The grid has day
+ * granularity, so the days are widened to their edges — anything else would
+ * silently truncate the last day to midnight.
+ *
+ * The result contains no `now`, so applying it pins the range to absolute,
+ * which is what clicking specific dates on a calendar means.
+ */
+export function rangeFromCalendar(from: Date, to?: Date): { from: string; to: string } {
+  const start = dayjs(from).startOf('day');
+  const end = dayjs(to ?? from).endOf('day');
+  return { from: start.format(ABSOLUTE_FMT), to: end.format(ABSOLUTE_FMT) };
+}
+
+/**
+ * Days the calendar should refuse. Nothing in the future has data, and the
+ * janitor prunes calls at 90 days, so an older pick would render an honest but
+ * empty chart. Matches the reach of the preset rail.
+ */
+export function calendarBounds(now: Date = new Date()): { fromDate: Date; toDate: Date } {
+  return {
+    fromDate: dayjs(now).subtract(90, 'day').startOf('day').toDate(),
+    toDate: dayjs(now).endOf('day').toDate(),
+  };
+}

@@ -1,5 +1,7 @@
 import { fileURLToPath, URL } from 'node:url';
-import { defineConfig } from 'vite';
+// vitest/config rather than vite: it is the same defineConfig widened to accept
+// the `test` block below, which vite's own types reject.
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
@@ -17,6 +19,12 @@ export default defineConfig({
   build: {
     outDir: '../backend/web/dist',
     emptyOutDir: true,
+  },
+  // happy-dom rather than jsdom: jsdom pulls an undici that needs Node >= 22 and
+  // dies with `webidl.util.markAsUncloneable is not a function` on Node 20.
+  test: {
+    environment: 'happy-dom',
+    globals: false,
   },
   server: {
     host: '127.0.0.1',

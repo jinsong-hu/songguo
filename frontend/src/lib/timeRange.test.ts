@@ -6,7 +6,11 @@ import {
   TARGET_POINTS,
   type TimeRange,
   deriveBucket,
+  calendarBounds,
+  calendarSelection,
+  formatInput,
   isRolling,
+  rangeFromCalendar,
   rangeFromInputs,
   rangeLabel,
   rangeToInputs,
@@ -227,6 +231,52 @@ describe('rangeToInputs', () => {
     const fields = rangeToInputs({ kind: 'absolute', from, to });
     expect(fields).toEqual({ from: '2026-07-14 09:00', to: '2026-07-21 09:00' });
     expect(rangeFromInputs(fields.from, fields.to)).toEqual({ kind: 'absolute', from, to });
+  });
+});
+
+describe('calendar helpers', () => {
+  it('highlights the window the fields currently mean, relative included', () => {
+    const got = calendarSelection('now-7d', 'now', NOW);
+    expect(got).toBeDefined();
+    expect(Math.round((got!.to.valueOf() - got!.from.valueOf()) / 1000)).toBe(7 * 86_400);
+  });
+
+  it('highlights an absolute window', () => {
+    const got = calendarSelection('2026-07-14 09:00', '2026-07-16 09:00', NOW);
+    expect(formatInput(got!.from)).toBe('2026-07-14 09:00');
+    expect(formatInput(got!.to)).toBe('2026-07-16 09:00');
+  });
+
+  it('has no selection while the fields are unusable', () => {
+    expect(calendarSelection('', 'now', NOW)).toBeUndefined();
+    expect(calendarSelection('garbage', 'now', NOW)).toBeUndefined();
+  });
+
+  it('widens a picked day range to its edges', () => {
+    const picked = rangeFromCalendar(
+      new Date('2026-07-14T11:22:33'),
+      new Date('2026-07-16T04:05:06'),
+    );
+    // Without the widening the final day would be truncated to midnight and the
+    // chart would silently omit it.
+    expect(picked.from).toBe('2026-07-14 00:00');
+    expect(picked.to).toBe('2026-07-16 23:59');
+  });
+
+  it('treats a single clicked day as that whole day', () => {
+    const picked = rangeFromCalendar(new Date('2026-07-14T11:22:33'));
+    expect(picked).toEqual({ from: '2026-07-14 00:00', to: '2026-07-14 23:59' });
+  });
+
+  it('produces fields that pin to an absolute range', () => {
+    const picked = rangeFromCalendar(new Date('2026-07-14T00:00:00'));
+    expect(rangeFromInputs(picked.from, picked.to)?.kind).toBe('absolute');
+  });
+
+  it('bounds the grid to the 90-day retention horizon and today', () => {
+    const { fromDate, toDate } = calendarBounds(NOW);
+    expect(fromDate.valueOf()).toBe(dayjs(NOW).subtract(90, 'day').startOf('day').valueOf());
+    expect(toDate.valueOf()).toBe(dayjs(NOW).endOf('day').valueOf());
   });
 });
 
