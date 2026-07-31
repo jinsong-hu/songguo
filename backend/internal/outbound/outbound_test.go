@@ -3,8 +3,8 @@ package outbound
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"encoding/base64"
+	"encoding/binary"
 	"io"
 	"net"
 	"net/http"
