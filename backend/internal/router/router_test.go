@@ -163,6 +163,110 @@ func TestEqualWeightsSplitEvenly(t *testing.T) {
 	}
 }
 
+// parkedAndWeightedYAML is a parked vendor (weight 0) declared FIRST, so the
+// declaration-order tiebreak would favor it if the draw ever let it through.
+const parkedAndWeightedYAML = `
+vendors:
+  - name: parked
+    origin: https://parked.example
+    served_models: [m]
+    priority: 1
+    weight: 0
+    credential: {id: p1, api_key: k}
+  - name: live
+    origin: https://live.example
+    served_models: [m]
+    priority: 1
+    weight: 1
+    credential: {id: l1, api_key: k}
+`
+
+// Weight 0 parks a vendor: no share of its tier, so a weighted sibling leads
+// every single time — not merely most of the time, since the draw is +Inf rather
+// than a very large finite number.
+func TestZeroWeightTakesNoShareOfItsTier(t *testing.T) {
+	snap := buildSnapshot(t, parkedAndWeightedYAML)
+	r := New(staticSnap(snap), Options{Logger: quietLogger()})
+
+	for i := 0; i < 500; i++ {
+		got, err := r.Candidates("m")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got[0].Vendor.Name != "live" {
+			t.Fatalf("lead = %q on call %d, want live: weight 0 takes no share", got[0].Vendor.Name, i)
+		}
+		// Parking DEMOTES; it must never shorten the candidate list (see the
+		// package invariant).
+		if len(got) != 2 {
+			t.Fatalf("candidates = %d, want 2: parking must not exclude", len(got))
+		}
+	}
+}
+
+// Parking is a share of the tier, not a veto — with nobody to lose the draw to,
+// a parked vendor still serves. Priority is still the strict tier it always was,
+// so parking the only vendor in the winning tier changes nothing; disabling it,
+// or giving another vendor that tier, is what takes it out.
+func TestZeroWeightStillServesWithNoWeightedRival(t *testing.T) {
+	t.Run("alone", func(t *testing.T) {
+		snap := buildSnapshot(t, `
+vendors:
+  - name: parked
+    origin: https://parked.example
+    served_models: [m]
+    weight: 0
+    credential: {id: p1, api_key: k}
+`)
+		r := New(staticSnap(snap), Options{Logger: quietLogger()})
+		if got := leadName(t, r); got != "parked" {
+			t.Fatalf("lead = %q, want parked: a parked vendor with no rival still serves", got)
+		}
+	})
+
+	t.Run("better tier", func(t *testing.T) {
+		snap := buildSnapshot(t, `
+vendors:
+  - name: parked
+    origin: https://parked.example
+    served_models: [m]
+    priority: 1
+    weight: 0
+    credential: {id: p1, api_key: k}
+  - name: backup
+    origin: https://backup.example
+    served_models: [m]
+    priority: 2
+    weight: 5
+    credential: {id: b1, api_key: k}
+`)
+		r := New(staticSnap(snap), Options{Logger: quietLogger()})
+		if got := leadName(t, r); got != "parked" {
+			t.Fatalf("lead = %q, want parked: priority is a strict tier above weight", got)
+		}
+	})
+}
+
+// A weight change never recalculates pins. Stickiness sorts above the draw, so a
+// session already on a vendor keeps it — and its warm prompt cache — after the
+// vendor is parked, while new sessions go to the weighted one. Parking stops NEW
+// sessions; an operator who needs traffic to stop now disables the provider.
+func TestParkingKeepsExistingSessionPins(t *testing.T) {
+	snap := buildSnapshot(t, parkedAndWeightedYAML)
+	r := New(staticSnap(snap), Options{Logger: quietLogger()})
+
+	pinned := sessionSel("session-1")
+	r.Pin(pinned, "parked")
+	for i := 0; i < 50; i++ {
+		if got := leadFor(t, r, pinned); got != "parked" {
+			t.Fatalf("lead = %q on call %d, want the pinned parked vendor", got, i)
+		}
+	}
+	if got := leadFor(t, r, sessionSel("session-2")); got != "live" {
+		t.Fatalf("new session lead = %q, want live: parking stops new sessions", got)
+	}
+}
+
 // An injected Rand makes the draw reproducible, which is what lets the sticky
 // and health tests assert an exact leader within one priority tier.
 func TestInjectedRandMakesSelectionDeterministic(t *testing.T) {

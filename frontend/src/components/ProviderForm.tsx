@@ -333,6 +333,10 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
       setErr('Priority, weight and max concurrency must be numbers.');
       return;
     }
+    if (wt < 0) {
+      setErr('Weight cannot be negative. Use 0 to park this provider.');
+      return;
+    }
     if (conc < 0) {
       setErr('Max concurrency cannot be negative. Use 0 for unlimited.');
       return;
@@ -502,7 +506,9 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
             value={weight}
             onChange={(e) => setWeight(e.target.value)}
           />
-          <span className={cards.hint}>Within a priority.</span>
+          <span className={cards.hint}>
+            Share within a priority. 0 = parked: no new sessions, still pinnable.
+          </span>
         </div>
         <div className={cards.field}>
           <label className={cards.label} htmlFor="s-conc">

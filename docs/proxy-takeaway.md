@@ -144,7 +144,9 @@ The router orders remaining candidates by one lexicographic sort key:
 1. health — live, then cooling, then dead
 2. session stickiness — the vendor that served this session's previous turn
 3. lower numeric priority (a strict tier, not a weight)
-4. a weighted random draw inside the same priority
+4. a weighted random draw inside the same priority (`weight: 0` parks a vendor —
+   no share of its tier, so no new session lands there, though it is still a
+   candidate and an explicit pin still reaches it)
 
 Only `targets[0]` is used. The remaining order is not a retry list.
 

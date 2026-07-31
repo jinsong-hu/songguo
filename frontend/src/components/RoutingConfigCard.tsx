@@ -83,9 +83,31 @@ function gridVariant(editableEnabled: boolean, inherited: boolean): string {
   return inherited ? styles.noEnabledEditor : styles.compactEditor;
 }
 
+/**
+ * A field's current value as a number, falling back while it is unusable. Blank
+ * counts as unusable: Number('') is 0, and 0 is now a meaningful weight
+ * (parked), so a cleared field would otherwise preview as parked.
+ */
 function numeric(value: string, fallback: number): number {
+  if (value.trim() === '') return fallback;
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+/** Grid track for one segment: parked providers get logo + name, not a share. */
+function track(weight: number): string {
+  return weight > 0 ? `${weight}fr` : 'minmax(0, max-content)';
+}
+
+function segmentTitle(name: string, weight: number, share: number): string {
+  if (weight > 0) {
+    return `${name}: weight ${weight}, approximately ${share}% of new sessions in this priority`;
+  }
+  return (
+    `${name}: weight 0 — parked. It takes no share of this priority, so no new session lands ` +
+    `here while a weighted provider shares the tier. Sessions already pinned to it keep it, ` +
+    `and a service-level weight override or an explicit provider pin still reaches it.`
+  );
 }
 
 export function RoutingConfigCard({
@@ -104,7 +126,7 @@ export function RoutingConfigCard({
     .map((item) => ({
       ...item,
       priority: Math.max(0, numeric(item.priority, item.defaultPriority ?? 0)),
-      weight: Math.max(1, numeric(item.weight, item.defaultWeight ?? 1)),
+      weight: Math.max(0, numeric(item.weight, item.defaultWeight ?? 1)),
     }));
   const priorities = [...new Set(active.map((item) => item.priority))].sort((a, b) => a - b);
   const inactive = items.filter((item) => !item.enabled || !item.available);
@@ -143,17 +165,18 @@ export function RoutingConfigCard({
                 </span>
                 <div
                   className={styles.segments}
-                  style={{ gridTemplateColumns: layer.map((item) => `${item.weight}fr`).join(' ') }}
+                  style={{ gridTemplateColumns: layer.map((item) => track(item.weight)).join(' ') }}
                 >
                   {layer.map((item) => {
-                    const share = Math.round((item.weight / total) * 100);
+                    // total is 0 only when every provider in the tier is parked.
+                    const share = total > 0 ? Math.round((item.weight / total) * 100) : 0;
                     return (
                       <Row
                         key={item.id}
                         href={item.href}
-                        className={styles.segment}
+                        className={item.weight > 0 ? styles.segment : `${styles.segment} ${styles.parked}`}
                         style={{ '--routing-color': item.color } as CSSProperties}
-                        title={`${item.name}: weight ${item.weight}, approximately ${share}% of new sessions in this priority`}
+                        title={segmentTitle(item.name, item.weight, share)}
                       >
                         <span className={styles.segmentIcon}>{item.icon}</span>
                         <span className={styles.segmentName}>{item.name}</span>
@@ -262,7 +285,7 @@ export function RoutingConfigCard({
                   <input
                     className="input"
                     type="number"
-                    min={1}
+                    min={0}
                     step={1}
                     value={item.weight}
                     disabled={fieldsDisabled}

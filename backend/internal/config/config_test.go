@@ -162,19 +162,28 @@ func TestEmptyConfigValid(t *testing.T) {
 	}
 }
 
+// 0 is a real weight — it parks the vendor — so normalization only has a
+// negative to correct, and it lands on the nearest legal value rather than
+// inventing a share the operator never asked for.
 func TestWeightNormalization(t *testing.T) {
 	cfg := Config{
 		Vendors: []Vendor{
 			{Name: "a", Origin: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}},
 			{Name: "b", Origin: "https://b.example.com", ServedModels: []string{"m2"}, Weight: 5, Credential: Credential{APIKey: "k"}},
 			{Name: "c", Origin: "https://c.example.com", ServedModels: []string{"m3"}, Weight: -3, Credential: Credential{APIKey: "k"}},
+			{Name: "d", Origin: "https://d.example.com", ServedModels: []string{"m4"}, Weight: 2,
+				ModelRoutes: map[string]ModelRoute{"m4": {Enabled: true, Weight: -1}},
+				Credential:  Credential{APIKey: "k"}},
 		},
 	}
 	snap, err := Build(cfg)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	want := map[string]int{"a": 1, "b": 5, "c": 1}
+	if routed := snap.VendorsForModel("m4"); len(routed) != 1 || routed[0].Weight != 0 {
+		t.Errorf("model route weight = %+v, want a negative override normalized to 0 (parked)", routed)
+	}
+	want := map[string]int{"a": 0, "b": 5, "c": 0, "d": 2}
 	for name, w := range want {
 		v, _ := snap.Vendor(name)
 		if v.Weight != w {

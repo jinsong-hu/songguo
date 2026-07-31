@@ -144,8 +144,12 @@ function ServiceRouting({
         toast.error(`${item.name}: priority must be a whole number of 0 or greater.`);
         return;
       }
-      if (item.custom && (!Number.isInteger(weight) || weight < 1)) {
-        toast.error(`${item.name}: weight must be a whole number of 1 or greater.`);
+      // Blank is caught before the range check: Number('') is 0, and 0 now parks
+      // the provider for this model — a cleared field must not silently mean that.
+      if (item.custom && (item.weight.trim() === '' || !Number.isInteger(weight) || weight < 0)) {
+        toast.error(
+          `${item.name}: weight must be a whole number of 0 or greater. 0 parks it — no new sessions.`,
+        );
         return;
       }
     }
@@ -173,7 +177,7 @@ function ServiceRouting({
   return (
     <RoutingConfigCard
       title="Routing"
-      hint="Lower priority numbers are strict failover tiers. Weight controls the share of new sessions within one priority; existing sessions stay pinned while their provider is healthy."
+      hint="Lower priority numbers are strict failover tiers. Weight controls the share of new sessions within one priority; existing sessions stay pinned while their provider is healthy. Weight 0 parks a provider for this model — no share of its tier, but still reachable by an explicit provider pin; a custom weight here also gives a provider parked by default a share of this one service."
       items={items}
       saving={saving}
       dirty={dirty}

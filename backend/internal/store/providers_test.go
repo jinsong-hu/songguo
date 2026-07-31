@@ -109,6 +109,42 @@ func TestProviderCRUDRoundTrip(t *testing.T) {
 	}
 }
 
+// Weight 0 is a value the store must keep, not a missing one to fill in: it
+// parks the provider (see Provider.Weight). Only a negative weight is corrected,
+// and to 0 rather than to an invented share.
+func TestProviderWeightZeroRoundTrips(t *testing.T) {
+	s := openTestStore(t)
+
+	parked, err := s.CreateProvider(NewProvider{Name: "parked", Enabled: true, Weight: 0, APIKey: "sk-a"})
+	if err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+	if parked.Weight != 0 {
+		t.Fatalf("created weight = %d, want 0 preserved", parked.Weight)
+	}
+
+	zero, negative := 0, -3
+	weighted, err := s.CreateProvider(NewProvider{Name: "weighted", Enabled: true, Weight: 4, APIKey: "sk-b"})
+	if err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+	updated, err := s.UpdateProvider(weighted.ID, ProviderUpdate{Weight: &zero})
+	if err != nil {
+		t.Fatalf("UpdateProvider(0): %v", err)
+	}
+	if updated.Weight != 0 {
+		t.Fatalf("weight after parking = %d, want 0", updated.Weight)
+	}
+
+	updated, err = s.UpdateProvider(weighted.ID, ProviderUpdate{Weight: &negative})
+	if err != nil {
+		t.Fatalf("UpdateProvider(-3): %v", err)
+	}
+	if updated.Weight != 0 {
+		t.Fatalf("weight after a negative = %d, want it clamped to 0", updated.Weight)
+	}
+}
+
 func TestProviderModelRoutingRoundTripAndPreserve(t *testing.T) {
 	s := openTestStore(t)
 	pvd, err := s.CreateProvider(NewProvider{

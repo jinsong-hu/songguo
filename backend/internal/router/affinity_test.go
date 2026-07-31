@@ -7,18 +7,22 @@ import (
 )
 
 // twoVendorSamePriorityYAML is two interchangeable vendors in one tier — the
-// shape where the weighted draw, and therefore stickiness, actually matters.
+// shape where the weighted draw, and therefore stickiness, actually matters. The
+// weights are explicit because 0 means parked — no share of the tier — so an
+// omitted weight would be a fixture with no draw at all.
 const twoVendorSamePriorityYAML = `
 vendors:
   - name: alpha
     origin: https://alpha.example
     served_models: [m]
     priority: 1
+    weight: 1
     credential: {id: a1, api_key: k}
   - name: beta
     origin: https://beta.example
     served_models: [m]
     priority: 1
+    weight: 1
     credential: {id: b1, api_key: k}
 `
 
@@ -95,7 +99,10 @@ func TestStickyYieldsWhenPinnedVendorFails(t *testing.T) {
 	// And the session re-pins to wherever it actually landed, so it does not
 	// flap back the moment the original recovers.
 	r.Pin(sel, got)
-	clk.Advance(time.Hour) // original vendor's cooldown lapses
+	// Past the demoted vendor's cooldown but well inside the sticky TTL: the
+	// assertion below is about a LIVE session, so the pin has to outlast the
+	// recovery. Advancing an hour would expire it and leave the lead to the draw.
+	clk.Advance(time.Minute)
 	if again := leadFor(t, r, sel); again != got {
 		t.Fatalf("lead = %q, want %q: a recovered vendor must not yank a live session back", again, got)
 	}

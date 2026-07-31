@@ -1232,7 +1232,7 @@ components:
         name: { type: string }
         vendor: { type: string }
         priority: { type: integer }
-        weight: { type: integer }
+        weight: { type: integer, minimum: 0, description: "Share of new sessions within the priority tier. 0 parks the provider: no share, but still reachable by an X-Songguo-Provider pin or a service-level weight override, and sessions already pinned to it keep it." }
         enabled: { type: boolean }
         catalog_id: { type: string }
         proxy_id: { type: string, description: "Assigned outbound proxy id; empty means explicit direct access." }
@@ -1252,7 +1252,7 @@ components:
         name: { type: string }
         vendor: { type: string }
         priority: { type: integer }
-        weight: { type: integer }
+        weight: { type: integer, minimum: 0, description: "Share of new sessions within the priority tier; defaults to 1 when omitted. 0 parks the provider." }
         enabled: { type: boolean }
         catalog_id: { type: string }
         allow_unmatched: { type: boolean }
@@ -1268,7 +1268,7 @@ components:
         name: { type: string }
         vendor: { type: string }
         priority: { type: integer }
-        weight: { type: integer }
+        weight: { type: integer, minimum: 0, description: "Share of new sessions within the priority tier. 0 parks the provider." }
         enabled: { type: boolean }
         proxy_id: { type: string, description: "Stored proxy id, or an empty string for explicit direct access." }
         allow_unmatched: { type: boolean }
@@ -1321,7 +1321,7 @@ components:
         provider_enabled: { type: boolean, description: "Whole-provider enabled state." }
         routable: { type: boolean, description: "True when the provider is complete, globally enabled, and enabled for this service." }
         priority: { type: integer }
-        weight: { type: integer }
+        weight: { type: integer, description: "Effective share of new sessions for this (model, provider) — the override when set, else the provider default. 0 is parked." }
         default_priority: { type: integer }
         default_weight: { type: integer }
         priority_override: { type: integer, nullable: true }
@@ -1333,7 +1333,7 @@ components:
         model: { type: string }
         enabled: { type: boolean }
         priority: { type: integer, minimum: 0 }
-        weight: { type: integer, minimum: 1 }
+        weight: { type: integer, minimum: 0, description: "0 parks this provider for this model: no share of its tier, still reachable by an explicit provider pin." }
         inherit_priority: { type: boolean, description: "Clear the service override and inherit the provider default." }
         inherit_weight: { type: boolean, description: "Clear the service override and inherit the provider default." }
     ServiceStats:
@@ -1402,7 +1402,7 @@ components:
         base_url: { type: string }
         served_models: { type: array, items: { type: string } }
         priority: { type: integer }
-        weight: { type: integer }
+        weight: { type: integer, description: "Share of new sessions within the priority tier; 0 is parked." }
         credential: { $ref: "#/components/schemas/Credential" }
         prices: { type: object, additionalProperties: { $ref: "#/components/schemas/Price" } }
         stats: { $ref: "#/components/schemas/VendorStats" }

@@ -69,7 +69,7 @@ A model channel **or** an MCP channel.
 | `base_url` | Where requests are forwarded |
 | `served_models[]` | Which models this channel can serve (used to auto-derive routing) |
 | `credentials[]` | The **号池** — one or more keys, rotated to spread per-key rate limits |
-| `weight` / `priority` | Routing policy inputs |
+| `weight` / `priority` | Routing policy inputs (`weight: 0` parks the channel: no share of its tier, still pinnable) |
 | `per_model_price` | For true-cost metering + cheapest-route |
 | `health` | Read passively from real request outcomes, graded by conclusiveness: conclusive endpoint faults (connection refused, NXDOMAIN, bad TLS cert) demote at once; a 401 demotes every vendor sharing that credential; ambiguous ones (timeout, reset, 5xx, 429, 403) need 3 in a row. Caller-side 4xx and client aborts never count. Demoted = ranks last for 30s, never excluded. Cross-request only: the failing request is still surfaced verbatim |
 
@@ -105,7 +105,7 @@ The gateway **auto-derives** "which channels can serve model X" from each channe
 
 A failing vendor *is* brought down automatically, but only for the **next** request: the failing call still sees the real error and the client decides whether to retry. Repeated demotions with no success in between mark a vendor **dead**, which does not lapse on a timer — it waits for a success or an operator. Demotion never *excludes*, so if every candidate is dead the least-bad one still serves and the first success clears it.
 
-Within a priority tier the split is a weighted random draw, so `weight` is a share of traffic rather than an exact rotation. **No** New-API-style model-group / 模型重定向 / 倍率分组 config subsystem.
+Within a priority tier the split is a weighted random draw, so `weight` is a share of traffic rather than an exact rotation. `weight: 0` **parks** a channel — no share of its tier, so no new session lands there, but it stays configured and reachable by an explicit provider pin or a per-service weight override, and its existing sessions keep it. **No** New-API-style model-group / 模型重定向 / 倍率分组 config subsystem.
 
 ```
 Channel A: models=[opus, gpt-4o],     creds=[…], price=…

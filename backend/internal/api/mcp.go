@@ -121,7 +121,7 @@ func (a *api) buildMCPServer(enableWrites bool) *mcp.Server {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "create_provider",
-		Description: "Create an upstream provider. Fields: name (required), vendor, api_key, priority, weight, enabled, allow_unmatched, quirks, models (name + input/output/cached_input prices + unit), and endpoints (each a wire + its full upstream URL + adapter/auth scheme).",
+		Description: "Create an upstream provider. Fields: name (required), vendor, api_key, priority, weight (share of new sessions within the priority tier; defaults to 1, and 0 parks the provider — configured and pinnable, but taking no share), enabled, allow_unmatched, quirks, models (name + input/output/cached_input prices + unit), and endpoints (each a wire + its full upstream URL + adapter/auth scheme).",
 	}, a.mcpCreateProvider)
 
 	mcp.AddTool(srv, &mcp.Tool{

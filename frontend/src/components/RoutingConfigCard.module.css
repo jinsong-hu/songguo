@@ -68,6 +68,14 @@
   color: var(--text);
 }
 
+/* Weight 0: parked. The track is sized to the logo and name instead of a share
+   of the row (see track() in the component), so the provider stays visible and
+   clickable without claiming traffic it will not get. The dashed edge is the
+   only styling difference — it is still a live candidate, not a disabled one. */
+.parked {
+  border-style: dashed;
+}
+
 /* Rows that link to a detail page. The hover colors are stated per variant so
    they outrank the global a:hover, which would otherwise recolor the label. */
 .linked {

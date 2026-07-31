@@ -90,12 +90,22 @@ Choosing **which** vendor serves a request, when a model has several candidates,
 is a routing decision — health → sticky session → priority → weight, and the proxy
 forwards to the **first** one.
 
-Two of those four deserve stating plainly, because they are easy to get backwards:
+Three of those four deserve stating plainly, because they are easy to get backwards:
 
 - **Priority is a strict tier, not a weight.** While any priority-1 vendor is
   live, priority-2 receives nothing. That keeps two knobs with one job each: same
   priority + different weights is *load balancing*, different priority is
   *failover*. To split 90/10, use one priority and weights 9 and 1.
+- **Weight 0 parks a vendor** — the third state between "in rotation" and
+  "disabled". It takes no share of its tier, so no new session lands there while
+  a weighted vendor shares its priority, but it stays a full candidate: still
+  reachable by an `X-Songguo-Provider` pin or a per-service weight override, and
+  the sessions already pinned to it keep it. Parking is a share of zero, not a
+  filter, which is why it obeys the tier like any other weight — a parked vendor
+  alone in the winning tier still serves (nothing there to lose the draw to), and
+  the way to take it out is to disable it. Disabling stops traffic **now** at the
+  cost of a cold prompt cache per live session; parking stops only *new* sessions
+  and lets the existing ones drain warm.
 - **Stickiness distributes sessions, not requests.** A session pins to whichever
   vendor served its last turn, so an agent conversation keeps one provider and
   its prompt cache — on a 200k-token context that is roughly a 10× difference in

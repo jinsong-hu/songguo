@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -100,6 +101,13 @@ func decodeBody(t *testing.T, rec *httptest.ResponseRecorder, v any) {
 	if err := json.Unmarshal(rec.Body.Bytes(), v); err != nil {
 		t.Fatalf("decode body %q: %v", rec.Body.String(), err)
 	}
+}
+
+// isBadRequest reports whether err is a client-facing 400 from a *Data method,
+// as opposed to a server-side error that would become a 500.
+func isBadRequest(err error) bool {
+	var ae *apiError
+	return errors.As(err, &ae) && ae.status == http.StatusBadRequest
 }
 
 // --- (a) auth ---

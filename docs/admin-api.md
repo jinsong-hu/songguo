@@ -55,7 +55,7 @@ served **without** auth — it describes shapes only and carries no secrets.
 | `PATCH /api/proxies/{id}` · `DELETE` | Update / delete a proxy. Assigned proxies cannot be deleted until their providers are set to Direct or another proxy. |
 | `POST /api/proxies/{id}/test` | Probe an origin through the proxy. Dials an assigned provider's origin, or a default vendor origin when none is assigned; sends no credential, and reports the `target` it used. |
 | `GET /api/services` | Auto-derived, model-centric services (each model → the providers behind it). |
-| `PATCH /api/services/routing/{provider_id}` | Override priority/weight or enable/disable one provider within a model service. |
+| `PATCH /api/services/routing/{provider_id}` | Override priority/weight or enable/disable one provider within a model service. `weight: 0` parks it for this model (no share of its tier, still pinnable); `inherit_weight` clears the override. |
 | `GET /api/vendors` · `POST /api/vendors/{name}/test` | List snapshot vendors / probe one. |
 | `GET /api/catalog` · `GET /api/wires` | Provider presets / registered wire names. |
 | `GET /api/settings` | Read runtime settings. |

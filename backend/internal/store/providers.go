@@ -15,10 +15,13 @@ import (
 // for routing. The key is stored plaintext at rest (it must be replayed upstream,
 // so it cannot be hashed); it is never serialized to the API in the clear, only masked.
 type Provider struct {
-	ID        string
-	Name      string
-	Vendor    string // catalog vendor grouping, for display only
-	Priority  int
+	ID       string
+	Name     string
+	Vendor   string // catalog vendor grouping, for display only
+	Priority int
+	// Weight is this provider's share of new sessions within its priority tier.
+	// 0 parks it: no share, but still routable by an explicit pin or a
+	// service-level weight override. See internal/router.
 	Weight    int
 	Enabled   bool
 	CatalogID string // provenance: which catalog preset this came from, if any
@@ -74,6 +77,8 @@ type ProviderModel struct {
 }
 
 // NewProvider describes a provider to create. APIKey carries the plaintext key.
+// Weight is stored as given (0 = parked, see Provider.Weight); a caller that
+// means "the usual default" passes 1 rather than leaving it zero.
 type NewProvider struct {
 	Name           string
 	Vendor         string
@@ -299,10 +304,6 @@ func (s *Store) CreateProvider(np NewProvider) (Provider, error) {
 	if err != nil {
 		return Provider{}, err
 	}
-	weight := np.Weight
-	if weight <= 0 {
-		weight = 1
-	}
 	quirks, err := encodeQuirks(np.Quirks)
 	if err != nil {
 		return Provider{}, err
@@ -319,7 +320,7 @@ func (s *Store) CreateProvider(np NewProvider) (Provider, error) {
 	// and auth now live per-endpoint. Insert harmless placeholders.
 	_, err = tx.Exec(`INSERT INTO providers (id, name, vendor, base_url, priority, weight, enabled, catalog_id, api_key, proxy_id, allow_unmatched, max_concurrency, quirks, created_at, updated_at)
 		VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, np.Name, np.Vendor, np.Priority, weight, boolToInt(np.Enabled), np.CatalogID, np.APIKey,
+		id, np.Name, np.Vendor, np.Priority, maxZeroInt(np.Weight), boolToInt(np.Enabled), np.CatalogID, np.APIKey,
 		nullableID(np.ProxyID), boolToInt(np.AllowUnmatched), maxZeroInt(np.MaxConcurrency), quirks, now.Unix(), now.Unix())
 	if err != nil {
 		return Provider{}, fmt.Errorf("store: insert provider: %w", err)
@@ -365,12 +366,8 @@ func (s *Store) UpdateProvider(id string, upd ProviderUpdate) (Provider, error) 
 		args = append(args, *upd.Priority)
 	}
 	if upd.Weight != nil {
-		w := *upd.Weight
-		if w <= 0 {
-			w = 1
-		}
 		sets = append(sets, "weight = ?")
-		args = append(args, w)
+		args = append(args, maxZeroInt(*upd.Weight))
 	}
 	if upd.Enabled != nil {
 		sets = append(sets, "enabled = ?")
@@ -623,8 +620,9 @@ func encodeQuirks(q map[string]string) (string, error) {
 	return string(b), nil
 }
 
-// maxZeroInt clamps a negative limit to 0 (unlimited), so a bad value degrades
-// to "no limit" rather than to "nothing may pass".
+// maxZeroInt clamps a negative value to 0, the floor shared by the columns that
+// take one: max_concurrency (0 = unlimited, so a bad value degrades to "no
+// limit" rather than "nothing may pass") and weight (0 = parked).
 func maxZeroInt(n int) int {
 	if n < 0 {
 		return 0

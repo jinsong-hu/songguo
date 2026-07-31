@@ -82,6 +82,16 @@ service-specific disable also applies to an explicit provider pin when that
 request carries the model, but does not disable the provider's other models or
 its model-less submit/poll endpoints.
 
+`weight: 0` **parks** a provider: no share of its tier, so no new session lands
+there while a weighted provider shares its priority — but it stays configured and
+a full candidate. An explicit provider pin still reaches it, a `(model, provider)`
+weight override can still give it a share of one service, and sessions already
+pinned to it keep it (weight decides where a *new* session lands). Because
+parking is a share of zero rather than a filter, it obeys the tier like any other
+weight: a parked provider alone in the winning tier still serves. Disabling is the
+lever that stops traffic immediately, at the cost of a cold prompt cache for every
+live session.
+
 Health is learned passively from real requests — songguo never sends probe traffic.
 
 Failures are graded by the question *"would an identical retry fail identically?"*:

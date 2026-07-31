@@ -142,8 +142,12 @@ function DefaultRouting({
         toast.error(`${item.name}: priority must be a whole number of 0 or greater.`);
         return;
       }
-      if (!Number.isInteger(weight) || weight < 1) {
-        toast.error(`${item.name}: weight must be a whole number of 1 or greater.`);
+      // Blank is caught before the range check: Number('') is 0, and 0 now parks
+      // the provider — a cleared field must not silently mean that.
+      if (item.weight.trim() === '' || !Number.isInteger(weight) || weight < 0) {
+        toast.error(
+          `${item.name}: weight must be a whole number of 0 or greater. 0 parks it — no new sessions.`,
+        );
         return;
       }
     }
@@ -170,7 +174,7 @@ function DefaultRouting({
     <div className={styles.routing}>
       <RoutingConfigCard
         title="Default routing"
-        hint="These values apply to model-less requests and to services that use provider defaults. Lower priority numbers are strict failover tiers; weight splits new sessions within one tier. Select a provider's name to open its full settings."
+        hint="These values apply to model-less requests and to services that use provider defaults. Lower priority numbers are strict failover tiers; weight splits new sessions within one tier. Weight 0 parks a provider: it keeps no share of its tier but stays configured, still reachable by a service-level override or an explicit provider pin, and sessions already pinned to it keep it. Select a provider's name to open its full settings."
         items={items}
         saving={saving}
         dirty={dirty}

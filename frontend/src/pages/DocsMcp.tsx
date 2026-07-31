@@ -26,7 +26,7 @@ const WRITE_TOOLS: ReadonlyArray<[string, string]> = [
   ['create_proxy', 'Create a reusable HTTPS or SOCKS5 outbound proxy with optional username/password authentication.'],
   ['update_proxy', 'Update a proxy. Omit password to keep it, replace it, or set clear_password to remove it.'],
   ['delete_proxy', 'Delete an unassigned proxy; providers using it must be moved first.'],
-  ['create_provider', 'Create an upstream provider: name, vendor, api_key, priority, weight, enabled, quirks, models and wire endpoints.'],
+  ['create_provider', 'Create an upstream provider: name, vendor, api_key, priority, weight (0 parks it), enabled, quirks, models and wire endpoints.'],
   ['update_provider', 'Update a provider’s mutable fields, including proxy_id (empty means Direct). Supplying models or endpoints replaces those lists wholesale.'],
   ['delete_provider', 'Delete a provider by id; services it backed are re-derived without it.'],
   ['test_provider', 'Probe a provider’s host for reachability using its API key. Returns reachability, status and latency.'],

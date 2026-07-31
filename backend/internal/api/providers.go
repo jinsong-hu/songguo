@@ -15,6 +15,11 @@ import (
 	"github.com/songguo/songguo/internal/wire"
 )
 
+// weightRangeMsg is the 400 for a negative weight, shared by the provider
+// default and the per-service override. 0 is legal on both: it parks the
+// provider (no share of new sessions in its tier) without unconfiguring it.
+const weightRangeMsg = "weight must be 0 or greater; 0 parks the provider"
+
 // --- views ---
 
 type providerModelView struct {
@@ -129,10 +134,12 @@ type providerEndpointReq struct {
 }
 
 type createProviderReq struct {
-	Name           string                `json:"name"`
-	Vendor         string                `json:"vendor,omitempty"`
-	Priority       int                   `json:"priority,omitempty"`
-	Weight         int                   `json:"weight,omitempty"`
+	Name     string `json:"name"`
+	Vendor   string `json:"vendor,omitempty"`
+	Priority int    `json:"priority,omitempty"`
+	// Weight is a pointer so an omitted weight (the default, 1) stays distinct
+	// from an explicit 0, which parks the provider.
+	Weight         *int                  `json:"weight,omitempty"`
 	Enabled        *bool                 `json:"enabled,omitempty"`
 	CatalogID      string                `json:"catalog_id,omitempty"`
 	AllowUnmatched bool                  `json:"allow_unmatched,omitempty"`
@@ -292,6 +299,9 @@ func (a *api) createProviderData(req createProviderReq) (providerView, error) {
 	if strings.TrimSpace(req.Name) == "" {
 		return providerView{}, badRequestErr("name is required")
 	}
+	if req.Weight != nil && *req.Weight < 0 {
+		return providerView{}, badRequestErr(weightRangeMsg)
+	}
 	endpoints, msg := toStoreEndpoints(req.Endpoints)
 	if msg != "" {
 		return providerView{}, badRequestErr(msg)
@@ -301,12 +311,17 @@ func (a *api) createProviderData(req createProviderReq) (providerView, error) {
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
+	// An omitted weight is an ordinary provider, not a parked one.
+	weight := 1
+	if req.Weight != nil {
+		weight = *req.Weight
+	}
 
 	pvd, err := a.store.CreateProvider(store.NewProvider{
 		Name:           strings.TrimSpace(req.Name),
 		Vendor:         req.Vendor,
 		Priority:       req.Priority,
-		Weight:         req.Weight,
+		Weight:         weight,
 		Enabled:        enabled,
 		CatalogID:      req.CatalogID,
 		AllowUnmatched: req.AllowUnmatched,
@@ -345,6 +360,9 @@ func (a *api) handlePatchProvider(w http.ResponseWriter, r *http.Request) {
 // api_key or invalid endpoint is a *apiError (400); an unknown id is 404; a
 // duplicate name is 409.
 func (a *api) updateProviderData(id string, req patchProviderReq) (providerView, error) {
+	if req.Weight != nil && *req.Weight < 0 {
+		return providerView{}, badRequestErr(weightRangeMsg)
+	}
 	if req.APIKey != nil {
 		trimmed := strings.TrimSpace(*req.APIKey)
 		if trimmed == "" {

@@ -13,17 +13,20 @@ import (
 // --- auto-derived services (model-centric view) ---
 
 type serviceProviderView struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Enabled          bool   `json:"enabled"`
-	ProviderEnabled  bool   `json:"provider_enabled"`
-	Routable         bool   `json:"routable"`
-	Priority         int    `json:"priority"`
-	Weight           int    `json:"weight"`
-	DefaultPriority  int    `json:"default_priority"`
-	DefaultWeight    int    `json:"default_weight"`
-	PriorityOverride *int   `json:"priority_override"`
-	WeightOverride   *int   `json:"weight_override"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Enabled         bool   `json:"enabled"`
+	ProviderEnabled bool   `json:"provider_enabled"`
+	Routable        bool   `json:"routable"`
+	Priority        int    `json:"priority"`
+	// Weight is the effective share of new sessions for this (model, provider) —
+	// the override when set, otherwise the provider default. 0 is parked: this
+	// provider takes no share of its tier for this model.
+	Weight           int  `json:"weight"`
+	DefaultPriority  int  `json:"default_priority"`
+	DefaultWeight    int  `json:"default_weight"`
+	PriorityOverride *int `json:"priority_override"`
+	WeightOverride   *int `json:"weight_override"`
 }
 
 type serviceStatsView struct {
@@ -106,9 +109,6 @@ func (a *api) servicesData(includeDisabled bool) ([]serviceView, error) {
 			weight := pvd.Weight
 			if model.WeightOverride != nil {
 				weight = *model.WeightOverride
-			}
-			if weight <= 0 {
-				weight = 1
 			}
 			modelProviders[model.Model] = append(modelProviders[model.Model], serviceProviderView{
 				ID:               pvd.ID,
@@ -196,8 +196,8 @@ func (a *api) patchServiceProviderRoutingData(providerID string, req patchServic
 	if req.Priority != nil && *req.Priority < 0 {
 		return badRequestErr("priority must be zero or greater")
 	}
-	if req.Weight != nil && *req.Weight < 1 {
-		return badRequestErr("weight must be at least 1")
+	if req.Weight != nil && *req.Weight < 0 {
+		return badRequestErr(weightRangeMsg)
 	}
 
 	setPriority := req.Priority != nil || req.InheritPriority

@@ -14,7 +14,7 @@
 //	health   0 live, 1 cooling, 2 dead        — see health.go
 //	sticky   0 if this session is pinned here — see affinity.go
 //	priority v.Priority, lower preferred      — config
-//	draw     weighted random, lower wins      — Weight
+//	draw     weighted random, lower wins      — Weight (0 = no share)
 //	decl     declaration order                — deterministic tiebreak
 //
 // Read it as a cascade of questions. Is this vendor working? Does this session
@@ -37,6 +37,14 @@
 // priority + different weights is load balancing, different priority is
 // failover. To split 90/10, give both vendors the same priority and weights 9
 // and 1.
+//
+// Weight 0 PARKS a vendor: it takes no share of its tier, so it never leads
+// while a weighted sibling of equal health shares its priority. It stays a
+// candidate — parking is a share of zero, not a filter, so a parked vendor alone
+// in the winning tier still serves, and an explicit provider pin still reaches
+// it. Because weight sits below stickiness, parking stops NEW sessions and lets
+// the ones already pinned there drain with their prompt cache intact; an
+// operator who needs a vendor to stop now disables it.
 //
 // Health outranks priority deliberately. `priority` means "prefer this one when
 // the candidates are otherwise interchangeable", and a vendor that is failing is
@@ -454,9 +462,17 @@ func (r *Router) order(sel Selector, vendors []config.Vendor) []Target {
 // The transform is the standard exponential race: -ln(U)/w. Its minimum over a
 // set of vendors lands on vendor i with probability w_i / sum(w), which is the
 // definition of weighted selection.
+//
+// Weight 0 is the limit of that transform, and returning it explicitly is what
+// makes a parked vendor lose to every weighted sibling in its tier no matter
+// what the sample was: -ln(U)/0 is +Inf for U < 1 but 0/0 = NaN when the sample
+// lands exactly on 1, and a NaN sort value compares false against everything —
+// enough to make the comparator non-transitive and float a parked vendor to the
+// top. Parked vendors all tie at +Inf and settle on the declaration-order
+// tiebreak.
 func weightedDraw(u float64, weight int) float64 {
-	if weight < 1 {
-		weight = 1
+	if weight <= 0 {
+		return math.Inf(1)
 	}
 	// rand.Float64 returns [0,1); shift to (0,1] so the log is always finite.
 	u = 1 - u

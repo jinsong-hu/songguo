@@ -638,6 +638,7 @@ export interface ServiceProvider {
   routable: boolean;
   /** Effective routing values after applying optional service overrides. */
   priority: number;
+  /** 0 is parked: no share of this tier for this model. See Provider.weight. */
   weight: number;
   default_priority: number;
   default_weight: number;
@@ -704,6 +705,11 @@ export interface Provider {
   name: string;
   vendor: string;
   priority: number;
+  /**
+   * Share of new sessions within this provider's priority tier. 0 parks it: no
+   * share, but still configured and routable by a service-level weight override
+   * or an explicit provider pin, and sessions already pinned to it keep it.
+   */
   weight: number;
   enabled: boolean;
   catalog_id: string;

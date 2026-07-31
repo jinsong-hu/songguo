@@ -173,7 +173,11 @@ type Vendor struct {
 	Adapter      string   `yaml:"adapter"` // auth scheme; default openai-compatible
 	ServedModels []string `yaml:"served_models"`
 	Priority     int      `yaml:"priority"` // lower = preferred; default 0
-	Weight       int      `yaml:"weight"`   // share of traffic within a priority tier; normalized to >=1
+	// Weight is this vendor's share of traffic within a priority tier. 0 parks
+	// it: no share, so it never leads while a weighted sibling shares its
+	// priority — but it stays a candidate (see internal/router). Negative is
+	// normalized to 0.
+	Weight int `yaml:"weight"`
 	// ModelRoutes optionally overrides the provider defaults for a specific
 	// model. It is applied while building Snapshot.byModel, so model-less
 	// routing continues to use Priority/Weight while model-scoped routing gets
@@ -204,7 +208,10 @@ type Vendor struct {
 
 // ModelRoute is the routing policy for one provider within one model service.
 // Disabled removes only this model/provider relationship; the provider remains
-// available for its other models and model-less endpoints.
+// available for its other models and model-less endpoints. Priority and Weight
+// carry the same meaning as on Vendor, including Weight 0 to park this provider
+// for this model alone — which is also how a provider parked by default earns a
+// share back for one service.
 type ModelRoute struct {
 	Enabled  bool `yaml:"enabled"`
 	Priority int  `yaml:"priority"`
@@ -233,12 +240,14 @@ func Build(cfg Config) (*Snapshot, error) {
 // normalize applies defaults that should hold regardless of validity.
 func normalize(cfg *Config) {
 	for i := range cfg.Vendors {
-		if cfg.Vendors[i].Weight <= 0 {
-			cfg.Vendors[i].Weight = 1
+		// 0 is a real weight — it parks the vendor — so only a negative one is
+		// normalized, and it lands on the nearest legal value rather than on 1.
+		if cfg.Vendors[i].Weight < 0 {
+			cfg.Vendors[i].Weight = 0
 		}
 		for model, route := range cfg.Vendors[i].ModelRoutes {
-			if route.Weight <= 0 {
-				route.Weight = 1
+			if route.Weight < 0 {
+				route.Weight = 0
 				cfg.Vendors[i].ModelRoutes[model] = route
 			}
 		}
