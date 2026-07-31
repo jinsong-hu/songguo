@@ -31,13 +31,21 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* An absolutely-positioned box shrink-to-fits its containing block, and .root is
+   only as wide as the trigger button — so without an explicit width the panel
+   collapses to ~150px and both columns wrap into each other. The width is
+   stated here rather than left to the content for exactly that reason. */
 .panel {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
   z-index: 40;
+  width: 496px;
+  max-width: calc(100vw - 24px);
   display: grid;
-  grid-template-columns: minmax(0, 260px) minmax(0, 190px);
+  /* Fixed preset rail; the calendar column takes the rest. Neither may collapse
+     below its content — the calendar needs 7 × 30px plus padding. */
+  grid-template-columns: minmax(266px, 1fr) 176px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--surface);
@@ -52,10 +60,12 @@
 }
 
 .presets {
-  padding: 14px 0 14px 0;
+  padding: 14px 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
+  /* Never taller than the calendar side; the list scrolls instead. */
+  max-height: 100%;
 }
 
 .sectionTitle {
@@ -140,20 +150,34 @@
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text);
+}
 
+/* The variables have to land on react-day-picker's own root element, not an
+   ancestor: its stylesheet declares them on `.root` itself (`--rdp-accent-color:
+   blue`), and a declaration on the element always beats one inherited from a
+   parent. Two classes here (0,2,0) also outrank its single class (0,1,0), so
+   this wins regardless of stylesheet order. */
+.calendar .calendarRoot {
   --rdp-accent-color: var(--accent);
   --rdp-accent-background-color: var(--accent-weak);
   --rdp-today-color: var(--accent);
-  --rdp-day-width: 30px;
-  --rdp-day-height: 30px;
+  --rdp-selected-border: 1px solid var(--accent);
+
+  /* Both pairs matter — the cell and the button inside it are sized separately,
+     and leaving the button at its 42px default overflows a 32px cell. */
+  --rdp-day-width: 32px;
+  --rdp-day-height: 32px;
+  --rdp-day_button-width: 30px;
+  --rdp-day_button-height: 30px;
+  --rdp-day_button-border-radius: var(--radius-control);
+  --rdp-day_button-border: 1px solid transparent;
+
   --rdp-nav-height: 26px;
   --rdp-weekday-opacity: 1;
   --rdp-outside-opacity: 0.35;
   --rdp-disabled-opacity: 0.28;
-  --rdp-selected-border: 1px solid var(--accent);
-
-  font-size: 12px;
-  color: var(--text);
 }
 
 .calendarWeekday {
@@ -212,8 +236,11 @@
   list-style: none;
   margin: 0;
   padding: 0;
+  /* Fill the column and scroll inside it, so the rail's length never drives the
+     panel's height. min-height:0 is what actually lets a flex child shrink. */
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  max-height: 300px;
 }
 
 .preset {
@@ -225,6 +252,9 @@
   color: var(--text);
   font-size: 12.5px;
   padding: 6px 14px;
+  /* Labels are short and known; keeping them on one line makes a too-narrow
+     rail obvious instead of quietly wrapping into three lines. */
+  white-space: nowrap;
 }
 
 .preset:hover {
@@ -239,11 +269,20 @@
 
 @media (max-width: 640px) {
   .panel {
+    /* Stack, and drop the 266px floor — below this width the viewport clamp
+       from max-width would otherwise fight the column minimum. */
+    width: auto;
     grid-template-columns: minmax(0, 1fr);
+    max-height: calc(100vh - 96px);
+    overflow-y: auto;
   }
 
   .absolute {
     border-right: none;
     border-bottom: 1px solid var(--border);
+  }
+
+  .presetList {
+    overflow-y: visible;
   }
 }

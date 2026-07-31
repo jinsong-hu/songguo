@@ -99,6 +99,9 @@ export function TimeRangePicker({
   const calendarClassNames = useMemo(
     () => ({
       ...rdp,
+      // The theme variables ride on the root, so this one is not cosmetic —
+      // without it the grid keeps react-day-picker's default blue accent.
+      root: `${rdp.root} ${styles.calendarRoot}`,
       weekday: `${rdp.weekday} ${styles.calendarWeekday}`,
       caption_label: `${rdp.caption_label} ${styles.calendarCaption}`,
       day_button: `${rdp.day_button} ${styles.calendarDayButton}`,
