@@ -41,7 +41,7 @@ func (a *api) buildMCPServer(enableWrites bool) *mcp.Server {
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "get_usage_series",
-		Description: "Cost, request and error totals bucketed over time, for plotting spend trends. Window defaults to the last 7 days; bucket is 'hour' or 'day' (omit to auto-select by range).",
+		Description: "Cost, request and error totals bucketed over time, for plotting spend trends. Window defaults to the last 7 days; bucket is 'hour', 'day', or a size like '5m'/'6h'/'7d' (omit to auto-select by range, which only ever picks hour or day).",
 	}, a.mcpGetUsageSeries)
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -172,7 +172,7 @@ func (a *api) mcpGetOverview(_ context.Context, _ *mcp.CallToolRequest, args ove
 type usageSeriesArgs struct {
 	Since  *int64 `json:"since,omitempty" jsonschema:"start of the window, unix seconds (default: 7 days ago)"`
 	Until  *int64 `json:"until,omitempty" jsonschema:"end of the window, unix seconds (default: now)"`
-	Bucket string `json:"bucket,omitempty" jsonschema:"bucket size: 'hour' or 'day' (default: auto by range)"`
+	Bucket string `json:"bucket,omitempty" jsonschema:"bucket size: 'hour', 'day', or <count><unit> with unit s/m/h/d such as '5m' or '6h'; whole minutes, 1m to 365d (default: auto by range, which picks only hour or day)"`
 }
 
 func (a *api) mcpGetUsageSeries(_ context.Context, _ *mcp.CallToolRequest, args usageSeriesArgs) (*mcp.CallToolResult, usageSeriesView, error) {

@@ -8,7 +8,7 @@ import styles from './DocsMcp.module.css';
 // registered; write tools are registered only when SONGGUO_MCP_WRITE=1.
 const READ_TOOLS: ReadonlyArray<[string, string]> = [
   ['get_overview', 'Spend summary for a time window: total spend, spend by modality, request/error counts, latency percentiles, active providers/users, daily burn and runway. Defaults to the last 30 days.'],
-  ['get_usage_series', 'Cost, request and error totals bucketed over time for plotting trends. Defaults to the last 7 days; bucket is hour or day.'],
+  ['get_usage_series', 'Cost, request and error totals bucketed over time for plotting trends. Defaults to the last 7 days; bucket is hour, day, or a size like 5m, 6h or 7d.'],
   ['list_calls', 'Browse individual gateway calls (the per-request ledger), newest first, with filters by user, model, vendor, status and time. Returns entries plus total count.'],
   ['get_call_trace', 'Return the captured request/response payload for one call id (only when capture is enabled for that call).'],
   ['list_users', 'List all gateway users (consumer keys) with budget, scope, RPM limit, capture setting, lifetime spend and active state. Plaintext keys are never returned.'],

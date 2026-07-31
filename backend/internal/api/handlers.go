@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -344,9 +345,29 @@ func (a *api) usageSeriesData(since, until time.Time, bucketRaw string) (usageSe
 	return usageSeriesView{Bucket: label, Points: views}, nil
 }
 
+// minBucket is the finest granularity the API will serve. The store buckets by
+// integer division on a millisecond ts, so it would happily go to the
+// millisecond — the floor is editorial, not technical: below a minute the
+// per-bucket call count collapses toward zero and the averaged columns (TTFT,
+// output tok/s) turn to noise.
+const minBucket = time.Minute
+
+// maxBucket bounds the other end, mostly so a silly `99999999d` cannot overflow
+// the time.Duration arithmetic below.
+const maxBucket = 365 * 24 * time.Hour
+
 // resolveBucket maps the raw "bucket" query value to a duration and its label.
-// "" auto-selects day for ranges over 2 days, else hour; "hour"/"day" are taken
-// as-is; anything else is a *apiError (400).
+//
+// "" auto-selects day for ranges over 2 days, else hour. "hour"/"day" are the
+// original spellings and still work. Anything else is a <count><unit> size with
+// unit m, h or d — "5m", "15m", "6h", "7d". Out of range or unparseable is a
+// *apiError (400); so is a size the requested window would blow the store's
+// bucket cap with, but that check lives in the store.
+//
+// Auto-select deliberately still only reaches for hour/day. Callers that want
+// minute resolution ask for it explicitly, which keeps the point count of an
+// omitted-bucket request (MCP tools, ad-hoc curl) exactly what it has always
+// been.
 func resolveBucket(bucketRaw string, since, until time.Time) (time.Duration, string, error) {
 	switch bucketRaw {
 	case "":
@@ -358,8 +379,76 @@ func resolveBucket(bucketRaw string, since, until time.Time) (time.Duration, str
 		return time.Hour, "hour", nil
 	case "day":
 		return 24 * time.Hour, "day", nil
+	}
+
+	d, err := parseBucketSize(bucketRaw)
+	if err != nil {
+		return 0, "", err
+	}
+	return d, bucketLabel(d), nil
+}
+
+// parseBucketSize parses a <count><unit> bucket size. time.ParseDuration has no
+// day unit and would accept sub-minute values we do not want, so this is
+// hand-rolled rather than a wrapper around it.
+func parseBucketSize(s string) (time.Duration, error) {
+	invalid := badRequestErr("bucket must be hour, day, or a size like 5m, 6h or 7d")
+	if len(s) < 2 {
+		return 0, invalid
+	}
+
+	var unit time.Duration
+	switch s[len(s)-1] {
+	case 's':
+		// Accepted only so a sub-minute request gets the floor's specific
+		// complaint rather than a generic parse error.
+		unit = time.Second
+	case 'm':
+		unit = time.Minute
+	case 'h':
+		unit = time.Hour
+	case 'd':
+		unit = 24 * time.Hour
 	default:
-		return 0, "", badRequestErr("bucket must be hour or day")
+		return 0, invalid
+	}
+
+	n, err := strconv.Atoi(s[:len(s)-1])
+	if err != nil || n <= 0 {
+		return 0, invalid
+	}
+	// Bound the count before multiplying so the Duration cannot overflow.
+	if n > int(maxBucket/unit) {
+		return 0, badRequestErr("bucket must be at most 365d")
+	}
+
+	d := time.Duration(n) * unit
+	if d < minBucket {
+		return 0, badRequestErr("bucket must be at least 1m")
+	}
+	// Every label bucketLabel can produce is a whole number of minutes, so a
+	// size like "90s" has no honest name. Reject rather than mislabel it.
+	if d%time.Minute != 0 {
+		return 0, badRequestErr("bucket must be a whole number of minutes")
+	}
+	return d, nil
+}
+
+// bucketLabel names a bucket size for the response. Hour and day keep the words
+// they have always returned so existing clients (and the dashboard's tick
+// formatter) are unaffected; everything else gets its canonical size string.
+func bucketLabel(d time.Duration) string {
+	switch {
+	case d == time.Hour:
+		return "hour"
+	case d == 24*time.Hour:
+		return "day"
+	case d%(24*time.Hour) == 0:
+		return fmt.Sprintf("%dd", d/(24*time.Hour))
+	case d%time.Hour == 0:
+		return fmt.Sprintf("%dh", d/time.Hour)
+	default:
+		return fmt.Sprintf("%dm", d/time.Minute)
 	}
 }
 

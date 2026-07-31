@@ -58,8 +58,12 @@ paths:
         - $ref: "#/components/parameters/Until"
         - name: bucket
           in: query
-          schema: { type: string, enum: [hour, day] }
-          description: Bucket size; omit to auto-select (day for ranges over 2 days, else hour).
+          schema: { type: string, pattern: "^(hour|day|[0-9]+[smhd])$" }
+          description: >-
+            Bucket size: "hour", "day", or a <count><unit> size with unit s, m, h
+            or d ("5m", "15m", "6h", "7d"). Must be a whole number of minutes
+            between 1m and 365d. Omit to auto-select (day for ranges over 2 days,
+            else hour); auto never picks a sub-hour size.
       responses:
         "200":
           description: Series
@@ -78,8 +82,12 @@ paths:
         - $ref: "#/components/parameters/Until"
         - name: bucket
           in: query
-          schema: { type: string, enum: [hour, day] }
-          description: Bucket size; omit to auto-select (day for ranges over 2 days, else hour).
+          schema: { type: string, pattern: "^(hour|day|[0-9]+[smhd])$" }
+          description: >-
+            Bucket size: "hour", "day", or a <count><unit> size with unit s, m, h
+            or d ("5m", "15m", "6h", "7d"). Must be a whole number of minutes
+            between 1m and 365d. Omit to auto-select (day for ranges over 2 days,
+            else hour); auto never picks a sub-hour size.
       responses:
         "200":
           description: Tokens-by-model series
@@ -98,8 +106,12 @@ paths:
         - $ref: "#/components/parameters/Until"
         - name: bucket
           in: query
-          schema: { type: string, enum: [hour, day] }
-          description: Bucket size; omit to auto-select (day for ranges over 2 days, else hour).
+          schema: { type: string, pattern: "^(hour|day|[0-9]+[smhd])$" }
+          description: >-
+            Bucket size: "hour", "day", or a <count><unit> size with unit s, m, h
+            or d ("5m", "15m", "6h", "7d"). Must be a whole number of minutes
+            between 1m and 365d. Omit to auto-select (day for ranges over 2 days,
+            else hour); auto never picks a sub-hour size.
         - name: dimension
           in: query
           schema: { type: string, enum: [model, vendor, user] }
@@ -122,8 +134,12 @@ paths:
         - $ref: "#/components/parameters/Until"
         - name: bucket
           in: query
-          schema: { type: string, enum: [hour, day] }
-          description: Bucket size; omit to auto-select (day for ranges over 2 days, else hour).
+          schema: { type: string, pattern: "^(hour|day|[0-9]+[smhd])$" }
+          description: >-
+            Bucket size: "hour", "day", or a <count><unit> size with unit s, m, h
+            or d ("5m", "15m", "6h", "7d"). Must be a whole number of minutes
+            between 1m and 365d. Omit to auto-select (day for ranges over 2 days,
+            else hour); auto never picks a sub-hour size.
         - name: dimension
           in: query
           schema: { type: string, enum: [model, vendor, user] }
