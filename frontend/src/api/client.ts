@@ -21,6 +21,7 @@ import type {
   PatchUserBody,
   PricingRow,
   Proxy,
+  ProxyTestResult,
   Provider,
   Service,
   SessionContext,
@@ -312,6 +313,11 @@ export const api = {
 
   deleteProxy: (id: string) =>
     request<void>(`/proxies/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  testProxy: (id: string) =>
+    request<ProxyTestResult>(`/proxies/${encodeURIComponent(id)}/test`, {
+      method: 'POST',
+    }),
 
   catalog: () => request<Catalog>('/catalog'),
 

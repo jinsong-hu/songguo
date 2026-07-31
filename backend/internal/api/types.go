@@ -663,6 +663,17 @@ type testVendorView struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// testProxyView is the POST /api/proxies/{id}/test response. Target names the
+// origin that was dialled through the proxy, which varies with what the proxy
+// is assigned to — the operator needs it to read the result.
+type testProxyView struct {
+	Reachable bool   `json:"reachable"`
+	Target    string `json:"target"`
+	Status    int    `json:"status"`
+	LatencyMS int64  `json:"latency_ms"`
+	Error     string `json:"error,omitempty"`
+}
+
 // settingsView is the GET /api/settings response. It never exposes the admin
 // key.
 type settingsView struct {

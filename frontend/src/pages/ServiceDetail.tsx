@@ -10,6 +10,7 @@ import { Page } from '../components/Layout';
 import { Playground } from '../components/Playground';
 import {
   RoutingConfigCard,
+  routingSignature,
   type RoutingConfigItem,
 } from '../components/RoutingConfigCard';
 import { Skeleton } from '../components/Skeleton';
@@ -111,6 +112,7 @@ function ServiceRouting({
           id: route.id,
           name: route.name,
           icon: <BrandIcon brand={brand} label={route.name} size={17} />,
+          href: `/providers/${route.id}/edit`,
           color: brand?.color ?? '#3f8f5b',
           enabled: route.enabled,
           available: route.provider_enabled && complete,
@@ -129,7 +131,7 @@ function ServiceRouting({
 
   useEffect(() => setItems(initial), [initial]);
 
-  const dirty = JSON.stringify(items) !== JSON.stringify(initial);
+  const dirty = routingSignature(items) !== routingSignature(initial);
   const change = (id: string, patch: Partial<RoutingConfigItem>) => {
     setItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   };

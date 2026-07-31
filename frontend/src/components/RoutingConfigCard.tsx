@@ -1,4 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { InfoHint } from './InfoHint';
 import styles from './RoutingConfigCard.module.css';
 
@@ -6,6 +7,10 @@ export interface RoutingConfigItem {
   id: string;
   name: string;
   icon?: ReactNode;
+  /** Detail page for this item. Renders the row as a link when set. */
+  href?: string;
+  /** Live state shown beside the name in the editor row (health, capacity). */
+  status?: ReactNode;
   color: string;
   enabled: boolean;
   available: boolean;
@@ -15,6 +20,17 @@ export interface RoutingConfigItem {
   defaultPriority?: number;
   defaultWeight?: number;
   unavailableLabel?: string;
+}
+
+/**
+ * Comparable form of the editable fields, for dirty checks. Skips `icon`: a
+ * React element carries an `_owner` fiber whose `stateNode` points back at a
+ * DOM node, so JSON.stringify on a whole item hits a circular structure.
+ */
+export function routingSignature(items: RoutingConfigItem[]): string {
+  return JSON.stringify(
+    items.map((item) => [item.id, item.enabled, item.custom ?? false, item.priority, item.weight]),
+  );
 }
 
 interface RoutingConfigCardProps {
@@ -27,6 +43,44 @@ interface RoutingConfigCardProps {
   inherited?: boolean;
   onChange?: (id: string, patch: Partial<RoutingConfigItem>) => void;
   onSave?: () => void;
+}
+
+/**
+ * One provider in a layer or the inactive strip: a link to its detail page when
+ * the caller supplied an href, otherwise inert. Same classes either way, so the
+ * two cases stay visually identical apart from the hover affordance.
+ */
+function Row({
+  href,
+  className,
+  style,
+  title,
+  children,
+}: {
+  href?: string;
+  className: string;
+  style?: CSSProperties;
+  title?: string;
+  children: ReactNode;
+}) {
+  if (!href) {
+    return (
+      <div className={className} style={style} title={title}>
+        {children}
+      </div>
+    );
+  }
+  return (
+    <Link to={href} className={`${className} ${styles.linked}`} style={style} title={title}>
+      {children}
+    </Link>
+  );
+}
+
+/** Editor grid class for the optional Enabled / Policy column pair. */
+function gridVariant(editableEnabled: boolean, inherited: boolean): string {
+  if (editableEnabled) return inherited ? '' : styles.noPolicyEditor;
+  return inherited ? styles.noEnabledEditor : styles.compactEditor;
 }
 
 function numeric(value: string, fallback: number): number {
@@ -79,15 +133,14 @@ export function RoutingConfigCard({
         {priorities.length === 0 ? (
           <div className={styles.empty}>No active providers</div>
         ) : (
-          priorities.map((priority, index) => {
+          priorities.map((priority) => {
             const layer = active.filter((item) => item.priority === priority);
             const total = layer.reduce((sum, item) => sum + item.weight, 0);
             return (
               <div key={priority} className={styles.layer}>
-                <div className={styles.layerMeta}>
-                  <span className={styles.priority}>Priority {priority}</span>
-                  <span>{index === 0 ? 'Active' : `Fallback ${index}`}</span>
-                </div>
+                <span className={styles.priority} title={`Priority ${priority}`}>
+                  P{priority}
+                </span>
                 <div
                   className={styles.segments}
                   style={{ gridTemplateColumns: layer.map((item) => `${item.weight}fr`).join(' ') }}
@@ -95,8 +148,9 @@ export function RoutingConfigCard({
                   {layer.map((item) => {
                     const share = Math.round((item.weight / total) * 100);
                     return (
-                      <div
+                      <Row
                         key={item.id}
+                        href={item.href}
                         className={styles.segment}
                         style={{ '--routing-color': item.color } as CSSProperties}
                         title={`${item.name}: weight ${item.weight}, approximately ${share}% of new sessions in this priority`}
@@ -104,7 +158,7 @@ export function RoutingConfigCard({
                         <span className={styles.segmentIcon}>{item.icon}</span>
                         <span className={styles.segmentName}>{item.name}</span>
                         <span className={styles.share}>{share}%</span>
-                      </div>
+                      </Row>
                     );
                   })}
                 </div>
@@ -117,23 +171,19 @@ export function RoutingConfigCard({
       {inactive.length > 0 && (
         <div className={styles.inactive}>
           {inactive.map((item) => (
-            <span key={item.id} className={styles.inactiveItem}>
+            <Row key={item.id} href={item.href} className={styles.inactiveItem}>
               {item.icon}
               <span>{item.name}</span>
               <span className={styles.inactiveReason}>
                 {item.enabled ? item.unavailableLabel ?? 'Unavailable' : 'Disabled'}
               </span>
-            </span>
+            </Row>
           ))}
         </div>
       )}
 
       {onChange && (
-        <div
-          className={`${styles.editor} ${
-            !editableEnabled && !inherited ? styles.compactEditor : ''
-          }`}
-        >
+        <div className={`${styles.editor} ${gridVariant(editableEnabled, inherited)}`}>
           <div className={styles.editorHead} aria-hidden="true">
             <span>Provider</span>
             {editableEnabled && <span>Enabled</span>}
@@ -147,7 +197,14 @@ export function RoutingConfigCard({
               <div key={item.id} className={styles.editorRow}>
                 <div className={styles.provider}>
                   <span className={styles.providerIcon}>{item.icon}</span>
-                  <span className={styles.providerName}>{item.name}</span>
+                  {item.href ? (
+                    <Link to={item.href} className={styles.providerName}>
+                      {item.name}
+                    </Link>
+                  ) : (
+                    <span className={styles.providerName}>{item.name}</span>
+                  )}
+                  {item.status && <span className={styles.providerStatus}>{item.status}</span>}
                 </div>
                 {editableEnabled && (
                   <label className={styles.switch}>

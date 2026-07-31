@@ -692,6 +692,25 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+  /api/proxies/{id}/test:
+    post:
+      tags: [proxies]
+      summary: Probe an origin through the proxy for reachability
+      description: >
+        Dials the origin of a provider assigned to this proxy, or a default
+        vendor origin when none is assigned. No credential is sent: any HTTP
+        status proves the tunnel carried the request.
+      operationId: testProxy
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Reachability result, naming the origin that was dialled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProxyTestResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/catalog:
     get:
       tags: [config]
@@ -1406,6 +1425,16 @@ components:
       type: object
       properties:
         reachable: { type: boolean }
+        status: { type: integer }
+        latency_ms: { type: integer, format: int64 }
+        error: { type: string }
+    ProxyTestResult:
+      type: object
+      properties:
+        reachable: { type: boolean }
+        target:
+          type: string
+          description: Origin dialled through the proxy
         status: { type: integer }
         latency_ms: { type: integer, format: int64 }
         error: { type: string }

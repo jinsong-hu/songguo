@@ -616,6 +616,15 @@ export interface VendorTestResult {
   error?: string;
 }
 
+export interface ProxyTestResult extends VendorTestResult {
+  /**
+   * Origin dialled through the proxy: an assigned provider's endpoint host, or
+   * a default vendor origin when the proxy has no provider yet. Varies per
+   * proxy, so the result is unreadable without it.
+   */
+  target: string;
+}
+
 // --- Services (auto-derived, model-centric view) ---
 
 export interface ServiceProvider {

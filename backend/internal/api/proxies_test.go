@@ -67,3 +67,56 @@ func TestProxyValidationAndProviderReference(t *testing.T) {
 		t.Fatalf("invalid provider proxy: code = %d body = %s", rec.Code, rec.Body.String())
 	}
 }
+
+// The proxy test dials whatever the proxy is actually for, so its target moves
+// from the default probe to an assigned provider's origin. Port 1 is closed, so
+// both cases fail to connect without leaving the machine — the assertion is on
+// the target, which is chosen before any dialing.
+func TestProxyTestTargetFollowsAssignedProvider(t *testing.T) {
+	s := newTestStore(t)
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
+
+	proxy, err := s.CreateProxy(store.NewProxy{
+		Name: "dead", Type: store.ProxyTypeHTTPS, Host: "127.0.0.1", Port: 1,
+	})
+	if err != nil {
+		t.Fatalf("CreateProxy: %v", err)
+	}
+
+	rec := do(h, http.MethodPost, "/api/proxies/"+proxy.ID+"/test", "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test unassigned: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	var view testProxyView
+	decodeBody(t, rec, &view)
+	if view.Target != defaultProxyProbe {
+		t.Fatalf("unassigned target = %q, want %q", view.Target, defaultProxyProbe)
+	}
+	if view.Reachable {
+		t.Fatalf("closed port reported reachable: %+v", view)
+	}
+
+	if _, err := s.CreateProvider(store.NewProvider{
+		Name:    "proxied",
+		ProxyID: proxy.ID,
+		Endpoints: []store.ProviderEndpoint{
+			{Wire: "anthropic/messages", Endpoint: "https://api.anthropic.example/v1/messages"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+
+	rec = do(h, http.MethodPost, "/api/proxies/"+proxy.ID+"/test", "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test assigned: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+	decodeBody(t, rec, &view)
+	if view.Target != "https://api.anthropic.example" {
+		t.Fatalf("assigned target = %q, want the provider origin", view.Target)
+	}
+
+	rec = do(h, http.MethodPost, "/api/proxies/missing/test", "secret", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown proxy: code = %d body = %s", rec.Code, rec.Body.String())
+	}
+}

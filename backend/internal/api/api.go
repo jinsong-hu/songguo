@@ -171,6 +171,7 @@ var adminRoutes = []adminRoute{
 	{"POST", "/api/proxies", (*api).handleCreateProxy, false},
 	{"PATCH", "/api/proxies/{id}", (*api).handlePatchProxy, false},
 	{"DELETE", "/api/proxies/{id}", (*api).handleDeleteProxy, false},
+	{"POST", "/api/proxies/{id}/test", (*api).handleTestProxy, false},
 	// Catalog + wire names are static model/wire metadata the test panel needs.
 	{"GET", "/api/catalog", (*api).handleCatalog, true},
 	{"GET", "/api/wires", (*api).handleWires, true},

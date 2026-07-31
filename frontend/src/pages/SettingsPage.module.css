@@ -176,8 +176,34 @@
 
 .proxyActions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 6px;
+}
+
+/* Sits left of the row's buttons; truncates rather than widening the column,
+   since a transport error can be a whole sentence. Full text is in the title. */
+.proxyTestReport {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+}
+
+.proxyTestReport svg {
+  flex: none;
+}
+
+.proxyTestOk {
+  color: var(--accent);
+}
+
+.proxyTestFail {
+  color: var(--danger);
 }
 
 .proxyEditor {

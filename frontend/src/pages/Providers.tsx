@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Check } from 'lucide-react';
 import { api } from '../api/client';
 import type { CatalogVendor, Provider, ProviderRouting } from '../api/types';
@@ -7,6 +7,7 @@ import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
 import {
   RoutingConfigCard,
+  routingSignature,
   type RoutingConfigItem,
 } from '../components/RoutingConfigCard';
 import { Skeleton } from '../components/Skeleton';
@@ -43,24 +44,20 @@ export function ProvidersPage() {
       {error ? (
         <ErrorBanner message={error} onRetry={refetch} />
       ) : initialLoading ? (
-        <div className={styles.grid}>
-          <Skeleton height={70} />
-          <Skeleton height={70} />
-          <Skeleton height={70} />
-          <Skeleton height={70} />
-        </div>
+        <>
+          <div className={styles.routing}>
+            <Skeleton height={220} />
+          </div>
+          <div className={styles.grid}>
+            <Skeleton height={70} />
+            <Skeleton height={70} />
+            <Skeleton height={70} />
+            <Skeleton height={70} />
+          </div>
+        </>
       ) : (
         <>
-          {existing.length > 0 && (
-            <>
-              <DefaultRouting providers={existing} onSaved={providers.refetch} />
-              <div className={styles.grid}>
-                {existing.map((p) => (
-                  <ProviderCard key={p.id} provider={p} />
-                ))}
-              </div>
-            </>
-          )}
+          {existing.length > 0 && <DefaultRouting providers={existing} onSaved={providers.refetch} />}
 
           <div className={styles.divider}>
             <span>Add a provider</span>
@@ -81,6 +78,12 @@ export function ProvidersPage() {
   );
 }
 
+/**
+ * Provider defaults: the layer picture, then one row per provider for quick
+ * priority/weight/enable edits. The rows carry each provider's health and
+ * capacity too — this card is the only place they are shown, so a name alone
+ * would not be enough to operate from.
+ */
 function DefaultRouting({
   providers,
   onSaved,
@@ -104,6 +107,13 @@ function DefaultRouting({
           id: provider.id,
           name: provider.name,
           icon: <BrandIcon brand={brand} label={provider.name} size={17} />,
+          href: `/providers/${provider.id}/edit`,
+          status: (
+            <>
+              <RoutingBadge routing={provider.routing} />
+              <ProviderMetrics provider={provider} />
+            </>
+          ),
           color: brand?.color ?? '#3f8f5b',
           enabled: provider.enabled,
           available: complete,
@@ -119,7 +129,7 @@ function DefaultRouting({
 
   useEffect(() => setItems(initial), [initial]);
 
-  const dirty = JSON.stringify(items) !== JSON.stringify(initial);
+  const dirty = routingSignature(items) !== routingSignature(initial);
   const change = (id: string, patch: Partial<RoutingConfigItem>) => {
     setItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   };
@@ -142,6 +152,7 @@ function DefaultRouting({
     try {
       for (const item of items) {
         await api.patchProvider(item.id, {
+          enabled: item.enabled,
           priority: Number(item.priority),
           weight: Number(item.weight),
         });
@@ -159,45 +170,15 @@ function DefaultRouting({
     <div className={styles.routing}>
       <RoutingConfigCard
         title="Default routing"
-        hint="These values apply to model-less requests and to services that use provider defaults. Lower priority numbers are strict failover tiers; weight splits new sessions within one tier."
+        hint="These values apply to model-less requests and to services that use provider defaults. Lower priority numbers are strict failover tiers; weight splits new sessions within one tier. Select a provider's name to open its full settings."
         items={items}
         saving={saving}
         dirty={dirty}
+        editableEnabled
         onChange={change}
         onSave={save}
       />
     </div>
-  );
-}
-
-function ProviderCard({ provider }: { provider: Provider }) {
-  const brand = providerBrand(
-    provider.vendor,
-    provider.models.map((m) => m.model),
-  );
-  const complete = provider.masked_key !== '' && provider.endpoints.length > 0;
-
-  return (
-    <Link
-      to={`/providers/${provider.id}/edit`}
-      className={`card ${styles.providerCard} ${provider.enabled ? '' : styles.disabled}`}
-      style={{ '--brand': brand?.color ?? '#3f8f5b' } as CSSProperties}
-    >
-      <div className={styles.cardHead}>
-        <span className={styles.iconTile}>
-          <BrandIcon brand={brand} label={provider.name} size={22} />
-        </span>
-        <span className={styles.cardName}>{provider.name}</span>
-        {!provider.enabled ? (
-          <span className={`${styles.badge} ${styles.off}`}>Disabled</span>
-        ) : !complete ? (
-          <span className={`${styles.badge} ${styles.draft}`}>Draft</span>
-        ) : (
-          <RoutingBadge routing={provider.routing} />
-        )}
-      </div>
-      <ProviderFooter provider={provider} />
-    </Link>
   );
 }
 
@@ -237,14 +218,14 @@ function degradedTitle(routing: ProviderRouting, lead: string): string {
  * are pinned here (prompt-cache locality) and how the concurrency limit is
  * doing. Both are omitted when they have nothing to say.
  */
-function ProviderFooter({ provider }: { provider: Provider }) {
+function ProviderMetrics({ provider }: { provider: Provider }) {
   const { capacity, routing } = provider;
   const sessions = routing?.sessions ?? 0;
   const showCapacity = capacity.limit > 0 || capacity.in_flight > 0 || capacity.waiting > 0;
   if (!sessions && !showCapacity) return null;
 
   return (
-    <div className={styles.cardFoot}>
+    <span className={styles.rowMetrics}>
       {showCapacity && (
         <span
           className={capacity.waiting > 0 ? styles.metricBusy : styles.metric}
@@ -265,7 +246,7 @@ function ProviderFooter({ provider }: { provider: Provider }) {
           {sessions} session{sessions === 1 ? '' : 's'}
         </span>
       )}
-    </div>
+    </span>
   );
 }
 

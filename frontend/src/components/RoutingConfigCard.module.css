@@ -4,7 +4,6 @@
 
 .head,
 .titleRow,
-.layerMeta,
 .provider,
 .inactiveItem {
   display: flex;
@@ -34,30 +33,27 @@
 
 .layer {
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.layerMeta {
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 5px;
-  color: var(--text-muted);
-  font-size: 11.5px;
-}
-
+/* Fixed width so the layers below line up once the number reaches two digits. */
 .priority {
-  color: var(--text);
+  flex: none;
+  width: 26px;
+  color: var(--text-muted);
   font-family: var(--font-mono);
+  font-size: 11.5px;
   font-weight: 600;
 }
 
 .segments {
+  min-width: 0;
+  flex: 1;
   display: grid;
   gap: 3px;
   min-height: 44px;
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--surface-2);
 }
 
 .segment {
@@ -69,6 +65,24 @@
   border: 1px solid color-mix(in srgb, var(--routing-color) 28%, var(--border));
   border-radius: 4px;
   background: color-mix(in srgb, var(--routing-color) 12%, var(--surface));
+  color: var(--text);
+}
+
+/* Rows that link to a detail page. The hover colors are stated per variant so
+   they outrank the global a:hover, which would otherwise recolor the label. */
+.linked {
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.segment.linked:hover {
+  border-color: color-mix(in srgb, var(--routing-color) 55%, var(--border));
+  background: color-mix(in srgb, var(--routing-color) 22%, var(--surface));
+  color: var(--text);
+}
+
+.inactiveItem.linked:hover {
+  border-color: var(--text-muted);
+  background: var(--surface-2);
   color: var(--text);
 }
 
@@ -150,6 +164,18 @@
   align-items: center;
 }
 
+/* The Enabled and Policy columns are both optional, so each combination needs
+   a track list matching the cells the row actually renders. */
+.noPolicyEditor .editorHead,
+.noPolicyEditor .editorRow {
+  grid-template-columns: minmax(150px, 1fr) 90px 84px 84px;
+}
+
+.noEnabledEditor .editorHead,
+.noEnabledEditor .editorRow {
+  grid-template-columns: minmax(150px, 1fr) 176px 84px 84px;
+}
+
 .compactEditor .editorHead,
 .compactEditor .editorRow {
   grid-template-columns: minmax(150px, 1fr) 84px 84px;
@@ -176,6 +202,27 @@
 .providerName {
   font-size: 12.5px;
   font-weight: 600;
+}
+
+/* Name links to the provider's own page; it should read as a name, not a link,
+   until hovered — the row's job is editing, not navigation. */
+a.providerName {
+  color: var(--text);
+}
+
+a.providerName:hover {
+  color: var(--accent);
+}
+
+/* Health and capacity, pushed to the right of the name so the numbers in the
+   columns beside it stay the row's focus. */
+.providerStatus {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  overflow: hidden;
 }
 
 .switch {
@@ -280,6 +327,15 @@
     padding: 0 7px;
   }
 
+  /* Give the segments back the width the inline label takes. */
+  .layer {
+    gap: 6px;
+  }
+
+  .priority {
+    width: 21px;
+  }
+
   .share {
     display: none;
   }
@@ -292,6 +348,13 @@
     grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr);
     gap: 8px;
     padding: 10px 0;
+  }
+
+  /* Re-stated at equal specificity to the desktop variants above, which would
+     otherwise outrank the plain .editorRow rule here — @media adds none. */
+  .noPolicyEditor .editorRow,
+  .noEnabledEditor .editorRow {
+    grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr);
   }
 
   .compactEditor .editorRow {

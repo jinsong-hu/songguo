@@ -1,14 +1,21 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/store"
 )
+
+// defaultProxyProbe is dialled by the proxy test when no provider is assigned
+// yet. An LLM vendor origin rather than a generic site: these proxies exist to
+// reach vendors, so a tunnel that only carries other traffic is not a pass.
+const defaultProxyProbe = "https://api.openai.com"
 
 type proxyView struct {
 	ID            string `json:"id"`
@@ -71,6 +78,80 @@ func (a *api) proxiesData() ([]proxyView, error) {
 		views = append(views, newProxyView(p))
 	}
 	return views, nil
+}
+
+// handleTestProxy probes an external origin through the proxy to prove the
+// tunnel works end to end.
+func (a *api) handleTestProxy(w http.ResponseWriter, r *http.Request) {
+	view, err := a.testProxyData(r.Context(), r.PathValue("id"))
+	if err != nil {
+		a.writeDataErr(w, "get proxy", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// testProxyData dials the origin of a provider assigned to this proxy, falling
+// back to defaultProxyProbe when none is assigned — a freshly added proxy has
+// no providers yet, and that is exactly when it needs testing. No credential is
+// sent: any HTTP status proves the tunnel carried the request, which is the
+// only thing this test claims. Reachability failures are reported in the view
+// (not as errors); only an unknown id returns a *apiError (404).
+func (a *api) testProxyData(ctx context.Context, id string) (testProxyView, error) {
+	p, err := a.store.GetProxy(id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return testProxyView{}, notFoundErr("proxy not found")
+		}
+		return testProxyView{}, err
+	}
+
+	origin, err := a.proxyProbeOrigin(id)
+	if err != nil {
+		return testProxyView{}, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin, nil)
+	if err != nil {
+		return testProxyView{Target: origin, Reachable: false, Error: err.Error()}, nil
+	}
+
+	start := a.now()
+	resp, err := a.outbound.Do(req, &config.Proxy{
+		ID: p.ID, Name: p.Name, Type: p.Type, Host: p.Host, Port: p.Port,
+		Username: p.Username, Password: p.Password,
+	})
+	latency := a.now().Sub(start).Milliseconds()
+	if err != nil {
+		return testProxyView{Target: origin, Reachable: false, LatencyMS: latency, Error: err.Error()}, nil
+	}
+	defer resp.Body.Close()
+	drain(resp.Body)
+
+	return testProxyView{Target: origin, Reachable: true, Status: resp.StatusCode, LatencyMS: latency}, nil
+}
+
+// proxyProbeOrigin returns the origin to dial through a proxy: the first usable
+// endpoint of a provider assigned to it, or defaultProxyProbe when the proxy
+// has no assigned provider with a parseable endpoint.
+func (a *api) proxyProbeOrigin(proxyID string) (string, error) {
+	providers, err := a.store.ListProviders()
+	if err != nil {
+		return "", err
+	}
+	for _, pvd := range providers {
+		if pvd.ProxyID != proxyID {
+			continue
+		}
+		for _, ep := range pvd.Endpoints {
+			if origin, err := originOf(ep.Endpoint); err == nil {
+				return origin, nil
+			}
+		}
+	}
+	return defaultProxyProbe, nil
 }
 
 func (a *api) handleCreateProxy(w http.ResponseWriter, r *http.Request) {

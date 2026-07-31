@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import {
+  Check,
   Eye,
   EyeOff,
   Info,
@@ -12,12 +13,15 @@ import {
   Plus,
   Sun,
   Trash2,
+  X,
+  Zap,
 } from 'lucide-react';
 import { api } from '../api/client';
 import type {
   CreateProxyBody,
   PatchProxyBody,
   Proxy as OutboundProxy,
+  ProxyTestResult,
   ProxyType,
 } from '../api/types';
 import { CopyButton } from '../components/CopyButton';
@@ -39,8 +43,22 @@ export function SettingsPage() {
   const [editingProxy, setEditingProxy] = useState<OutboundProxy | 'new' | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [testing, setTesting] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, ProxyTestResult>>({});
 
   const consumerUrl = `${window.location.origin}/v1`;
+
+  const testProxy = async (proxy: OutboundProxy) => {
+    setTesting(proxy.id);
+    try {
+      const result = await api.testProxy(proxy.id);
+      setTestResults((current) => ({ ...current, [proxy.id]: result }));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Proxy test failed.');
+    } finally {
+      setTesting(null);
+    }
+  };
 
   const deleteProxy = async (proxy: OutboundProxy) => {
     setDeleteBusy(true);
@@ -172,6 +190,24 @@ export function SettingsPage() {
                             </>
                           ) : (
                             <>
+                              <ProxyTestReport result={testResults[proxy.id]} />
+                              <button
+                                className="btn btn-sm"
+                                disabled={testing === proxy.id}
+                                title={
+                                  proxy.provider_count > 0
+                                    ? 'Dial an assigned provider through this proxy.'
+                                    : 'No provider assigned yet, so a default vendor origin is dialled.'
+                                }
+                                onClick={() => void testProxy(proxy)}
+                              >
+                                {testing === proxy.id ? (
+                                  <span className="spinner" />
+                                ) : (
+                                  <Zap size={12} />
+                                )}
+                                {testing === proxy.id ? 'Testing…' : 'Test'}
+                              </button>
                               <button
                                 className="btn btn-sm"
                                 onClick={() => setEditingProxy(proxy)}
@@ -303,6 +339,41 @@ export function SettingsPage() {
       </div>
     </Page>
   );
+}
+
+/**
+ * Outcome of the last proxy test in this session. The target is shown because
+ * it varies per proxy — reaching a provider you actually route to and reaching
+ * the fallback origin are different claims.
+ */
+function ProxyTestReport({ result }: { result?: ProxyTestResult }) {
+  if (!result) return null;
+
+  if (!result.reachable) {
+    const detail = result.error || 'Unreachable';
+    return (
+      <span className={`${styles.proxyTestReport} ${styles.proxyTestFail}`} title={detail}>
+        <X size={12} /> {detail}
+      </span>
+    );
+  }
+  return (
+    <span
+      className={`${styles.proxyTestReport} ${styles.proxyTestOk}`}
+      title={`HTTP ${result.status} from ${result.target} in ${result.latency_ms} ms. Any status proves the tunnel carried the request; no credential was sent.`}
+    >
+      <Check size={12} /> {hostOf(result.target)} · {result.latency_ms} ms
+    </span>
+  );
+}
+
+/** Host of an origin, for display; falls back to the raw value. */
+function hostOf(origin: string): string {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return origin;
+  }
 }
 
 function ProxyForm({
