@@ -115,18 +115,86 @@ func TestCancelWhileQueuedFreesTheSlot(t *testing.T) {
 	waitFor(t, func() bool { return g.Stats()["cred"].Waiting == 0 })
 }
 
-// A cancellation racing a release must not swallow the wake-up: the next
-// waiter has to get it, or the queue stalls with a free slot.
+// A cancellation racing a release must not strand the queue: whichever way the
+// race falls, the free slot has to reach the waiter behind it.
+//
+// Which way it falls is genuinely up to the scheduler — the giving-up caller may
+// be admitted before it notices, may leave while still queued, or may leave
+// holding a wake-up a release already spent on it. This covers the race in the
+// large; TestAbandonPassesOnASpentWakeUp pins the last of those three, which is
+// far too narrow to reach by timing.
 func TestCancelDoesNotStrandTheQueue(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		g := New()
+		held, err := g.Acquire(context.Background(), "cred", 1)
+		if err != nil {
+			t.Fatalf("acquire: %v", err)
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		gaveUp := make(chan struct{})
+		go func() {
+			// The queue is FIFO, so this is both the waiter that gives up and the
+			// one the release wakes first. When the cancel loses the race it is
+			// admitted for real and has to hand the slot back — dropping it would
+			// strand the slot inside the test and blame the gate for a leak the
+			// test itself created.
+			release, err := g.Acquire(ctx, "cred", 1)
+			if err == nil {
+				release()
+			}
+			close(gaveUp)
+		}()
+		waitFor(t, func() bool { return g.Stats()["cred"].Waiting == 1 })
+
+		admitted := make(chan struct{})
+		go func() {
+			release, err := g.Acquire(context.Background(), "cred", 1)
+			if err != nil {
+				t.Errorf("second waiter: %v", err)
+				return
+			}
+			defer release()
+			close(admitted)
+		}()
+		waitFor(t, func() bool { return g.Stats()["cred"].Waiting == 2 })
+
+		// Cancel the first waiter and free the slot at nearly the same moment.
+		go cancel()
+		held()
+
+		select {
+		case <-admitted:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("queue stalled on attempt %d: a free slot went unclaimed", i)
+		}
+		<-gaveUp
+	}
+}
+
+// The narrowest case of that race, pinned deterministically: a release has
+// already dequeued a waiter and closed its channel when that waiter gives up, so
+// the wake-up is spent on a caller that will never use it. abandon has to pass it
+// on, or the next waiter sleeps forever beside a slot nobody holds.
+//
+// The window is a few instructions wide — between the giving-up caller
+// committing to its ctx.Done() case and it taking the mutex — so reaching it by
+// timing is luck. Driving the queue into that exact state is not, which is why
+// this test reaches into the gate's internals rather than racing goroutines.
+func TestAbandonPassesOnASpentWakeUp(t *testing.T) {
 	g := New()
+
 	held, err := g.Acquire(context.Background(), "cred", 1)
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _, _ = g.Acquire(ctx, "cred", 1) }()
-	waitFor(t, func() bool { return g.Stats()["cred"].Waiting == 1 })
+	// Stand in for a first waiter that is about to give up. Enqueuing its channel
+	// directly, with no goroutine behind it, is what makes the interleaving exact.
+	spent := make(chan struct{})
+	g.mu.Lock()
+	g.waiters["cred"] = append(g.waiters["cred"], spent)
+	g.mu.Unlock()
 
 	admitted := make(chan struct{})
 	go func() {
@@ -140,14 +208,22 @@ func TestCancelDoesNotStrandTheQueue(t *testing.T) {
 	}()
 	waitFor(t, func() bool { return g.Stats()["cred"].Waiting == 2 })
 
-	// Cancel the first waiter and free the slot at nearly the same moment.
-	go cancel()
+	// Free the slot. Being first in the FIFO, the stand-in absorbs the wake-up —
+	// so the real waiter is still parked with the credential now idle.
 	held()
+	select {
+	case <-spent:
+	default:
+		t.Fatal("release did not signal the longest-waiting caller")
+	}
+
+	// Now that caller gives up, holding a wake-up it never used.
+	g.abandon("cred", spent)
 
 	select {
 	case <-admitted:
 	case <-time.After(2 * time.Second):
-		t.Fatal("queue stalled: a free slot went unclaimed")
+		t.Fatal("a spent wake-up was swallowed: the queue stalled with a free slot")
 	}
 }
 
