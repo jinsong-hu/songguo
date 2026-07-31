@@ -94,11 +94,18 @@ const dayFmt = new Intl.DateTimeFormat(undefined, {
   day: 'numeric',
 });
 
-/** Axis/tooltip label for a series point, scaled to the bucket size. */
-export function bucketLabel(iso: string, bucket: 'hour' | 'day'): string {
+/**
+ * Axis/tooltip label for a series point, scaled to the bucket size.
+ *
+ * Anything a day or coarser is labelled by date; everything finer — hourly and
+ * the minute sizes — by time of day. Written as "is it day-scale?" rather than
+ * "is it hourly?" so new sub-hour sizes fall on the correct side by default.
+ */
+export function bucketLabel(iso: string, bucket: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return bucket === 'hour' ? timeFmt.format(d) : dayFmt.format(d);
+  const dayScale = bucket === 'day' || /^\d+d$/.test(bucket);
+  return dayScale ? dayFmt.format(d) : timeFmt.format(d);
 }
 
 /** Status group for a call entry, mapping to a pill style. */

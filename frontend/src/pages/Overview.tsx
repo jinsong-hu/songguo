@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bar,
   BarChart,
@@ -10,7 +10,7 @@ import {
 } from 'recharts';
 import { Activity, Clock, Coins, DatabaseZap, DollarSign, GitBranch, MessageSquare, ShieldCheck, Users, Wrench, X } from 'lucide-react';
 import { api } from '../api/client';
-import type { Bucket, ErrorCodeRow, UsageDimension } from '../api/types';
+import type { ErrorCodeRow, UsageDimension } from '../api/types';
 import { ContextSunburst, ContextDistributionCard } from '../components/ContextSunburst';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
@@ -28,20 +28,16 @@ import { bucketLabel, duration, int, money, percent } from '../lib/format';
 import { brandOf, providerBrand, ModelIcon } from '../lib/modelBrand';
 import { useSession } from '../lib/sessionContext';
 import { ActivityFeed } from './ActivityFeed';
+import { TimeRangePicker } from '../components/TimeRangePicker';
+import {
+  DEFAULT_RANGE,
+  type TimeRange,
+  deriveBucket,
+  isRolling,
+  rangeLabel,
+  resolveRange,
+} from '../lib/timeRange';
 import styles from './Overview.module.css';
-
-interface RangeOption {
-  key: string;
-  label: string;
-  seconds: number;
-  bucket: Bucket;
-}
-
-const RANGES: RangeOption[] = [
-  { key: '24h', label: '24h', seconds: 24 * 3600, bucket: 'hour' },
-  { key: '7d', label: '7d', seconds: 7 * 24 * 3600, bucket: 'day' },
-  { key: '30d', label: '30d', seconds: 30 * 24 * 3600, bucket: 'day' },
-];
 
 const REFRESH_MS = LIVE_REFRESH_MS;
 
@@ -67,7 +63,7 @@ export function OverviewPage() {
   const isUser = me.role === 'user';
   const usageDims = isUser ? USER_USAGE_DIMS : USAGE_DIMS;
 
-  const [rangeKey, setRangeKey] = useState('24h');
+  const [range, setRange] = useState<TimeRange>(DEFAULT_RANGE);
   const [usageDim, setUsageDim] = useState<UsageDimension>('model');
   const [perfDim, setPerfDim] = useState<UsageDimension>('model');
   const [successDim, setSuccessDim] = useState<UsageDimension>('model');
@@ -76,12 +72,36 @@ export function OverviewPage() {
   // to that one service/vendor/user. Null = all rows (unscoped).
   const [selectedService, setSelectedService] = useState<string | null>(null);
   const tick = useLiveTick(REFRESH_MS);
-  const range = RANGES.find((r) => r.key === rangeKey) ?? RANGES[0];
+
+  // The rolling/absolute fork lives here. A rolling range re-resolves on every
+  // tick so "Last 24 hours" keeps sliding; an absolute one must not, so the tick
+  // is deliberately excluded from its dependencies — otherwise a pinned window
+  // would creep forward on each refresh. `rollingTick` is the whole mechanism:
+  // it is the live clock for rolling ranges and a constant for absolute ones.
+  //
+  // resolveRange can return null (an expression the user is still typing), so
+  // fall back to the last good window rather than tearing the charts down.
+  // The +1 is load-bearing: the store filters `ts < until`, so resolving `now`
+  // to the current second would exclude a call that landed inside it. The old
+  // three-tab code did the same.
+  const rolling = isRolling(range);
+  const rollingTick = rolling ? tick + 1 : 0;
+  const lastGood = useRef<{ since: number; until: number } | null>(null);
 
   const { since, until } = useMemo(() => {
-    const u = tick + 1;
-    return { since: u - range.seconds, until: u };
-  }, [tick, range]);
+    const resolved = resolveRange(range, rolling ? new Date(rollingTick * 1000) : undefined);
+    if (resolved) {
+      lastGood.current = resolved;
+      return resolved;
+    }
+    return lastGood.current ?? { since: rollingTick - 86400, until: rollingTick };
+  }, [range, rolling, rollingTick]);
+
+  // Granularity now follows the window instead of being pinned per preset, so a
+  // one-hour view gets minute buckets and a 90-day view does not ask for 2160
+  // hourly points. Named for the request side: each chart still re-reads the
+  // bucket the server actually used off its own response.
+  const reqBucket = useMemo(() => deriveBucket(since, until), [since, until]);
 
   const opts = { intervalMs: REFRESH_MS };
   // The users roster is admin-only; skip it for a user key (which also drops the
@@ -92,25 +112,25 @@ export function OverviewPage() {
   const overview = useFetch(() => api.overview(since, until), [since, until], opts);
   const sessions = useFetch(() => api.sessionsOverview(since, until), [since, until], opts);
   const tokenSeries = useFetch(
-    () => api.tokensByModel(since, until, range.bucket, usageDim),
-    [since, until, range.bucket, usageDim],
+    () => api.tokensByModel(since, until, reqBucket, usageDim),
+    [since, until, reqBucket, usageDim],
     opts,
   );
   // Performance charts reuse the tokens-by-model endpoint (which also carries
   // per-key TTFT/throughput) with an independent dimension selector.
   const perfSeries = useFetch(
-    () => api.tokensByModel(since, until, range.bucket, perfDim),
-    [since, until, range.bucket, perfDim],
+    () => api.tokensByModel(since, until, reqBucket, perfDim),
+    [since, until, reqBucket, perfDim],
     opts,
   );
   const successSeries = useFetch(
-    () => api.successByModel(since, until, range.bucket, successDim),
-    [since, until, range.bucket, successDim],
+    () => api.successByModel(since, until, reqBucket, successDim),
+    [since, until, reqBucket, successDim],
     opts,
   );
   const cacheSeries = useFetch(
-    () => api.cacheByModel(since, until, range.bucket, cacheDim),
-    [since, until, range.bucket, cacheDim],
+    () => api.cacheByModel(since, until, reqBucket, cacheDim),
+    [since, until, reqBucket, cacheDim],
     opts,
   );
   // Resolve user-id series keys to display names for the by-user views. Admin
@@ -136,7 +156,7 @@ export function OverviewPage() {
   const { tokenModels, tokenPoints, costPoints } = useMemo(() => {
     const data = tokenSeries.data;
     const modelKeys = data?.models ?? [];
-    const bucket = data?.bucket ?? range.bucket;
+    const bucket = data?.bucket ?? reqBucket;
     const tokRows: Record<string, number | string>[] = [];
     const costRows: Record<string, number | string>[] = [];
     for (const p of data?.points ?? []) {
@@ -151,7 +171,7 @@ export function OverviewPage() {
       costRows.push(cost);
     }
     return { tokenModels: modelKeys, tokenPoints: tokRows, costPoints: costRows };
-  }, [tokenSeries.data, range.bucket]);
+  }, [tokenSeries.data, reqBucket]);
   // Map a series key to its display label: user ids resolve to names in the
   // by-user view (falling back to the id); other dimensions show the key as-is.
   const seriesLabel = useMemo(() => {
@@ -177,7 +197,7 @@ export function OverviewPage() {
   const { perfKeys, ttftPoints, tpsPoints } = useMemo(() => {
     const data = perfSeries.data;
     const keys = data?.models ?? [];
-    const bucket = data?.bucket ?? range.bucket;
+    const bucket = data?.bucket ?? reqBucket;
     const ttftRows: Record<string, number | string>[] = [];
     const tpsRows: Record<string, number | string>[] = [];
     for (const p of data?.points ?? []) {
@@ -192,7 +212,7 @@ export function OverviewPage() {
       tpsRows.push(tps);
     }
     return { perfKeys: keys, ttftPoints: ttftRows, tpsPoints: tpsRows };
-  }, [perfSeries.data, range.bucket]);
+  }, [perfSeries.data, reqBucket]);
   const perfLabel = useMemo(() => {
     const names = new Map((usersList.data ?? []).map((u) => [u.id, u.name]));
     return (key: string) => (perfDim === 'user' ? names.get(key) ?? key : key);
@@ -216,7 +236,7 @@ export function OverviewPage() {
   const { successRows } = useMemo(() => {
     const data = successSeries.data;
     const keys = data?.models ?? [];
-    const bucket = data?.bucket ?? range.bucket;
+    const bucket = data?.bucket ?? reqBucket;
     const points = data?.points ?? [];
     const rows = keys.map((k) => {
       let totReq = 0;
@@ -233,7 +253,7 @@ export function OverviewPage() {
       return { key: k, bars, requests: totReq, overall: totReq > 0 ? (totReq - totErr) / totReq : 1 };
     });
     return { successRows: rows };
-  }, [successSeries.data, range.bucket]);
+  }, [successSeries.data, reqBucket]);
   const successEmpty = successRows.length === 0;
   // Series-key -> display label for the Success dimension (user ids resolve to
   // names in the by-user view, like seriesLabel does for Usage).
@@ -269,7 +289,7 @@ export function OverviewPage() {
   // the fetch correct in the same render; this just tidies the stored selection.
   useEffect(() => {
     setSelectedService(null);
-  }, [successDim, rangeKey]);
+  }, [successDim, range]);
 
   // Cache-hit %-over-time chart: one row per bucket with a per-key cache-hit rate
   // (cache reads / total input tokens, as a %). Null when the key had no input in
@@ -278,7 +298,7 @@ export function OverviewPage() {
   const { cacheModels, cachePoints } = useMemo(() => {
     const data = cacheSeries.data;
     const keys = data?.models ?? [];
-    const bucket = data?.bucket ?? range.bucket;
+    const bucket = data?.bucket ?? reqBucket;
     const rows: Record<string, number | string | null>[] = [];
     for (const p of data?.points ?? []) {
       const row: Record<string, number | string | null> = { label: bucketLabel(p.ts, bucket) };
@@ -290,7 +310,7 @@ export function OverviewPage() {
       rows.push(row);
     }
     return { cacheModels: keys, cachePoints: rows };
-  }, [cacheSeries.data, range.bucket]);
+  }, [cacheSeries.data, reqBucket]);
   const cacheEmpty = cacheModels.length === 0;
   const cacheSeriesLabel = useMemo(() => {
     const names = new Map((usersList.data ?? []).map((u) => [u.id, u.name]));
@@ -308,21 +328,7 @@ export function OverviewPage() {
     [cacheModels, cacheDim],
   );
 
-  const rangeSwitch = (
-    <div className={styles.seg} role="tablist" aria-label="Time range">
-      {RANGES.map((r) => (
-        <button
-          key={r.key}
-          role="tab"
-          aria-selected={r.key === rangeKey}
-          className={`${styles.segBtn} ${r.key === rangeKey ? styles.segActive : ''}`}
-          onClick={() => setRangeKey(r.key)}
-        >
-          {r.label}
-        </button>
-      ))}
-    </div>
-  );
+  const rangeSwitch = <TimeRangePicker value={range} onChange={setRange} />;
 
   return (
     <Page title="Overview" actions={rangeSwitch}>
@@ -672,7 +678,7 @@ export function OverviewPage() {
       <div className={styles.kpiGrid}>
         <Kpi
           icon={<GitBranch size={14} />}
-          label={`Sessions (${range.label})`}
+          label={`Sessions (${rangeLabel(range)})`}
           loading={sessions.initialLoading}
           value={ss ? int(ss.sessions) : '—'}
           sub={ss ? `${int(ss.with_subagents)} used subagents` : undefined}

@@ -1,6 +1,7 @@
 import type {
   Breakdown,
   BreakdownDimension,
+  Bucket,
   CallsFilters,
   CallsPage,
   CallEntry,
@@ -165,13 +166,13 @@ export const api = {
   sessionsOverview: (since: number, until: number) =>
     request<SessionStats>(`/sessions/overview${qs({ since, until })}`),
 
-  series: (since: number, until: number, bucket: 'hour' | 'day') =>
+  series: (since: number, until: number, bucket: Bucket) =>
     request<UsageSeries>(`/usage/series${qs({ since, until, bucket })}`),
 
   tokensByModel: (
     since: number,
     until: number,
-    bucket: 'hour' | 'day',
+    bucket: Bucket,
     dimension: UsageDimension = 'model',
   ) =>
     request<TokensByModelSeries>(
@@ -181,7 +182,7 @@ export const api = {
   successByModel: (
     since: number,
     until: number,
-    bucket: 'hour' | 'day',
+    bucket: Bucket,
     dimension: UsageDimension = 'model',
   ) =>
     request<SuccessByModelSeries>(
@@ -191,7 +192,7 @@ export const api = {
   cacheByModel: (
     since: number,
     until: number,
-    bucket: 'hour' | 'day',
+    bucket: Bucket,
     dimension: UsageDimension = 'model',
   ) =>
     request<CacheByModelSeries>(

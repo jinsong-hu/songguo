@@ -42,7 +42,13 @@ export interface Overview {
   runway_days: number | null;
 }
 
-export type Bucket = 'hour' | 'day';
+/**
+ * Bucket size on the wire. "hour" and "day" are the original spellings the API
+ * still returns for those two sizes; anything else is a `<count><unit>` size
+ * like "5m" or "6h". Deliberately widened to string rather than a union — the
+ * counts are open-ended, so an exhaustive type would be a lie.
+ */
+export type Bucket = string;
 
 /**
  * Aggregate stats over coding-agent sessions in a window (GET /api/sessions/overview).

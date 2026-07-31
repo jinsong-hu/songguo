@@ -167,3 +167,36 @@ export function rangeLabel(range: TimeRange): string {
 export function isRolling(range: TimeRange): boolean {
   return range.kind === 'rolling';
 }
+
+/**
+ * Build a range from the picker's two free-text fields, or null if either side
+ * is unusable. Each field takes a datemath expression or a timestamp, which is
+ * what makes the control feel like Grafana's.
+ *
+ * The kind is inferred rather than toggled: a field mentioning `now` is only
+ * meaningful if it keeps being re-evaluated, so any mention makes the whole
+ * range rolling. Two plain timestamps pin to absolute. That means "now-6h" to
+ * "now" keeps sliding while "2026-07-14 09:00" to "now" also slides (its upper
+ * edge genuinely is the clock) — and neither surprises the person who typed it.
+ */
+export function rangeFromInputs(from: string, to: string): TimeRange | null {
+  const f = from.trim();
+  const t = to.trim();
+  if (!f || !t) return null;
+
+  const rolling: TimeRange = { kind: 'rolling', from: f, to: t };
+  const resolved = resolveRange(rolling);
+  if (!resolved) return null;
+
+  if (f.includes('now') || t.includes('now')) return rolling;
+  return { kind: 'absolute', from: resolved.since, to: resolved.until };
+}
+
+/** The inverse: seed the picker's fields from the active range. */
+export function rangeToInputs(range: TimeRange): { from: string; to: string } {
+  if (range.kind === 'rolling') return { from: range.from, to: range.to };
+  return {
+    from: dayjs(range.from * 1000).format(ABSOLUTE_FMT),
+    to: dayjs(range.to * 1000).format(ABSOLUTE_FMT),
+  };
+}

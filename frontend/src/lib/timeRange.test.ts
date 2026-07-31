@@ -7,7 +7,9 @@ import {
   type TimeRange,
   deriveBucket,
   isRolling,
+  rangeFromInputs,
   rangeLabel,
+  rangeToInputs,
   resolveRange,
 } from './timeRange';
 
@@ -166,6 +168,65 @@ describe('rangeLabel', () => {
     const from = dayjs('2026-07-14T09:00:00').valueOf() / 1000;
     const to = dayjs('2026-07-21T09:00:00').valueOf() / 1000;
     expect(rangeLabel({ kind: 'absolute', from, to })).toBe('2026-07-14 09:00 → 2026-07-21 09:00');
+  });
+});
+
+describe('rangeFromInputs', () => {
+  it('keeps a range rolling when either side mentions now', () => {
+    expect(rangeFromInputs('now-6h', 'now')).toEqual({
+      kind: 'rolling',
+      from: 'now-6h',
+      to: 'now',
+    });
+    expect(rangeFromInputs('2026-07-14T09:00:00Z', 'now')).toEqual({
+      kind: 'rolling',
+      from: '2026-07-14T09:00:00Z',
+      to: 'now',
+    });
+  });
+
+  it('pins two timestamps to absolute seconds', () => {
+    const got = rangeFromInputs('2026-07-14T09:00:00Z', '2026-07-21T09:00:00Z');
+    expect(got).toEqual({
+      kind: 'absolute',
+      from: Math.floor(Date.parse('2026-07-14T09:00:00Z') / 1000),
+      to: Math.floor(Date.parse('2026-07-21T09:00:00Z') / 1000),
+    });
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(rangeFromInputs('  now-6h  ', ' now ')).toEqual({
+      kind: 'rolling',
+      from: 'now-6h',
+      to: 'now',
+    });
+  });
+
+  it.each([
+    ['', 'now', 'empty from'],
+    ['now-6h', '', 'empty to'],
+    ['   ', 'now', 'blank from'],
+    ['now-5q', 'now', 'bad unit'],
+    ['garbage', 'now', 'unparseable'],
+    ['now', 'now-6h', 'inverted'],
+  ])('rejects (%s, %s) — %s', (from, to) => {
+    expect(rangeFromInputs(from, to)).toBeNull();
+  });
+});
+
+describe('rangeToInputs', () => {
+  it('round-trips a rolling range verbatim', () => {
+    const range: TimeRange = { kind: 'rolling', from: 'now-1d/d', to: 'now/d' };
+    expect(rangeToInputs(range)).toEqual({ from: 'now-1d/d', to: 'now/d' });
+    expect(rangeFromInputs('now-1d/d', 'now/d')).toEqual(range);
+  });
+
+  it('round-trips an absolute range through its formatted form', () => {
+    const from = Math.floor(dayjs('2026-07-14T09:00:00').valueOf() / 1000);
+    const to = Math.floor(dayjs('2026-07-21T09:00:00').valueOf() / 1000);
+    const fields = rangeToInputs({ kind: 'absolute', from, to });
+    expect(fields).toEqual({ from: '2026-07-14 09:00', to: '2026-07-21 09:00' });
+    expect(rangeFromInputs(fields.from, fields.to)).toEqual({ kind: 'absolute', from, to });
   });
 });
 
