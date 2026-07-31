@@ -231,8 +231,8 @@ export function OverviewPage() {
   // the backend, top N + "Other"), each carrying a per-bucket bar (request volume
   // + success rate) and an overall success %. Bar height AND color both encode the
   // bucket's success rate, so a short bar always means a bad bucket regardless of
-  // the current view. Buckets with no requests carry rate=null (rendered as a flat
-  // baseline tick so bars stay time-aligned across rows).
+  // the current view. Buckets with no requests carry rate=null (nothing failed, so
+  // BarStrip draws them as a clean full bar).
   const { successRows } = useMemo(() => {
     const data = successSeries.data;
     const keys = data?.models ?? [];
@@ -889,13 +889,32 @@ function compact(n: number): string {
 
 // ---- Success bar-table + error codes ----
 
-// Success-rate → band color: green ≥ 99%, amber ≥ 90%, red below. null (no
-// traffic) → muted grey. Bars and the overall % share this scale.
+/**
+ * Success-rate bands, best first: 99–100 · 95–99 · 90–95 · 80–90 · 60–80 · <60.
+ *
+ * Colour and bar height both come out of this one table, so the two encodings
+ * can never drift apart — greener is always taller. Height is banded rather than
+ * linear because everything worth seeing lives in the top few percent: on a
+ * linear scale a 95% bucket and a perfect one draw as the same full bar, and the
+ * strip reads as uniformly fine. Six steps of 16% make the difference obvious at
+ * a 34px strip height.
+ */
+const BANDS: { min: number; color: string; height: number }[] = [
+  { min: 0.99, color: 'var(--band-6)', height: 100 },
+  { min: 0.95, color: 'var(--band-5)', height: 84 },
+  { min: 0.9, color: 'var(--band-4)', height: 68 },
+  { min: 0.8, color: 'var(--band-3)', height: 52 },
+  { min: 0.6, color: 'var(--band-2)', height: 36 },
+  { min: 0, color: 'var(--band-1)', height: 20 },
+];
+
+function band(rate: number): { color: string; height: number } {
+  return BANDS.find((b) => rate >= b.min) ?? BANDS[BANDS.length - 1];
+}
+
+// Bars and the overall % share the band scale; no traffic → muted grey.
 function bandColor(rate: number | null): string {
-  if (rate == null) return 'var(--text-muted)';
-  if (rate >= 0.99) return 'var(--chart-1)';
-  if (rate >= 0.9) return 'var(--amber)';
-  return 'var(--danger)';
+  return rate == null ? 'var(--text-muted)' : band(rate).color;
 }
 
 interface SuccessBar {
@@ -906,11 +925,11 @@ interface SuccessBar {
 
 /**
  * A compact strip of vertical bars, one per time bucket (same buckets as the old
- * line chart). Height AND color both encode the bucket's success rate on a fixed
- * 0–100% scale — a short bar always means a bad bucket, regardless of the current
- * view or traffic. No-traffic buckets (rate=null) count as a clean 100% — nothing
- * failed — so they render a full-height green bar rather than a gap; a genuinely-
- * failing bucket keeps a small floor so a 0%-ok bar stays a visible red sliver.
+ * line chart). Height AND color both encode the bucket's success rate on the same
+ * fixed band scale — a short bar always means a bad bucket, regardless of the
+ * current view or traffic. No-traffic buckets (rate=null) count as a clean 100% —
+ * nothing failed — so they render a full-height green bar rather than a gap; the
+ * worst band still stands 20% tall so a 0%-ok bar is a visible red stub.
  */
 function BarStrip({ bars }: { bars: SuccessBar[] }) {
   return (
@@ -918,13 +937,12 @@ function BarStrip({ bars }: { bars: SuccessBar[] }) {
       {bars.map((b, i) => {
         // No traffic → nothing failed, so render a clean full-height 100% bar
         // rather than a baseline tick that reads like a gap or a problem.
-        const rate = b.rate == null ? 1 : b.rate;
-        const h = Math.max(6, rate * 100);
+        const { color, height } = band(b.rate == null ? 1 : b.rate);
         return (
           <div key={i} className={styles.barSlot}>
             <div
               className={styles.bar}
-              style={{ height: `${h}%`, background: bandColor(rate) }}
+              style={{ height: `${height}%`, background: color }}
               title={
                 b.rate == null
                   ? `${b.label}: no requests`

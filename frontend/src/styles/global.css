@@ -33,6 +33,17 @@
   --producer-7: #c13f94;
   --producer-8: #5f7f1f;
 
+  /* Success-rate bands, worst (1) → best (6). An *ordered* ramp, not a
+     categorical set: the hue walks red → orange → amber → olive → pine, and the
+     six values are spelled out per theme so the order can't be broken later by
+     someone retuning --danger or --amber for an alert elsewhere. */
+  --band-1: #9c2c15;
+  --band-2: #bd4126;
+  --band-3: #b8641c;
+  --band-4: #a37b12;
+  --band-5: #6f8a2c;
+  --band-6: #3f8f5b;
+
   /* No "Inter" here on purpose: the API-reference page (Scalar) registers an
      Inter @font-face at runtime, and if Inter were a candidate the whole app's
      text would silently switch to it once that page is opened. */
@@ -80,6 +91,13 @@
   --producer-6: #8aa6c0;
   --producer-7: #ee78c4;
   --producer-8: #a7bf55;
+
+  --band-1: #d9503a;
+  --band-2: #e0735a;
+  --band-3: #e39152;
+  --band-4: #d9a441;
+  --band-5: #a8bb55;
+  --band-6: #5ba873;
 
   --shadow: none;
 
