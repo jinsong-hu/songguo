@@ -101,15 +101,52 @@ vendor/model as resolved as routing allows), insert a `calls` row:
 gateway denial, an upstream transport failure, or a client abort — update the
 same row:
 
-- `status` = final HTTP status (or 0 for a transport failure / no response)
-- `err`, `usage`, `input_tokens`, `output_tokens`, `cached_tokens`, `cost`,
+- `status` = the HTTP status the **client** received — the provider's own code
+  for a forwarded call, ours for a denial
+- `err` = **whose** doing it was: `""` for anything forwarded to a provider,
+  otherwise one of the slugs in `internal/calls`
+- `usage`, `input_tokens`, `output_tokens`, `cached_tokens`, `cost`,
   `latency_ms`, `ttft_ms`, `generation_ms`, `stream`, `confidence`, `wire`
 - `ts_end` = now
 
-A row that has phase 1 but never phase 2 is a visible in-flight or interrupted
-call: `status = pending`, `ts_end = null`. A crash, a hang, or an aborted stream
-leaves a trace instead of a hole. The dashboard reads these as pending /
-interrupted rather than pretending the call never happened.
+**Read `status` and `err` together, never `status` alone.** songguo mints
+statuses of its own — a budget refusal is `402`, an unmatched wire `404`, a
+routing miss `502` — so on the integer a denial we issued is indistinguishable
+from the same code coming back from the provider, and a `429` we raised looks
+exactly like one the provider raised. The pair is unambiguous, and
+`calls.OutcomeOf(status, err)` is the single classifier over it. The outcome is
+*derived* rather than stored, which is what makes it correct for the rows already
+in the ledger instead of only for traffic that arrives from now on.
+
+Two consequences worth stating, because both were previously recorded as
+something they were not:
+
+- A stream that dies mid-body keeps `status = 200` — the client really did
+  receive a 200 header, and rewriting it would be its own lie — and records the
+  break in `err`. Both fields stay true.
+- A transport failure keeps the real error text (`connection refused`, `no such
+  host`, `certificate has expired`), which the client was already being told.
+
+A row that has phase 1 but never phase 2 has `status = pending`, `ts_end = null`
+— it left a trace instead of a hole. There are two ways to get there and the API
+separates them, because "running right now" and "will never finish" are
+different facts:
+
+- **in flight** — created by the process now serving the API.
+- **never finished** (`abandoned: true`) — created before this process booted,
+  so nothing alive owns it. Deliberately *not* called "crashed": a crash, a clean
+  `SIGTERM` and a `docker stop` mid-call all leave an identical row, so naming
+  one of them would invent a cause.
+
+Neither can detect a row that leaked to pending while the process stayed up —
+only an invented timeout could, and songguo does not invent those. That is why an
+in-flight row shows elapsed time and renders no verdict.
+
+> History: `status = 0` used to mean "transport failure / no response". Nothing
+> has written it since transport failures started being recorded as `502` plus a
+> `transport_error:` slug; it survives only on old rows, where `OutcomeOf` still
+> decodes it. The dashboard's "Transport" bucket keyed on it and was therefore
+> permanently empty, while real transport failures hid inside the 5xx count.
 
 Gateway-originated denials (unmatched `404`, scope `403`, budget `402`, rate
 `429`) and upstream build/transport failures (`502`) still produce a finalized

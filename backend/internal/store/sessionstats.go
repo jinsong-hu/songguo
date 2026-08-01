@@ -25,10 +25,16 @@ import (
 // sessions. Duration is wall-clock LastTS−FirstTS in seconds; a single-call
 // session reads as 0 (the ledger only stores per-call completion time).
 type SessionStats struct {
-	Sessions    int
-	Completed   int
-	Errored     int
+	Sessions  int
+	Completed int
+	Errored   int
+	// Interrupted: the session's last call finished without an answer.
 	Interrupted int
+	// Pending: the session's last call never finished — it is still running, or
+	// the gateway restarted before it did. Split out from Interrupted because
+	// "no answer" and "no verdict" are different states, and merging them
+	// reported live sessions as broken ones.
+	Pending int
 
 	// WithSubagents counts sessions that spawned at least one subagent (any call
 	// carried a non-empty parent_agent_id) when the client exposes agent-tree
@@ -154,8 +160,8 @@ func (s *Store) SessionStats(sc Scope, since, until *time.Time) (SessionStats, e
 	for _, agg := range aggs {
 		switch {
 		case agg.lastStatus == calls.StatusPending:
-			// Still in flight — count as interrupted-in-progress for the mix.
-			out.Interrupted++
+			// No verdict: running, or never finished. Not a broken session.
+			out.Pending++
 		case agg.lastStatus == 0:
 			out.Interrupted++
 		case agg.lastStatus >= 400:

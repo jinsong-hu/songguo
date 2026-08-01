@@ -1,11 +1,22 @@
 import { useMemo, useState, type CSSProperties } from 'react';
 import type { CallEntry } from '../api/types';
 import { duration, int, percent } from '../lib/format';
+import { blameFor, outcomeLabel, outcomeOf } from '../lib/outcome';
 import styles from './SessionTimeline.module.css';
 
 // A call's kind on the timeline. Derived from the stored entrypoint (the classifier's
-// verdict) plus tool_calls and status — never from the request body.
-type CatKey = 'core_tool' | 'core_text' | 'monitor' | 'count_tokens' | 'utility' | 'error' | 'pending';
+// verdict) plus tool_calls and the outcome — never from the request body.
+type CatKey =
+  | 'core_tool'
+  | 'core_text'
+  | 'monitor'
+  | 'count_tokens'
+  | 'utility'
+  | 'error'
+  | 'denied'
+  | 'aborted'
+  | 'pending'
+  | 'abandoned';
 
 const CATS: Record<CatKey, { label: string; color: string; hatch?: boolean }> = {
   core_tool: { label: 'Tool turn', color: 'var(--chart-1)' },
@@ -13,13 +24,28 @@ const CATS: Record<CatKey, { label: string; color: string; hatch?: boolean }> = 
   monitor: { label: 'Monitor', color: 'var(--chart-3)' },
   count_tokens: { label: 'Count-tokens', color: 'var(--chart-5)' },
   utility: { label: 'Utility', color: 'var(--chart-2)' },
-  error: { label: 'Failed / aborted', color: 'var(--danger)', hatch: true },
+  // Four ways for a turn not to produce an answer, kept apart because they have
+  // nothing in common: the provider failed, songguo refused, the caller left, or
+  // the gateway restarted mid-call.
+  error: { label: 'Failed', color: 'var(--danger)', hatch: true },
+  denied: { label: 'Refused by songguo', color: 'var(--violet)', hatch: true },
+  aborted: { label: 'Client left', color: 'var(--text-muted)' },
   pending: { label: 'In flight', color: 'var(--text-muted)' },
+  abandoned: { label: 'Never finished', color: 'var(--text-muted)', hatch: true },
 };
 
 function categorize(e: CallEntry): CatKey {
-  if (e.pending) return 'pending';
-  if (e.status <= 0 || e.status >= 400) return 'error';
+  const outcome = outcomeOf(e);
+  switch (outcome) {
+    case 'in_flight':
+      return 'pending';
+    case 'abandoned':
+      return 'abandoned';
+    case 'client_gone':
+      return 'aborted';
+  }
+  if (blameFor(outcome) === 'gateway') return 'denied';
+  if (outcome !== 'ok') return 'error';
   switch (e.entrypoint) {
     case 'monitor':
       return 'monitor';
@@ -94,7 +120,14 @@ export function SessionTimeline({ entries }: { entries: CallEntry[] }) {
     const timed = entries
       .map((e) => {
         const s = new Date(e.ts).getTime();
-        const end = e.ts_end ? new Date(e.ts_end).getTime() : s;
+        // A call with no end time either is still running (extend it to now, so
+        // the bar is visible and grows) or never finished (leave it zero-width —
+        // we have no idea how long it ran, and inventing a width would say we do).
+        const end = e.ts_end
+          ? new Date(e.ts_end).getTime()
+          : outcomeOf(e) === 'in_flight'
+            ? Date.now()
+            : s;
         return { entry: e, start: s, end: Math.max(end, s) };
       })
       .filter((r) => Number.isFinite(r.start))
@@ -304,7 +337,8 @@ function Tooltip({ tip, base, gapIsWaiting }: { tip: TipState; base: number; gap
   if (seg.kind === 'call' && seg.entry) {
     const e = seg.entry;
     const cat = CATS[categorize(e)];
-    const status = e.status === 200 ? '200 OK' : e.status <= 0 ? `${e.status} · aborted` : e.status;
+    const outcome = outcomeOf(e);
+    const status = e.status === 200 ? '200 OK' : outcomeLabel(outcome, e.status);
     const out = e.output_tokens || 0;
     const cacheRead = e.cache_read_input_tokens || 0;
     return (

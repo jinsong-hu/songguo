@@ -103,13 +103,16 @@ coding-agent sessions get a `sessions` row.
 Outcome is read off the session's last call by time and is an interaction-level
 signal, not a judgment about the underlying task (the gateway never sees that):
 
-- **Interrupted** — the last call had no upstream response (status 0): the client
-  aborted mid-stream.
+- **Interrupted** — the last call finished with no upstream response.
 - **Errored** — the last call returned 4xx/5xx.
 - **Completed** — the last call returned 2xx/3xx.
+- **Pending** — the last call never finished: it is still running, or the
+  gateway restarted before it did.
 
-With the two-phase write, a session whose last call is still *pending* (created
-but not finalized) reads as in-flight until that call finalizes or is pruned.
+**Pending is its own bucket, not a kind of interrupted.** It used to be folded
+into Interrupted, which reported every live session as a broken one. "Got no
+answer" and "has no verdict yet" are different states, and a session still
+working is not a session that failed.
 
 ## Read paths
 

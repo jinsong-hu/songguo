@@ -289,6 +289,7 @@ func (a *api) handleSessionsOverview(w http.ResponseWriter, r *http.Request) {
 		Completed:      st.Completed,
 		Errored:        st.Errored,
 		Interrupted:    st.Interrupted,
+		Pending:        st.Pending,
 		WithSubagents:  st.WithSubagents,
 		TotalTurns:     st.TotalTurns,
 		TotalTokens:    st.TotalTokens,
@@ -701,6 +702,7 @@ func (a *api) handleErrors(w http.ResponseWriter, r *http.Request) {
 		ClientError: c.ClientError,
 		ServerError: c.ServerError,
 		Transport:   c.Transport,
+		Gateway:     c.Gateway,
 	})
 }
 
@@ -738,7 +740,7 @@ func (a *api) handleTopErrorCodes(w http.ResponseWriter, r *http.Request) {
 
 	views := make([]errorCodeRow, 0, len(rows))
 	for _, row := range rows {
-		views = append(views, errorCodeRow{Status: row.Status, Count: row.Count})
+		views = append(views, errorCodeRow{Status: row.Status, Outcome: row.Outcome, Count: row.Count})
 	}
 	writeJSON(w, http.StatusOK, errorCodesView{
 		Range: rangeView{Since: since.Unix(), Until: until.Unix()},
@@ -827,7 +829,7 @@ func (a *api) callsData(f store.CallFilter) (callsView, error) {
 	}
 	views := make([]entryView, 0, len(entries))
 	for _, e := range entries {
-		v := newEntryView(e)
+		v := newEntryView(e, a.bootTime)
 		v.HasTrace = hasTrace[e.ID]
 		views = append(views, v)
 	}
@@ -937,7 +939,7 @@ func (a *api) callData(id string) (entryView, error) {
 		}
 		return entryView{}, err
 	}
-	v := newEntryView(e)
+	v := newEntryView(e, a.bootTime)
 	hasTrace, err := a.store.HasPayloads([]string{id})
 	if err != nil {
 		return entryView{}, err
@@ -999,7 +1001,7 @@ func (a *api) sessionData(id string) (sessionView, error) {
 		cacheRead += e.CachedTokens
 		cacheCreate += e.CacheCreationTokens
 		think += e.ThinkingTokens
-		if e.Status == 0 || e.Status >= 400 {
+		if store.IsCallError(e.Status, e.Err) {
 			errCount++
 		}
 		if e.Model != "" {
@@ -1022,7 +1024,7 @@ func (a *api) sessionData(id string) (sessionView, error) {
 	}
 	entViews := make([]entryView, 0, len(entries))
 	for _, e := range entries {
-		v := newEntryView(e)
+		v := newEntryView(e, a.bootTime)
 		v.HasTrace = hasTrace[e.ID]
 		a.enrichClientFromTrace(&v)
 		entViews = append(entViews, v)

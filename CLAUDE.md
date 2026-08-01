@@ -311,6 +311,57 @@ blind-pipes to an arbitrary origin.
 > *can't route*: endpoint-first routing needs no model. Removed 2026-07-04 — WS
 > now routes by endpoint like HTTP, and the pin is optional everywhere.
 
+## Ledger transparency: we invent no post-mortems either
+
+The ledger is held to the same standard as the wire. We never invent bytes, we
+never invent attempts — and we never invent an **explanation**. A call record
+says what was observed and stops there.
+
+Three rules follow, and each one replaced a place where the ledger stated
+something that was not true:
+
+- **`status` and `err` are read together, never `status` alone.** songguo mints
+  statuses of its own (`402` budget, `404` unmatched wire, `429` our rate limit,
+  `502` no route), so on the integer a refusal *we* issued is indistinguishable
+  from the same code coming back from the provider. `err` carries whose doing it
+  was — empty for anything forwarded — and `calls.OutcomeOf(status, err)` is the
+  one classifier over the pair. Everything that grades a call uses it, so a
+  success rate can never disagree with the pill rendered beside it.
+- **Both fields stay true at once.** A stream that dies mid-body keeps
+  `status = 200`, because the client really did receive a 200 header; the break
+  is recorded in `err`. Correcting the status would trade one lie for another.
+- **The outcome is derived, not stored.** A new column would be empty on every
+  row already in the ledger — useless for a feature whose whole point is that
+  the history reads honestly. `(status, err)` already encodes it totally;
+  `TestOutcomeOfIsTotal` is the guard that keeps that true as slugs are added.
+
+What we refuse to say is as load-bearing as what we say:
+
+- A pending row is **in flight** or **never finished** — the second only when it
+  predates this process's boot, so nothing alive can own it. It is *not* called
+  "crashed": a crash, a clean `SIGTERM` and a `docker stop` mid-call leave an
+  identical row, and picking one would be a guess.
+- A long-running call is never called "hung". That needs a timeout, and songguo
+  invents no timeouts (see the concurrency queue, bounded only by the caller's
+  own context). In-flight rows show elapsed time and render no verdict.
+- A call with no verdict is in **neither** side of a rate. Counting pending as
+  success is what the old `status = 0 OR status >= 400` did — `-1` is not `>=
+  400` — so abandoned calls quietly *raised* the success rate.
+- A caller pressing Esc (`499`) is nobody's failure, and songguo's own denials
+  are not the provider's. Only `IsProviderFailure` counts against a vendor.
+
+> History: until 2026-08-01 the ledger stated four things that were false. A
+> truncated stream was stored as a clean `200` with no error. A failed WebSocket
+> dial recorded no row at all, so an unreachable provider looked like an absence
+> of traffic. Transport failures were flattened to the slug `upstream_error`,
+> discarding the "connection refused" / "certificate expired" text the client
+> was already being shown — and sharing that slug with request-build failures,
+> so `502` meant four different things. And `status = 0`, documented as
+> "transport failure", had not been written by any code path in a long time: the
+> dashboard's "Transport" bucket keyed on it and was permanently empty while
+> real transport failures hid inside the 5xx count. Old rows still carry `0` and
+> `OutcomeOf` still decodes it; nothing writes it.
+
 ## Key docs
 
 | File | Purpose |

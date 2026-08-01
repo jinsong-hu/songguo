@@ -64,19 +64,28 @@ func newUserView(u store.User, spent float64) userView {
 
 // entryView is the JSON representation of a call entry.
 type entryView struct {
-	ID                  string            `json:"id"`
-	TS                  string            `json:"ts"`
-	TSEnd               string            `json:"ts_end,omitempty"` // empty while the call is in flight (pending)
-	Pending             bool              `json:"pending"`          // true when created but not yet finalized
-	UserID              string            `json:"user_id"`
-	Model               string            `json:"model"`
-	Modality            string            `json:"modality"`
-	Vendor              string            `json:"vendor"`
-	CredentialID        string            `json:"credential_id"`
-	Wire                string            `json:"wire"`
-	Confidence          string            `json:"confidence"`
-	Status              int               `json:"status"`
-	Err                 string            `json:"err"`
+	ID           string `json:"id"`
+	TS           string `json:"ts"`
+	TSEnd        string `json:"ts_end,omitempty"` // empty while the call is in flight (pending)
+	Pending      bool   `json:"pending"`          // true when created but not yet finalized
+	UserID       string `json:"user_id"`
+	Model        string `json:"model"`
+	Modality     string `json:"modality"`
+	Vendor       string `json:"vendor"`
+	CredentialID string `json:"credential_id"`
+	Wire         string `json:"wire"`
+	Confidence   string `json:"confidence"`
+	Status       int    `json:"status"`
+	Err          string `json:"err"`
+	// Outcome is what actually happened, derived from (Status, Err) — see
+	// calls.OutcomeOf. Status alone cannot say: a 429 songguo issued and a 429 a
+	// provider returned are the same integer. Status and Pending are unchanged
+	// and still authoritative; this is additive.
+	Outcome string `json:"outcome"`
+	// Abandoned marks a pending row created before this gateway process booted,
+	// so no live request owns it and none ever will. Only the gateway knows its
+	// own boot time, which is why the split is made here and not in the client.
+	Abandoned           bool              `json:"abandoned"`
 	Usage               map[string]any    `json:"usage"`
 	Cost                float64           `json:"cost"`
 	InputTokens         float64           `json:"input_tokens"`
@@ -109,8 +118,37 @@ type entryView struct {
 	Composition *compose.Composition `json:"composition,omitempty"`
 }
 
+// isAbandoned reports whether a pending row was created before this gateway
+// process booted, so nothing alive owns it and nothing ever will.
+//
+// A zero bootTime declines the question: every pending row then reads as in
+// flight. That is the safe direction — it withholds a verdict rather than
+// inventing one.
+//
+// Known limitation, and the reason in-flight rows show elapsed time instead of a
+// verdict: this cannot see a row that leaked to pending while the process stayed
+// up. Same boot reads as in flight indefinitely. A boot id column would not help
+// either — only an invented timeout would, and songguo does not invent those.
+func isAbandoned(e calls.Entry, bootTime time.Time) bool {
+	return e.Status == calls.StatusPending && !bootTime.IsZero() && e.TS.Before(bootTime)
+}
+
+// outcomeFor classifies a call, resolving the one case calls.OutcomeOf cannot:
+// which kind of unfinished a pending row is.
+func outcomeFor(e calls.Entry, bootTime time.Time) calls.Outcome {
+	if isAbandoned(e, bootTime) {
+		return calls.OutcomeAbandoned
+	}
+	return calls.OutcomeOf(e.Status, e.Err)
+}
+
 // newEntryView converts a calls.Entry into its JSON view.
-func newEntryView(e calls.Entry) entryView {
+//
+// bootTime is when this gateway process started; it is what separates a pending
+// row that is still running from one nothing will ever finish. Pass the zero
+// time to decline the distinction — every pending row then reads as in flight,
+// which is the safe direction: it withholds a verdict rather than inventing one.
+func newEntryView(e calls.Entry, bootTime time.Time) entryView {
 	usage := e.Usage
 	if usage == nil {
 		usage = map[string]any{}
@@ -123,11 +161,15 @@ func newEntryView(e calls.Entry) entryView {
 	if !e.TSEnd.IsZero() {
 		tsEnd = e.TSEnd.UTC().Format(time.RFC3339)
 	}
+	pending := e.Status == calls.StatusPending
+	abandoned := isAbandoned(e, bootTime)
 	return entryView{
 		ID:                  e.ID,
 		TS:                  e.TS.UTC().Format(time.RFC3339),
 		TSEnd:               tsEnd,
-		Pending:             e.Status == calls.StatusPending,
+		Pending:             pending,
+		Outcome:             string(outcomeFor(e, bootTime)),
+		Abandoned:           abandoned,
 		UserID:              e.UserID,
 		Model:               e.Model,
 		Modality:            string(e.Modality),
@@ -226,6 +268,7 @@ type sessionStatsView struct {
 	Completed   int       `json:"completed"`
 	Errored     int       `json:"errored"`
 	Interrupted int       `json:"interrupted"`
+	Pending     int       `json:"pending"`
 	// WithSubagents: sessions that spawned at least one subagent.
 	WithSubagents  int     `json:"with_subagents"`
 	TotalTurns     int     `json:"total_turns"`
@@ -350,19 +393,25 @@ type breakdownView struct {
 	Rows      []breakdownRow `json:"rows"`
 }
 
-// errorsView is the GET /api/usage/errors response: error-row counts by class.
+// errorsView is the GET /api/usage/errors response: failure counts by class.
+// The classes split on whose failure it was before splitting on the code,
+// because the code alone cannot say — see store.ErrorClasses.
 type errorsView struct {
 	Range       rangeView `json:"range"`
 	RateLimited int       `json:"rate_limited"`
 	ClientError int       `json:"client_error"`
 	ServerError int       `json:"server_error"`
 	Transport   int       `json:"transport"`
+	Gateway     int       `json:"gateway"`
 }
 
-// errorCodeRow is one upstream status code and its error-row count.
+// errorCodeRow is one failure kind and its count. Keyed by outcome as well as
+// status: grouping on the integer alone merged songguo's own 429 with the
+// provider's, and four distinct causes into one 502.
 type errorCodeRow struct {
-	Status int `json:"status"`
-	Count  int `json:"count"`
+	Status  int    `json:"status"`
+	Outcome string `json:"outcome"`
+	Count   int    `json:"count"`
 }
 
 // errorCodesView is the GET /api/usage/error-codes response: error-row counts

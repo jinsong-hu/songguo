@@ -108,9 +108,21 @@ export function bucketLabel(iso: string, bucket: string): string {
   return dayScale ? dayFmt.format(d) : timeFmt.format(d);
 }
 
-/** Status group for a call entry, mapping to a pill style. */
-export function statusKind(status: number): 'ok' | 'warn' | 'err' {
-  if (status >= 200 && status < 300) return 'ok';
-  if (status >= 400 && status < 500) return 'warn';
-  return 'err';
+/**
+ * Duration of a call, or null when the call has no duration to report yet.
+ *
+ * A call still in flight has `latency_ms = 0` from the create-at-start row, and
+ * rendering that as "0s" claims it finished instantly. Callers that have the
+ * start timestamp should use `elapsedSince` instead; the rest render "—".
+ */
+export function callDuration(latencyMs: number, pending: boolean): string | null {
+  if (pending) return null;
+  return duration(latencyMs / 1000);
+}
+
+/** Wall-clock time since an RFC3339 instant, for a call that is still running. */
+export function elapsedSince(iso: string, now: number = Date.now()): string {
+  const started = new Date(iso).getTime();
+  if (Number.isNaN(started)) return '—';
+  return duration(Math.max(0, now - started) / 1000);
 }

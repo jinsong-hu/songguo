@@ -13,6 +13,10 @@
   --amber-weak: #fbf1dd;
   --danger: #c0492f;
   --danger-weak: #fbeae6;
+  /* Refused by songguo itself (budget, rate, scope, no wire). Its own hue so a
+     gateway denial can never be mistaken for a provider failure. */
+  --violet: #6d51a3;
+  --violet-weak: #f0ecf8;
 
   /* Categorical chart palette (pine-centric, distinguishable). Referenced by the
      shadcn chart primitive via --color-chart-N in tailwind.css. */
@@ -74,6 +78,8 @@
   --amber-weak: #2a2212;
   --danger: #e0735a;
   --danger-weak: #2a1714;
+  --violet: #a78bd0;
+  --violet-weak: #211b2e;
 
   --chart-1: #5ba873;
   --chart-2: #4fa3bd;
@@ -336,6 +342,26 @@ textarea {
 }
 .pill-err .dot {
   background: var(--danger);
+}
+
+/* songguo refused the request itself — deliberately not red, because nothing
+   upstream failed. */
+.pill-gateway {
+  background: var(--violet-weak);
+  color: var(--violet);
+}
+.pill-gateway .dot {
+  background: var(--violet);
+}
+
+/* No verdict available: still running, never finished, or the caller hung up.
+   Muted rather than colored — an outcome we do not have is not one we grade. */
+.pill-idle {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.pill-idle .dot {
+  background: var(--text-muted);
 }
 
 /* ---- Tables ---- */

@@ -42,8 +42,10 @@ func (s *Store) UpsertSessionCall(e calls.Entry, title string) error {
 	}
 	tsMs := ts.UnixMilli()
 
+	// A call the caller cancelled, or one still in flight, is not a session
+	// error — see isErrorStatus.
 	isErr := 0
-	if e.Status == 0 || e.Status >= 400 {
+	if isErrorStatus(e.Status, e.Err) {
 		isErr = 1
 	}
 	hasSub := 0
@@ -156,19 +158,8 @@ func (s *Store) SessionTitle(id string) (string, error) {
 	return title, nil
 }
 
-// Outcome classifies the session from its last-seen call status, mirroring the
-// interaction-level signal documented on the old on-the-fly SessionStats:
-// interrupted (no upstream response), errored (4xx/5xx), completed (2xx/3xx),
-// or pending (still in flight — last call created but not finalized).
-func (r SessionRow) Outcome() string {
-	switch {
-	case r.LastStatus == calls.StatusPending:
-		return "pending"
-	case r.LastStatus == 0:
-		return "interrupted"
-	case r.LastStatus >= 400:
-		return "errored"
-	default:
-		return "completed"
-	}
-}
+// SessionRow.Outcome was removed. It classified a session from its last status
+// with a fourth, subtly different vocabulary (pending/interrupted/errored/
+// completed) and had no caller — reviving it would have meant maintaining that
+// vocabulary alongside calls.Outcome, SessionStats' mix, and the dashboard's.
+// Use calls.OutcomeOf on the session's last call instead.

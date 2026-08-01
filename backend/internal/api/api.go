@@ -58,6 +58,12 @@ type api struct {
 	version    string
 	listenAddr string
 	dbPath     string
+	// bootTime is when this gateway process started. A call row still pending
+	// that was created before it cannot be owned by any live request — which is
+	// the only honest way to tell "running now" from "never finished", short of
+	// inventing a timeout. Read from the same clock that stamps Entry.TS so a
+	// stepped clock cannot invert the comparison.
+	bootTime time.Time
 
 	warnOnce sync.Once
 }
@@ -100,6 +106,7 @@ func newAPI(d Deps) *api {
 		version:    version,
 		listenAddr: d.ListenAddr,
 		dbPath:     d.DBPath,
+		bootTime:   now(),
 	}
 }
 

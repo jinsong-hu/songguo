@@ -148,7 +148,7 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 			Model:      billingModel,
 			Vendor:     strings.Join(denied, ","),
 			Status:     http.StatusNotFound,
-			Err:        "unmatched: " + r.Method + " " + r.URL.Path,
+			Err:        calls.ErrPrefixUnmatched + r.Method + " " + r.URL.Path,
 			Confidence: calls.ConfidenceUnknown,
 			ClientName: client.Name, ClientVersion: client.Version,
 			ClientOS: client.OS, ClientOSVersion: client.OSVersion,
@@ -226,6 +226,22 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 			Vendor: t.Vendor.Name, Credential: t.Credential.ID, Session: sel.Session,
 		}, router.Classify(0, derr, r.Context().Err() != nil))
 		h.logger.Error("websocket dial failed", "err", derr, "vendor", t.Vendor.Name)
+		// Record the failure. Every HTTP failure path writes a ledger row and so
+		// does the wire_unmatched case above; this one used to return silently, so
+		// a provider whose endpoint was unreachable left no trace at all and the
+		// dashboard showed the outage as an absence of traffic.
+		h.append(calls.Entry{
+			UserID:       user.ID,
+			Model:        billingModel,
+			Vendor:       t.Vendor.Name,
+			CredentialID: t.Credential.ID,
+			Status:       http.StatusBadGateway,
+			Err:          calls.ErrPrefixTransport + derr.Error(),
+			Confidence:   calls.ConfidenceUnknown,
+			SessionID:    sel.Session,
+			ClientName:   client.Name, ClientVersion: client.Version,
+			ClientOS: client.OS, ClientOSVersion: client.OSVersion,
+		})
 		writeError(w, http.StatusBadGateway, "upstream_error", derr.Error())
 		return
 	}

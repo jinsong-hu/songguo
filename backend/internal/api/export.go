@@ -11,10 +11,13 @@ import (
 	"github.com/songguo/songguo/internal/store"
 )
 
-// csvHeader is the fixed column order for CSV exports.
+// csvHeader is the fixed column order for CSV exports. Append only — a
+// downstream script may index these positionally, so a new column goes on the
+// end and an existing one never moves.
 var csvHeader = []string{
 	"ts", "token_id", "model", "modality", "vendor", "credential_id",
 	"status", "cost", "latency_ms", "ttft_ms", "generation_ms", "output_tokens_per_second", "stream", "err",
+	"outcome",
 }
 
 // handleCallsExport streams a downloadable export of the filtered calls as
@@ -50,7 +53,7 @@ func (a *api) handleCallsExport(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		views := make([]entryView, 0, len(entries))
 		for _, e := range entries {
-			views = append(views, newEntryView(e))
+			views = append(views, newEntryView(e, a.bootTime))
 		}
 		_ = json.NewEncoder(w).Encode(views)
 	default: // csv
@@ -75,6 +78,7 @@ func (a *api) handleCallsExport(w http.ResponseWriter, r *http.Request) {
 				strconv.FormatFloat(outputTokensPerSecond(e.OutputTokens, e.GenerationMS), 'f', -1, 64),
 				strconv.FormatBool(e.Stream),
 				e.Err,
+				string(outcomeFor(e, a.bootTime)),
 			})
 		}
 		cw.Flush()

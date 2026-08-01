@@ -55,9 +55,11 @@ type FeedRow struct {
 // non-session call in its own singleton group.
 const feedGroupKey = `CASE WHEN session_id != '' THEN session_id ELSE 'req:' || id END`
 
-// feedErrorExpr counts a call as an error when it has no upstream status (0) or
-// a 4xx/5xx status.
-const feedErrorExpr = `SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END)`
+// feedErrorExpr counts a call as a failure. It drives both the ORDER BY and the
+// HAVING of the "Failures" sort, so it decides which rows appear on the page,
+// not just their order — which is why it must match sqlFailed exactly rather
+// than approximating it. See the rationale on sqlFailed in stats.go.
+const feedErrorExpr = `SUM(CASE WHEN ` + sqlFailed + ` THEN 1 ELSE 0 END)`
 
 // feedTotalTokensExpr is the row's total token count across all input-side parts
 // plus output — the "tokens" sort key. Mirrors the frontend's usage total.

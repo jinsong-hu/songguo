@@ -24,7 +24,7 @@ import {
   type ChartConfig,
 } from '../components/ui/chart';
 import { useFetch } from '../lib/useFetch';
-import { dateTime, duration, int, money } from '../lib/format';
+import { dateTime, duration, elapsedSince, int, money } from '../lib/format';
 import styles from './Detail.module.css';
 
 const SRC_ORDER = [
@@ -354,9 +354,15 @@ export function SessionDetailPage() {
                             <td className="mono">{e.model || '—'}</td>
                             <td className="num">{int(e.input_tokens + e.cache_read_input_tokens + e.cache_creation_input_tokens + e.output_tokens)}</td>
                             <td className="num">{money(e.cost)}</td>
-                            <td className="num">{duration(e.latency_ms / 1000)}</td>
+                            <td className="num">
+                              {e.pending ? (
+                                <span style={{ color: 'var(--text-muted)' }}>{elapsedSince(e.ts)}</span>
+                              ) : (
+                                duration(e.latency_ms / 1000)
+                              )}
+                            </td>
                             <td>
-                              <StatusPill status={e.status} />
+                              <StatusPill call={e} />
                             </td>
                           </tr>
                         );

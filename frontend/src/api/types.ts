@@ -184,18 +184,30 @@ export interface Breakdown {
   rows: BreakdownRow[];
 }
 
+// Failure counts by class. The classes split on WHOSE failure it was before
+// splitting on the code, because the code alone cannot say: songguo mints
+// 402/403/404/429/502 of its own.
 export interface ErrorBreakdown {
   range: Range;
+  /** The provider's own 429 — not songguo's rate limit, which is `gateway`. */
   rate_limited: number;
+  /** The provider's other 4xx. */
   client_error: number;
+  /** The provider's 5xx. */
   server_error: number;
+  /** Never reached the provider, or the stream broke mid-body. */
   transport: number;
+  /** songguo refused it: budget, rate limit, scope, no wire, no route. */
+  gateway: number;
 }
 
-// One upstream status code and its error-row count. status 0 = transport failure
-// (no response); otherwise the raw HTTP status (429, 500, 503, …).
+// One failure kind and its count. Keyed by outcome as well as status: grouping
+// on the integer alone merged songguo's 429 with the provider's, and the four
+// distinct causes of a 502 into one row.
 export interface ErrorCodeRow {
   status: number;
+  /** calls.Outcome — what actually happened. See lib/outcome.ts. */
+  outcome: string;
   count: number;
 }
 
@@ -213,6 +225,18 @@ export interface CallEntry {
   ts_end?: string;
   /** True when the call was created but not yet finalized (in flight). */
   pending: boolean;
+  /**
+   * What actually happened, derived server-side from (status, err). Status alone
+   * is ambiguous — a 429 songguo issued and a 429 a provider returned are the
+   * same integer. See lib/outcome.ts for the vocabulary.
+   */
+  outcome: string;
+  /**
+   * True when this pending row was created before the gateway process booted, so
+   * nothing alive owns it and nothing ever will. Distinguishes "never finished"
+   * from "still running", which the -1 status cannot.
+   */
+  abandoned: boolean;
   user_id: string;
   model: string;
   modality: string;
@@ -222,7 +246,13 @@ export interface CallEntry {
   wire: string;
   /** Metering trustworthiness: measured | derived | unknown | "". */
   confidence: string;
+  /**
+   * The HTTP status the CLIENT received. -1 is an internal in-flight sentinel and
+   * must never be rendered; 0 appears only on legacy rows. Read it with `err`
+   * via lib/outcome.ts, never alone.
+   */
   status: number;
+  /** "" for anything forwarded to a provider; otherwise a gateway slug. */
   err: string;
   usage: Record<string, unknown>;
   cost: number;

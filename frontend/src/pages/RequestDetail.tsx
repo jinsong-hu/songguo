@@ -12,7 +12,7 @@ import { Skeleton } from '../components/Skeleton';
 import { StatusPill } from '../components/StatusPill';
 import { TracePanel } from '../components/TracePanel';
 import { useFetch } from '../lib/useFetch';
-import { dateTime, int, money, ms } from '../lib/format';
+import { dateTime, elapsedSince, int, money, ms } from '../lib/format';
 import styles from './Detail.module.css';
 
 // shortId renders a UUID as a compact prefix for titles; the full id is still
@@ -76,10 +76,14 @@ export function RequestDetailPage() {
             <Field label="Vendor">{data.vendor || '—'}</Field>
             <Field label="Wire" mono>{data.wire || '—'}</Field>
             <Field label="Status">
-              <StatusPill status={data.status} />
+              <StatusPill call={data} />
             </Field>
             <Field label="Cost">{money(data.cost)}</Field>
-            <Field label="Latency">{ms(data.latency_ms)}</Field>
+            {/* A call still in flight has latency_ms = 0 from its create-at-start
+                row; rendering that as "0 ms" would claim it finished instantly. */}
+            <Field label={data.pending ? 'Running for' : 'Latency'}>
+              {data.pending ? elapsedSince(data.ts) : ms(data.latency_ms)}
+            </Field>
             <Field label="TTFT">{data.ttft_ms > 0 ? ms(data.ttft_ms) : '—'}</Field>
             <Field label="Output speed">
               {data.output_tokens_per_second > 0 ? `${data.output_tokens_per_second.toFixed(1)} tok/s` : '—'}

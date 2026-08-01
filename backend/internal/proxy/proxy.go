@@ -295,10 +295,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// there is no served response, and pairing a request with a synthesized error
 		// is deliberately not treated as a capture (see denyCapture — that is reserved
 		// for gateway-side denials). Pass capture=false regardless of the flag.
+		// Err is set explicitly so the ledger records WHICH of the two failures
+		// this was. The reason arg stays "upstream_error" because it is also the
+		// client-facing error type ("songguo_" + reason) and changing that would
+		// move the wire contract for every caller.
 		h.denyCapture(w, r, body, false, calls.Entry{
 			ID:     callID,
 			UserID: user.ID, Model: rt.model, Modality: modality,
 			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID,
+			Err:  calls.ErrRequestBuildFailed,
 			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
 			ClientName: client.Name, ClientVersion: client.Version,
 			ClientOS: client.OS, ClientOSVersion: client.OSVersion,
@@ -324,10 +329,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("upstream request failed",
 			"vendor", t.Vendor.Name, "model", rt.model, "credential", t.Credential.ID,
 			"url", upReq.URL.String(), "latency_ms", headerLatency, "err", err)
+		// Keep the real transport error. "connection refused", "no such host" and
+		// "certificate has expired" are different faults with different fixes, and
+		// the flat slug threw all three away — the client was already being told
+		// the exact text, so only the ledger was in the dark.
 		h.denyCapture(w, r, body, false, calls.Entry{
 			ID:     callID,
 			UserID: user.ID, Model: rt.model, Modality: modality,
 			Vendor: t.Vendor.Name, CredentialID: t.Credential.ID, LatencyMS: headerLatency,
+			Err:  calls.ErrPrefixTransport + err.Error(),
 			Tags: tags, SessionID: attr.session, AgentID: attr.agent, ParentAgentID: attr.parentAgent,
 			ClientName: client.Name, ClientVersion: client.Version,
 			ClientOS: client.OS, ClientOSVersion: client.OSVersion,
@@ -582,7 +592,7 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 		detail := fmt.Sprintf("no enabled wire matches %s %s on service %s; add a wire mapping or enable allow_unmatched",
 			r.Method, r.URL.Path, strings.Join(denied, ", "))
 		e := denyEntry(strings.Join(denied, ","))
-		e.Err = "unmatched: " + r.Method + " " + r.URL.Path
+		e.Err = calls.ErrPrefixUnmatched + r.Method + " " + r.URL.Path
 		h.denyCapture(w, r, body, capture, e, http.StatusNotFound, "wire_unmatched", detail)
 		return route{}, false
 	}
@@ -932,16 +942,22 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	}
 
 	entry := calls.Entry{
-		ID:                  callID,
-		TSEnd:               endedAt,
-		UserID:              userID,
-		Model:               model,
-		Modality:            modality,
-		Vendor:              t.Vendor.Name,
-		CredentialID:        t.Credential.ID,
-		Wire:                wireName,
-		Confidence:          ext.Confidence,
+		ID:           callID,
+		TSEnd:        endedAt,
+		UserID:       userID,
+		Model:        model,
+		Modality:     modality,
+		Vendor:       t.Vendor.Name,
+		CredentialID: t.Credential.ID,
+		Wire:         wireName,
+		Confidence:   ext.Confidence,
+		// Status stays the vendor's code even when the body broke: the client
+		// really did receive a 200 header, and rewriting it would be its own lie.
+		// The relay outcome goes in Err instead, so both fields stay true. Health
+		// has always seen this (the deferred Classify above); until now the ledger
+		// did not, and a stream that died at 40% was stored as a clean success.
 		Status:              resp.StatusCode,
+		Err:                 relayErr(bodyErr),
 		Usage:               ext.Raw,
 		InputTokens:         ext.Norm.InputTokens,
 		OutputTokens:        ext.Norm.OutputTokens,
@@ -1120,6 +1136,20 @@ func upstreamBodyErr(err error) error {
 		return nil
 	}
 	return err
+}
+
+// relayErr renders how the response body ended as a ledger slug. A clean stream
+// leaves Err empty; the other two outcomes are recorded as themselves rather
+// than being flattened into the 200 the client already received.
+func relayErr(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, errClientGone):
+		return calls.ErrClientGone
+	default:
+		return calls.ErrPrefixStream + err.Error()
+	}
 }
 
 func meteringScannerWriter(scanner wire.StreamScanner, contentEncoding string, logger *slog.Logger) (func([]byte), func()) {

@@ -52,13 +52,20 @@ type Entry struct {
 	UserID       string // which Songguo user (may be "" for admin/unknown)
 	Model        string
 	Modality     Modality
-	Vendor       string         // serving vendor name
-	CredentialID string         // which credential in the 号池 served it
-	Wire         string         // matched wire name (e.g. "openai/chat"); "" if unmatched
-	Confidence   Confidence     // metering trustworthiness
-	Status       int            // upstream HTTP status (0 if no response; StatusPending while in flight)
-	Err          string         // error detail if any
-	Usage        map[string]any // raw extracted usage (tokens/images/seconds/...), JSON-encoded in DB
+	Vendor       string     // serving vendor name
+	CredentialID string     // which credential in the 号池 served it
+	Wire         string     // matched wire name (e.g. "openai/chat"); "" if unmatched
+	Confidence   Confidence // metering trustworthiness
+	// Status is the HTTP status the CLIENT received: the provider's own code for
+	// a forwarded call, the gateway's for a denial, StatusPending while in
+	// flight. Read it with Err — see OutcomeOf — never alone, or a 429 songguo
+	// issued is indistinguishable from a 429 the provider returned.
+	Status int
+	// Err says whose doing the outcome was: "" for anything forwarded to a
+	// provider, otherwise one of the Err* slugs above. Never a duplicate of
+	// Status; the pair is what carries the meaning.
+	Err   string
+	Usage map[string]any // raw extracted usage (tokens/images/seconds/...), JSON-encoded in DB
 	// Normalized cross-vendor token counts (persisted as typed columns so usage
 	// is queryable without parsing the per-vendor `Usage` JSON). The three
 	// input-side fields are DISJOINT and sum to total input: InputTokens is fresh
@@ -223,8 +230,168 @@ func splitOSVersion(seg string) (name, version string) {
 
 // StatusPending is the sentinel status for a call that has been created (phase
 // 1) but not yet finalized (phase 2): the request is in flight. It is
-// deliberately outside the HTTP status range and distinct from 0 (which means a
-// finalized call that got no upstream response — a transport failure). A row
-// left at StatusPending is a crashed/hung/aborted call that never reached
-// update-at-end.
+// deliberately outside the HTTP status range so it can never collide with a code
+// a server actually sent. A row left at StatusPending never reached
+// update-at-end — see OutcomeInFlight/OutcomeAbandoned for the two ways that
+// happens and how they are told apart.
+//
+// It is an INTERNAL sentinel. It is still emitted verbatim on the API (callers
+// filter on it), but nothing user-facing may ever render it as a status code.
 const StatusPending = -1
+
+// Error slugs the gateway writes into Entry.Err to say an outcome was its own
+// doing rather than the provider's. A forwarded call always carries Err == "",
+// so the (Status, Err) pair is a total, unambiguous encoding of what happened —
+// which is why the outcome is derived from both and never persisted separately.
+//
+// Some of these double as the client-facing error type ("songguo_" + slug) and
+// some do not; the two are deliberately decoupled, so changing a slug here does
+// not change what a caller sees on the wire.
+const (
+	ErrBudgetExceeded     = "budget_exceeded"
+	ErrRateLimited        = "rate_limited"
+	ErrClientGone         = "client_gone"
+	ErrModelNotAllowed    = "model_not_allowed"
+	ErrVendorNotAllowed   = "vendor_not_allowed"
+	ErrNoUpstream         = "no_upstream"
+	ErrRequestBuildFailed = "request_build_failed"
+
+	// ErrUpstreamError is legacy: before the split it covered a transport failure
+	// and a request-build failure alike. Nothing writes it any more; rows in the
+	// ledger still carry it and we cannot now tell which failure they were.
+	ErrUpstreamError = "upstream_error"
+)
+
+// Slug prefixes, each followed by ": <detail>". The detail is the real error
+// text, kept because "the vendor did not answer" and "the vendor's certificate
+// has expired" are different facts and only one of them is actionable.
+const (
+	ErrPrefixUnmatched = "unmatched: "
+	ErrPrefixTransport = "transport_error: "
+	ErrPrefixStream    = "stream_error: "
+)
+
+// Outcome is what actually happened to a call.
+//
+// The status code alone cannot say. songguo mints statuses of its own — a budget
+// refusal is 402, an unmatched wire 404, a routing miss 502 — so on the status
+// int a denial we issued is indistinguishable from the same code coming back
+// from a provider. Outcome is derived from (Status, Err) so the two never blur.
+type Outcome string
+
+const (
+	// No verdict yet, or ever.
+	OutcomeInFlight  Outcome = "in_flight" // running now
+	OutcomeAbandoned Outcome = "abandoned" // the gateway restarted before it finished
+
+	// The provider answered, or failed to.
+	OutcomeOK             Outcome = "ok"
+	OutcomeVendorError    Outcome = "vendor_error"    // the provider's own error, forwarded
+	OutcomeTruncated      Outcome = "truncated"       // began answering, stream broke mid-body
+	OutcomeTransportError Outcome = "transport_error" // never answered
+
+	// songguo's own doing.
+	OutcomeNoRoute      Outcome = "no_route"
+	OutcomeBuildFailed  Outcome = "build_failed"
+	OutcomeUnmatched    Outcome = "unmatched"
+	OutcomeDeniedBudget Outcome = "denied_budget"
+	OutcomeDeniedRate   Outcome = "denied_rate"
+	OutcomeDeniedScope  Outcome = "denied_scope"
+
+	// The caller's.
+	OutcomeClientGone Outcome = "client_gone"
+
+	// Legacy ErrUpstreamError rows: a transport failure or a build failure, and
+	// we cannot tell which. Its own value rather than a guess at either.
+	OutcomeUpstreamFailed Outcome = "upstream_failed"
+
+	// An Err slug this build does not know. Exists so a future slug degrades to a
+	// visible "we don't know" instead of being silently filed as a vendor fault.
+	OutcomeUnknown Outcome = "unknown"
+)
+
+// OutcomeOf classifies a finalized call from the pair the ledger stores.
+//
+// pending callers must handle StatusPending themselves: telling in-flight from
+// abandoned needs the gateway's boot time, which this package does not have.
+func OutcomeOf(status int, err string) Outcome {
+	if status == StatusPending {
+		return OutcomeInFlight
+	}
+	if err == "" {
+		// Legacy rows: before the slugs existed, status 0 with no detail was the
+		// documented encoding for "no upstream response". Nothing writes it now.
+		// Reading it as a transport failure is decoding an old convention, not
+		// guessing — the old code and docs agree on what it meant.
+		if status == 0 {
+			return OutcomeTransportError
+		}
+		// Forwarded: the provider answered and the status is entirely theirs.
+		if status >= 400 {
+			return OutcomeVendorError
+		}
+		return OutcomeOK
+	}
+	switch {
+	case strings.HasPrefix(err, ErrPrefixTransport):
+		return OutcomeTransportError
+	case strings.HasPrefix(err, ErrPrefixStream):
+		return OutcomeTruncated
+	case strings.HasPrefix(err, ErrPrefixUnmatched):
+		return OutcomeUnmatched
+	}
+	switch err {
+	case ErrClientGone:
+		return OutcomeClientGone
+	case ErrBudgetExceeded:
+		return OutcomeDeniedBudget
+	case ErrRateLimited:
+		return OutcomeDeniedRate
+	case ErrModelNotAllowed, ErrVendorNotAllowed:
+		return OutcomeDeniedScope
+	case ErrNoUpstream:
+		return OutcomeNoRoute
+	case ErrRequestBuildFailed:
+		return OutcomeBuildFailed
+	case ErrUpstreamError:
+		return OutcomeUpstreamFailed
+	}
+	return OutcomeUnknown
+}
+
+// Blame is who an outcome is about. Kept separate from severity on purpose: a
+// routing miss is as bad as a provider outage and colored the same, but it is
+// our misconfiguration and must never count against the provider.
+type Blame string
+
+const (
+	BlameProvider Blame = "provider"
+	BlameGateway  Blame = "gateway"
+	BlameCaller   Blame = "caller"
+	BlameNone     Blame = "none" // no verdict is available
+)
+
+// BlameFor reports who an outcome is about. It is the single definition of
+// "does this count against a provider", used by the aggregates so a success rate
+// cannot disagree with the pill next to it.
+func BlameFor(o Outcome) Blame {
+	switch o {
+	case OutcomeOK, OutcomeVendorError, OutcomeTruncated, OutcomeTransportError:
+		return BlameProvider
+	case OutcomeNoRoute, OutcomeBuildFailed, OutcomeUnmatched,
+		OutcomeDeniedBudget, OutcomeDeniedRate, OutcomeDeniedScope:
+		return BlameGateway
+	case OutcomeClientGone:
+		return BlameCaller
+	}
+	// in_flight, abandoned, upstream_failed, unknown: nothing is proven.
+	return BlameNone
+}
+
+// IsProviderFailure reports whether an outcome counts against a provider's
+// success rate. In-flight work has no verdict, a caller hanging up is the
+// caller's business, and songguo's own refusals are ours — none is the provider
+// failing.
+func IsProviderFailure(o Outcome) bool {
+	return BlameFor(o) == BlameProvider && o != OutcomeOK
+}

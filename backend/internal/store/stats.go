@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/songguo/songguo/internal/calls"
 )
 
 // OverviewStats summarizes request volume, error rate, and latency
@@ -149,7 +151,7 @@ func (s *Store) OverviewStats(sc Scope, since, until *time.Time) (OverviewStats,
 	clause, args := windowClause(sc, since, until)
 
 	rows, err := s.db.Query(
-		`SELECT latency_ms, status, ttft_ms, generation_ms, output_tokens
+		`SELECT latency_ms, status, err, ttft_ms, generation_ms, output_tokens
 		   FROM calls`+clause+` ORDER BY latency_ms ASC`,
 		args...,
 	)
@@ -168,15 +170,22 @@ func (s *Store) OverviewStats(sc Scope, since, until *time.Time) (OverviewStats,
 		var (
 			latency      int64
 			status       int
+			callErr      string
 			ttft         int64
 			generation   int64
 			outputTokens float64
 		)
-		if err := rows.Scan(&latency, &status, &ttft, &generation, &outputTokens); err != nil {
+		if err := rows.Scan(&latency, &status, &callErr, &ttft, &generation, &outputTokens); err != nil {
 			return OverviewStats{}, fmt.Errorf("store: scan overview stats: %w", err)
 		}
+		// A call with no verdict is not a request that succeeded, and its
+		// latency_ms is 0 from the create-at-start row — left in, those zeros
+		// sorted first and dragged every percentile down.
+		if !hasVerdict(status) {
+			continue
+		}
 		out.Requests++
-		if isErrorStatus(status) {
+		if isErrorStatus(status, callErr) {
 			out.Errors++
 		}
 		latencies = append(latencies, latency)
@@ -213,9 +222,9 @@ func (s *Store) VendorStats(since, until *time.Time) (map[string]VendorStat, err
 	// Aggregate counts and average latency per vendor.
 	aggRows, err := s.db.Query(
 		`SELECT vendor,
-		        COUNT(*),
-		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END),
-		        COALESCE(AVG(latency_ms), 0)
+		        `+sqlCountWhere(sqlHasVerdict)+`,
+		        `+sqlCountWhere(sqlProviderFailed)+`,
+		        COALESCE(AVG(CASE WHEN `+sqlHasVerdict+` THEN latency_ms END), 0)
 		   FROM calls`+clause+`
 		  GROUP BY vendor`,
 		args...,
@@ -246,8 +255,11 @@ func (s *Store) VendorStats(since, until *time.Time) (map[string]VendorStat, err
 	lastRows, err := s.db.Query(
 		`SELECT l.vendor, l.status
 		   FROM calls l
-		   JOIN (SELECT vendor, MAX(ts) AS mts FROM calls`+clause+` GROUP BY vendor) m
-		     ON l.vendor = m.vendor AND l.ts = m.mts`,
+		   JOIN (SELECT vendor, MAX(ts) AS mts FROM calls`+clause+lastStatusFilter(clause)+`
+		          GROUP BY vendor) m
+		     ON l.vendor = m.vendor AND l.ts = m.mts
+		  WHERE `+sqlHasVerdict+`
+		  ORDER BY l.id`,
 		args...,
 	)
 	if err != nil {
@@ -283,9 +295,9 @@ func (s *Store) ModelStats(since, until *time.Time) (map[string]ModelStat, error
 
 	rows, err := s.db.Query(
 		`SELECT model,
-		        COUNT(*),
-		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END),
-		        COALESCE(AVG(latency_ms), 0)
+		        `+sqlCountWhere(sqlHasVerdict)+`,
+		        `+sqlCountWhere(sqlFailed)+`,
+		        COALESCE(AVG(CASE WHEN `+sqlHasVerdict+` THEN latency_ms END), 0)
 		   FROM calls`+clause+`
 		  GROUP BY model`,
 		args...)
@@ -475,15 +487,15 @@ func (s *Store) Breakdown(dimension BreakdownDimension, since, until *time.Time)
 	clause, args := windowClause(Scope{}, since, until)
 	rows, err := s.db.Query(
 		`SELECT `+col+` AS k,
-		        COUNT(*),
-		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END),
+		        `+sqlCountWhere(sqlHasVerdict)+`,
+		        `+sqlCountWhere(sqlFailed)+`,
 		        COALESCE(SUM(input_tokens), 0),
 		        COALESCE(SUM(output_tokens), 0),
 		        COALESCE(SUM(cache_read_input_tokens), 0),
 		        COALESCE(SUM(cache_creation_input_tokens), 0),
 		        COALESCE(SUM(thinking_tokens), 0),
 		        COALESCE(SUM(cost), 0),
-		        COALESCE(AVG(latency_ms), 0)
+		        COALESCE(AVG(CASE WHEN `+sqlHasVerdict+` THEN latency_ms END), 0)
 		   FROM calls`+clause+`
 		  GROUP BY k
 		  ORDER BY COUNT(*) DESC, k ASC`,
@@ -510,39 +522,58 @@ func (s *Store) Breakdown(dimension BreakdownDimension, since, until *time.Time)
 	return out, nil
 }
 
-// ErrorClasses counts error rows by class over a window. Successful rows
-// (status 2xx/3xx) are not counted in any field.
+// ErrorClasses counts error rows by class over a window. Rows that served, that
+// the caller cancelled, and that have not finished are counted in no field.
+//
+// The classes are disjoint and split on WHOSE failure it was before splitting on
+// the code, because the code alone cannot say: songguo's own 429 and a
+// provider's 429 are the same integer.
 type ErrorClasses struct {
-	RateLimited int // HTTP 429
-	ClientError int // other 4xx
-	ServerError int // 5xx
-	Transport   int // status 0 (no response / transport failure)
+	RateLimited int // provider's 429
+	ClientError int // provider's other 4xx
+	ServerError int // provider's 5xx
+	Transport   int // never reached the provider, or the stream broke mid-body
+	Gateway     int // songguo refused it: budget, rate, scope, no wire, no route
 }
 
-// ErrorClassCounts groups error rows into {rate-limited, client, server,
-// transport} over the optional [since, until) window.
+// ErrorClassCounts groups failures into {rate-limited, client, server,
+// transport, gateway} over the optional [since, until) window.
 func (s *Store) ErrorClassCounts(since, until *time.Time) (ErrorClasses, error) {
 	clause, args := windowClause(Scope{}, since, until)
 	var c ErrorClasses
+	// Forwarded rows carry err = ''; the status on those is the provider's own.
+	// Anything with a slug is ours, the caller's, or a transport/stream failure,
+	// and must not be filed under the provider's status classes.
+	forwarded := `err = '' AND ` + sqlHasVerdict
 	err := s.db.QueryRow(
 		`SELECT
-		   COALESCE(SUM(CASE WHEN status = 429 THEN 1 ELSE 0 END), 0),
-		   COALESCE(SUM(CASE WHEN status >= 400 AND status < 500 AND status != 429 THEN 1 ELSE 0 END), 0),
-		   COALESCE(SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END), 0),
-		   COALESCE(SUM(CASE WHEN status = 0 THEN 1 ELSE 0 END), 0)
+		   COALESCE(`+sqlCountWhere(forwarded+` AND status = 429`)+`, 0),
+		   COALESCE(`+sqlCountWhere(forwarded+` AND status >= 400 AND status < 500 AND status != 429`)+`, 0),
+		   COALESCE(`+sqlCountWhere(forwarded+` AND status >= 500`)+`, 0),
+		   COALESCE(`+sqlCountWhere(
+			// status = 0 is legacy rows, which had no slug to carry the detail.
+			sqlHasVerdict+` AND (err LIKE 'transport_error:%' OR err LIKE 'stream_error:%'`+
+				` OR (err = '' AND status = 0))`)+`, 0),
+		   COALESCE(`+sqlCountWhere(sqlFailed+` AND NOT (`+sqlProviderFailed+`)`)+`, 0)
 		 FROM calls`+clause, args...,
-	).Scan(&c.RateLimited, &c.ClientError, &c.ServerError, &c.Transport)
+	).Scan(&c.RateLimited, &c.ClientError, &c.ServerError, &c.Transport, &c.Gateway)
 	if err != nil {
 		return ErrorClasses{}, fmt.Errorf("store: error class counts: %w", err)
 	}
 	return c, nil
 }
 
-// ErrorCodeRow is one upstream status code and how many error rows carried it
-// over the queried window. Status 0 means a transport failure (no response).
+// ErrorCodeRow is one failure kind and how many rows carried it over the
+// queried window.
+//
+// Status alone is not the key. songguo mints statuses of its own, so grouping by
+// the integer merged its 429 with the provider's, its 403 with the provider's,
+// and four distinct causes into one 502. Outcome is what separates them; Status
+// is kept alongside so the real code is still displayable.
 type ErrorCodeRow struct {
-	Status int
-	Count  int
+	Status  int
+	Outcome string // calls.Outcome — what actually happened
+	Count   int
 }
 
 // TopErrorCodes returns error rows grouped by upstream status, ranked by count
@@ -559,7 +590,7 @@ func (s *Store) TopErrorCodes(sc Scope, dim BreakdownDimension, key string, sinc
 	if limit <= 0 {
 		limit = 8
 	}
-	conds := []string{"(status = 0 OR status >= 400)"}
+	conds := []string{"(" + sqlFailed + ")"}
 	var args []any
 	if since != nil {
 		conds = append(conds, "ts >= ?")
@@ -587,15 +618,18 @@ func (s *Store) TopErrorCodes(sc Scope, dim BreakdownDimension, key string, sinc
 	scopeConds, scopeArgs := sc.conds()
 	conds = append(conds, scopeConds...)
 	args = append(args, scopeArgs...)
-	args = append(args, limit)
+	// limit is applied in Go, after folding err strings into outcomes — a SQL
+	// LIMIT here would truncate before the fold and lose groups that merge.
 
+	// Group by (status, err) rather than status so distinct causes stay distinct;
+	// the outcome is derived per group in Go, where the classifier already lives,
+	// rather than being reimplemented as a SQL CASE that could drift from it.
 	rows, err := s.db.Query(
-		`SELECT status, COUNT(*) AS n
+		`SELECT status, err, COUNT(*) AS n
 		   FROM calls
 		  WHERE `+strings.Join(conds, " AND ")+`
-		  GROUP BY status
-		  ORDER BY n DESC, status ASC
-		  LIMIT ?`,
+		  GROUP BY status, err
+		  ORDER BY n DESC, status ASC`,
 		args...,
 	)
 	if err != nil {
@@ -603,16 +637,45 @@ func (s *Store) TopErrorCodes(sc Scope, dim BreakdownDimension, key string, sinc
 	}
 	defer rows.Close()
 
-	out := make([]ErrorCodeRow, 0, limit)
+	// Several err strings collapse to one outcome — every distinct transport
+	// failure text is one transport_error — so fold in Go, then take the top N.
+	type codeKey struct {
+		status  int
+		outcome calls.Outcome
+	}
+	totals := make(map[codeKey]int)
+	var order []codeKey
 	for rows.Next() {
-		var r ErrorCodeRow
-		if err := rows.Scan(&r.Status, &r.Count); err != nil {
+		var (
+			status  int
+			callErr string
+			n       int
+		)
+		if err := rows.Scan(&status, &callErr, &n); err != nil {
 			return nil, fmt.Errorf("store: scan top error codes: %w", err)
 		}
-		out = append(out, r)
+		k := codeKey{status: status, outcome: calls.OutcomeOf(status, callErr)}
+		if _, seen := totals[k]; !seen {
+			order = append(order, k)
+		}
+		totals[k] += n
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: top error codes: %w", err)
+	}
+
+	sort.SliceStable(order, func(i, j int) bool {
+		if totals[order[i]] != totals[order[j]] {
+			return totals[order[i]] > totals[order[j]]
+		}
+		return order[i].status < order[j].status
+	})
+	if len(order) > limit {
+		order = order[:limit]
+	}
+	out := make([]ErrorCodeRow, 0, len(order))
+	for _, k := range order {
+		out = append(out, ErrorCodeRow{Status: k.status, Outcome: string(k.outcome), Count: totals[k]})
 	}
 	return out, nil
 }
@@ -678,14 +741,14 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 	rows, err := s.db.Query(
 		`SELECT (ts / ?) * ? AS bucket_start,
 		        COALESCE(SUM(cost), 0),
-		        COUNT(*),
-		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END),
+		        `+sqlCountWhere(sqlHasVerdict)+`,
+		        `+sqlCountWhere(sqlFailed)+`,
 		        COALESCE(SUM(input_tokens), 0),
 		        COALESCE(SUM(output_tokens), 0),
 		        COALESCE(SUM(cache_read_input_tokens), 0),
 		        COALESCE(SUM(cache_creation_input_tokens), 0),
 		        COALESCE(SUM(thinking_tokens), 0),
-		        COALESCE(AVG(latency_ms), 0),
+		        COALESCE(AVG(CASE WHEN `+sqlHasVerdict+` THEN latency_ms END), 0),
 		        COALESCE(AVG(CASE WHEN ttft_ms > 0 THEN ttft_ms END), 0),
 		        COALESCE(AVG(CASE
 		          WHEN generation_ms > 0 AND output_tokens > 0
@@ -1021,8 +1084,8 @@ func (s *Store) SuccessByModelSeries(sc Scope, dim BreakdownDimension, since, un
 	rows, err := s.db.Query(
 		fmt.Sprintf(`SELECT (ts / ?) * ? AS bucket_start,
 		        %s,
-		        COUNT(*),
-		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END)
+		        `+sqlCountWhere(sqlHasVerdict)+`,
+		        `+sqlCountWhere(sqlFailed)+`
 		   FROM calls
 		  WHERE ts >= ? AND ts < ?%s
 		  GROUP BY bucket_start, %s`, col, scopeSQL, col),
@@ -1299,11 +1362,96 @@ func (s *Store) CacheByModelSeries(sc Scope, dim BreakdownDimension, since, unti
 	return models, out, nil
 }
 
-// isErrorStatus reports whether a recorded upstream status counts as an error:
-// 0 (transport failure / no response) or any 4xx/5xx.
-func isErrorStatus(status int) bool {
-	return status == 0 || status >= 400
+// --- What counts as a failure -------------------------------------------------
+//
+// These are the SQL form of calls.OutcomeOf, named so the aggregates below
+// cannot drift apart from each other or from the pill rendered beside them.
+//
+// Three rules, each of which the old `status = 0 OR status >= 400` broke:
+//
+//  1. A pending row carries no verdict. It used to count as a SUCCESS — -1 is
+//     not >= 400 — so abandoned calls quietly raised the success rate. Now
+//     excluded from numerator and denominator both: counting it either way
+//     asserts an outcome nobody observed.
+//  2. A client cancellation is not a failure. router.Classify already calls it
+//     neutral and proxy.go says 499 exists to stay out of the error rate, yet
+//     every ratio counted it. A user pressing Esc must not mark a provider down.
+//  3. The status alone cannot say whose fault it was. songguo mints 402/403/404/
+//     429/502 of its own, so a budget denial was indistinguishable from the
+//     provider rejecting the request. sqlProviderFailed is the narrower question
+//     and is what per-vendor stats must use.
+const (
+	// sqlHasVerdict: the call finished, so it can be counted at all.
+	sqlHasVerdict = `status <> -1`
+
+	// sqlNotCallerAbort: exclude calls the caller walked away from.
+	sqlNotCallerAbort = `err <> 'client_gone'`
+
+	// sqlFailed: the caller got no answer, and it was not their own doing.
+	// Includes songguo's denials — from the caller's seat a refused request did
+	// fail. `status = 0` matches legacy rows only; nothing writes it now.
+	sqlFailed = sqlHasVerdict + ` AND ` + sqlNotCallerAbort +
+		` AND (status = 0 OR status >= 400 OR err <> '')`
+
+	// sqlProviderFailed: the PROVIDER failed — the only thing that may count
+	// against a vendor. A forwarded error (err = '') is theirs, as is a transport
+	// or stream failure while reaching them; everything else carrying a slug is
+	// songguo's doing or the caller's and is excluded.
+	sqlProviderFailed = sqlHasVerdict + ` AND ` + sqlNotCallerAbort +
+		` AND ((err = '' AND (status = 0 OR status >= 400))` +
+		` OR err LIKE 'transport_error:%' OR err LIKE 'stream_error:%')`
+)
+
+// sqlCountWhere renders a predicate as a summable 0/1 expression.
+func sqlCountWhere(pred string) string {
+	return `SUM(CASE WHEN ` + pred + ` THEN 1 ELSE 0 END)`
 }
+
+// qualify prefixes the column names in one of the predicates above with a table
+// alias, for the joined queries that need `c.status` rather than `status`. It
+// rewrites only the two identifiers the predicates use, so it cannot corrupt the
+// string literals ('client_gone', the LIKE patterns) alongside them.
+func qualify(pred, alias string) string {
+	if alias == "" {
+		return pred
+	}
+	r := strings.NewReplacer(
+		"status", alias+".status",
+		"err ", alias+".err ",
+	)
+	return r.Replace(pred)
+}
+
+// IsCallError reports whether a finalized call failed and it was not the
+// caller's doing. Exported so the API's live session rollup agrees with the
+// stored aggregates instead of keeping its own copy of the rule.
+func IsCallError(status int, err string) bool { return isErrorStatus(status, err) }
+
+// lastStatusFilter appends sqlHasVerdict to a query that may or may not already
+// have a WHERE, so "the vendor's most recent status" means its most recent
+// FINISHED call. Without it the Providers page renders the -1 sentinel whenever
+// a vendor happens to have a request in flight.
+func lastStatusFilter(clause string) string {
+	if clause == "" {
+		return " WHERE " + sqlHasVerdict
+	}
+	return " AND " + sqlHasVerdict
+}
+
+// isErrorStatus reports whether a finalized call failed and it was not the
+// caller's doing — the Go twin of sqlFailed. It takes err as well as status
+// because the status alone cannot tell a provider's 429 from songguo's.
+func isErrorStatus(status int, err string) bool {
+	switch calls.OutcomeOf(status, err) {
+	case calls.OutcomeOK, calls.OutcomeClientGone,
+		calls.OutcomeInFlight, calls.OutcomeAbandoned:
+		return false
+	}
+	return true
+}
+
+// hasVerdict reports whether a call finished, so it belongs in a rate at all.
+func hasVerdict(status int) bool { return status != calls.StatusPending }
 
 // percentileNearestRank returns the p-th percentile (1..100) of an
 // ascending-sorted slice using the nearest-rank method. It returns 0 for an

@@ -472,8 +472,21 @@ func TestCallsExportCSV(t *testing.T) {
 	if len(records) != 5 { // header + 4 rows
 		t.Fatalf("csv rows = %d, want 5 (header+4)", len(records))
 	}
-	if records[0][0] != "ts" || records[0][len(records[0])-1] != "err" {
-		t.Errorf("csv header = %v", records[0])
+	// The CSV is a positional format a downstream script may index by number, so
+	// the established columns must never move. New ones may only be appended —
+	// which is why this pins a prefix rather than the whole header.
+	established := []string{
+		"ts", "token_id", "model", "modality", "vendor", "credential_id",
+		"status", "cost", "latency_ms", "ttft_ms", "generation_ms",
+		"output_tokens_per_second", "stream", "err",
+	}
+	if len(records[0]) < len(established) {
+		t.Fatalf("csv header lost columns: %v", records[0])
+	}
+	for i, want := range established {
+		if records[0][i] != want {
+			t.Errorf("csv column %d = %q, want %q (header: %v)", i, records[0][i], want, records[0])
+		}
 	}
 }
 

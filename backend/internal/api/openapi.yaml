@@ -1072,10 +1072,11 @@ components:
       type: object
       properties:
         range: { $ref: "#/components/schemas/Range" }
-        rate_limited: { type: integer, description: HTTP 429 }
-        client_error: { type: integer, description: Other 4xx }
-        server_error: { type: integer, description: 5xx }
-        transport: { type: integer, description: status 0 (no response) }
+        rate_limited: { type: integer, description: "The provider's own 429 (songguo's own rate limit is counted under `gateway`)" }
+        client_error: { type: integer, description: "The provider's other 4xx" }
+        server_error: { type: integer, description: "The provider's 5xx" }
+        transport: { type: integer, description: "Never reached the provider, or the stream broke mid-body" }
+        gateway: { type: integer, description: "songguo refused it: budget, rate limit, scope, no wire, no route" }
     UsageErrorCodes:
       type: object
       properties:
@@ -1085,7 +1086,8 @@ components:
           items:
             type: object
             properties:
-              status: { type: integer, description: Upstream HTTP status (0 = transport error) }
+              status: { type: integer, description: "The HTTP status the client received" }
+              outcome: { type: string, description: "What actually happened. Rows are keyed by (status, outcome): grouping on status alone merged songguo's own 429 with the provider's, and the four distinct causes of a 502 into one row." }
               count: { type: integer }
     UsageFacets:
       type: object
@@ -1115,8 +1117,10 @@ components:
         wire: { type: string }
         confidence: { type: string, description: "measured | derived | unknown" }
         attempt: { type: integer }
-        status: { type: integer }
-        err: { type: string }
+        status: { type: integer, description: "The HTTP status the CLIENT received: the provider's own code for a forwarded call, songguo's for a denial, -1 while in flight. Read with `err` — never alone, or a 429 songguo issued is indistinguishable from one the provider returned. -1 is an internal sentinel and must not be rendered as a status code." }
+        err: { type: string, description: "Whose doing the outcome was: empty for anything forwarded to a provider, otherwise a gateway slug (budget_exceeded, rate_limited, client_gone, no_upstream, request_build_failed, or a `transport_error: `/`stream_error: `/`unmatched: ` prefix carrying the detail)." }
+        outcome: { type: string, description: "Derived from (status, err): ok | vendor_error | truncated | transport_error | upstream_failed | no_route | build_failed | unmatched | denied_budget | denied_rate | denied_scope | client_gone | in_flight | abandoned | unknown." }
+        abandoned: { type: boolean, description: "A pending row created before this gateway process booted, so nothing alive owns it. Distinguishes \"never finished\" from \"still running\", which status alone cannot. Not called \"crashed\": a crash, a clean SIGTERM and a docker stop mid-call leave an identical row." }
         usage: { type: object, additionalProperties: true }
         cost: { type: number }
         input_tokens: { type: number }
