@@ -1,0 +1,224 @@
+package api
+
+import (
+	"testing"
+	"time"
+
+	"github.com/songguo/songguo/internal/calls"
+	"github.com/songguo/songguo/internal/store"
+)
+
+// filterFixture seeds a two-model, two-provider, two-session ledger:
+//
+//	opus  / anyrouter  $1  sess1  200
+//	opus  / packy      $2  sess2  200
+//	haiku / anyrouter  $4  sess2  500   <- the only error
+//	haiku / packy      $8  (none)  200
+//
+// Every (model, provider) pair appears exactly once and costs a distinct power
+// of two, so any subset's total spend names the exact rows that survived a
+// filter — no assertion has to trust a count alone.
+func filterFixture(t *testing.T) (*store.Store, time.Time) {
+	t.Helper()
+	s := newTestStore(t)
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+
+	entries := []calls.Entry{
+		{TS: now.Add(-1 * time.Hour), SessionID: "sess1", Model: "claude-opus-5", Modality: calls.ModalityChat, Vendor: "anyrouter", Status: 200, Cost: 1.0, LatencyMS: 100, InputTokens: 100, OutputTokens: 10},
+		{TS: now.Add(-2 * time.Hour), SessionID: "sess2", Model: "claude-opus-5", Modality: calls.ModalityChat, Vendor: "packy", Status: 200, Cost: 2.0, LatencyMS: 100, InputTokens: 100, OutputTokens: 10},
+		{TS: now.Add(-3 * time.Hour), SessionID: "sess2", Model: "claude-haiku-4-5", Modality: calls.ModalityChat, Vendor: "anyrouter", Status: 500, Cost: 4.0, LatencyMS: 100, InputTokens: 100, OutputTokens: 10},
+		{TS: now.Add(-4 * time.Hour), Model: "claude-haiku-4-5", Modality: calls.ModalityChat, Vendor: "packy", Status: 200, Cost: 8.0, LatencyMS: 100, InputTokens: 100, OutputTokens: 10},
+	}
+	for _, e := range entries {
+		if _, err := s.AppendCall(e); err != nil {
+			t.Fatalf("AppendCall: %v", err)
+		}
+	}
+	return s, now
+}
+
+// TestOverviewModelVendorFilter checks that ?models=/?vendors= narrow the
+// overview aggregate, that repeating a param ORs within a dimension, and that
+// the two dimensions AND with each other.
+func TestOverviewModelVendorFilter(t *testing.T) {
+	s, now := filterFixture(t)
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret", Now: func() time.Time { return now }})
+
+	cases := []struct {
+		name  string
+		query string
+		spend float64
+		reqs  int
+	}{
+		{"unfiltered", "", 15.0, 4},
+		{"one model", "?models=claude-opus-5", 3.0, 2},
+		{"one provider", "?vendors=anyrouter", 5.0, 2},
+		{"repeated param ORs within a dimension", "?models=claude-opus-5&models=claude-haiku-4-5", 15.0, 4},
+		{"the two dimensions AND", "?models=claude-opus-5&vendors=packy", 2.0, 1},
+		{"no overlap yields an empty aggregate", "?models=claude-opus-5&vendors=nobody", 0.0, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var ov overviewView
+			decodeBody(t, do(h, "GET", "/api/overview"+tc.query, "secret", nil), &ov)
+			if !approxF(ov.TotalSpend, tc.spend) {
+				t.Errorf("total_spend = %v, want %v", ov.TotalSpend, tc.spend)
+			}
+			if ov.Requests != tc.reqs {
+				t.Errorf("requests = %d, want %d", ov.Requests, tc.reqs)
+			}
+		})
+	}
+}
+
+// TestUsageFilterAppliesToEveryOverviewPanel is the coverage guard: each
+// endpoint the Overview page reads must honour the filter. A new panel that
+// forgets to thread statsScope through shows up here as an unnarrowed count.
+func TestUsageFilterAppliesToEveryOverviewPanel(t *testing.T) {
+	s, now := filterFixture(t)
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret", Now: func() time.Time { return now }})
+	const q = "?models=claude-opus-5"
+
+	// tokens-by-model: only the filtered model may appear as a series.
+	var tok tokensByModelView
+	decodeBody(t, do(h, "GET", "/api/usage/tokens-by-model"+q, "secret", nil), &tok)
+	for _, m := range tok.Models {
+		if m != "claude-opus-5" {
+			t.Errorf("tokens-by-model series = %v, want only claude-opus-5", tok.Models)
+		}
+	}
+
+	// success-by-model: same, via its own store query.
+	var suc successByModelView
+	decodeBody(t, do(h, "GET", "/api/usage/success-by-model"+q, "secret", nil), &suc)
+	for _, m := range suc.Models {
+		if m != "claude-opus-5" {
+			t.Errorf("success-by-model series = %v, want only claude-opus-5", suc.Models)
+		}
+	}
+
+	// cache-by-model: same.
+	var cache cacheByModelView
+	decodeBody(t, do(h, "GET", "/api/usage/cache-by-model"+q, "secret", nil), &cache)
+	for _, m := range cache.Models {
+		if m != "claude-opus-5" {
+			t.Errorf("cache-by-model series = %v, want only claude-opus-5", cache.Models)
+		}
+	}
+
+	// error-codes: the only error row is haiku's 500, so filtering to opus
+	// must empty the panel rather than leave the 500 behind.
+	var ec errorCodesView
+	decodeBody(t, do(h, "GET", "/api/usage/error-codes"+q, "secret", nil), &ec)
+	if len(ec.Rows) != 0 {
+		t.Errorf("error-codes rows = %v, want none (the 500 belongs to haiku)", ec.Rows)
+	}
+	var ecHaiku errorCodesView
+	decodeBody(t, do(h, "GET", "/api/usage/error-codes?models=claude-haiku-4-5", "secret", nil), &ecHaiku)
+	if len(ecHaiku.Rows) != 1 || ecHaiku.Rows[0].Status != 500 {
+		t.Errorf("error-codes for haiku = %v, want one 500 row", ecHaiku.Rows)
+	}
+
+	// feed: 2 opus calls, in 2 different sessions, so 2 grouped rows.
+	var feed feedView
+	decodeBody(t, do(h, "GET", "/api/feed"+q, "secret", nil), &feed)
+	if feed.Total != 2 {
+		t.Errorf("feed total = %d, want 2", feed.Total)
+	}
+}
+
+// TestSessionStatsFilterSelectsTouchingSessions pins the one place the filter
+// changes meaning instead of just narrowing: a session is selected when it
+// *touched* the model, and is then counted whole. sess2 ran both models, so
+// filtering to either one must still return it — with all of its turns.
+func TestSessionStatsFilterSelectsTouchingSessions(t *testing.T) {
+	s, now := filterFixture(t)
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret", Now: func() time.Time { return now }})
+
+	var all, opus, haiku sessionStatsView
+	decodeBody(t, do(h, "GET", "/api/sessions/overview", "secret", nil), &all)
+	decodeBody(t, do(h, "GET", "/api/sessions/overview?models=claude-opus-5", "secret", nil), &opus)
+	decodeBody(t, do(h, "GET", "/api/sessions/overview?models=claude-haiku-4-5", "secret", nil), &haiku)
+
+	if all.Sessions != 2 {
+		t.Fatalf("unfiltered sessions = %d, want 2", all.Sessions)
+	}
+	// opus ran in sess1 and sess2 → both.
+	if opus.Sessions != 2 {
+		t.Errorf("sessions with models=opus = %d, want 2 (sess1 and sess2 both used it)", opus.Sessions)
+	}
+	// haiku ran only in sess2 (its other call carries no session id) → one.
+	if haiku.Sessions != 1 {
+		t.Errorf("sessions with models=haiku = %d, want 1 (only sess2)", haiku.Sessions)
+	}
+	// sess2 ran two models but is still reported as one whole session: its two
+	// turns survive a filter that matches only one of them.
+	if haiku.AvgTurns != 2 {
+		t.Errorf("avg_turns for the haiku-filtered view = %v, want 2 (sess2 counted whole)", haiku.AvgTurns)
+	}
+}
+
+// TestUsageFacets checks the option lists: observed values ranked by request
+// count, and — the part that is easy to get wrong — no cross-filtering, so
+// selecting a model must not shrink the providers list.
+func TestUsageFacets(t *testing.T) {
+	s, now := filterFixture(t)
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret", Now: func() time.Time { return now }})
+
+	var f facetsView
+	decodeBody(t, do(h, "GET", "/api/usage/facets", "secret", nil), &f)
+	if len(f.Models) != 2 || len(f.Vendors) != 2 {
+		t.Fatalf("facets = %d models / %d vendors, want 2 and 2", len(f.Models), len(f.Vendors))
+	}
+	for _, m := range f.Models {
+		if m.Requests != 2 {
+			t.Errorf("facet %q requests = %d, want 2", m.Key, m.Requests)
+		}
+	}
+
+	// Passing a selection must not narrow either list.
+	var pinned facetsView
+	decodeBody(t, do(h, "GET", "/api/usage/facets?models=claude-opus-5&vendors=packy", "secret", nil), &pinned)
+	if len(pinned.Models) != 2 || len(pinned.Vendors) != 2 {
+		t.Errorf("facets under a selection = %d models / %d vendors, want the full 2 and 2 (no cross-filtering)",
+			len(pinned.Models), len(pinned.Vendors))
+	}
+}
+
+// TestUsageFacetsScopedToUserKey confirms the option lists respect the consumer
+// scope: a user key must not be offered a model only somebody else ran.
+func TestUsageFacetsScopedToUserKey(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+
+	alice, aliceKey, err := s.CreateUser(store.NewUser{Name: "alice"})
+	if err != nil {
+		t.Fatalf("CreateUser alice: %v", err)
+	}
+	bob, _, err := s.CreateUser(store.NewUser{Name: "bob"})
+	if err != nil {
+		t.Fatalf("CreateUser bob: %v", err)
+	}
+	for _, e := range []calls.Entry{
+		{TS: now.Add(-time.Hour), UserID: alice.ID, Model: "gpt-4o", Modality: calls.ModalityChat, Vendor: "openai", Status: 200, Cost: 1},
+		{TS: now.Add(-time.Hour), UserID: bob.ID, Model: "deepseek-chat", Modality: calls.ModalityChat, Vendor: "deepseek", Status: 200, Cost: 1},
+	} {
+		if _, err := s.AppendCall(e); err != nil {
+			t.Fatalf("AppendCall: %v", err)
+		}
+	}
+
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret", Now: func() time.Time { return now }})
+	var f facetsView
+	decodeBody(t, do(h, "GET", "/api/usage/facets", aliceKey, nil), &f)
+	for _, m := range f.Models {
+		if m.Key == "deepseek-chat" {
+			t.Errorf("alice's facets leaked bob's model: %+v", f.Models)
+		}
+	}
+	for _, v := range f.Vendors {
+		if v.Key == "deepseek" {
+			t.Errorf("alice's facets leaked bob's provider: %+v", f.Vendors)
+		}
+	}
+}

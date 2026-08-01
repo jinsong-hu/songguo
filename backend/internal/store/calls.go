@@ -133,11 +133,18 @@ func (s *Store) AppendCall(e calls.Entry) (string, error) {
 
 // CallFilter selects and pages call rows. Zero-value fields are ignored.
 type CallFilter struct {
-	Since     *time.Time
-	Until     *time.Time
-	UserID    string
-	Model     string
-	Vendor    string
+	Since  *time.Time
+	Until  *time.Time
+	UserID string
+	Model  string
+	Vendor string
+	// Models and Vendors are the multi-value form of Model/Vendor, used by the
+	// dashboard's Models/Providers filters. Empty means no filter. They AND with
+	// the singular fields rather than replacing them, so a caller that sets both
+	// gets the intersection — which is the only reading that cannot widen a
+	// filter someone else already applied.
+	Models    []string
+	Vendors   []string
 	Status    *int
 	SessionID string
 	// FeedSort selects the feed ordering (and, for "failures", filters to errored
@@ -172,6 +179,14 @@ func (f CallFilter) where() (string, []any) {
 	if f.Vendor != "" {
 		conds = append(conds, "vendor = ?")
 		args = append(args, f.Vendor)
+	}
+	if c, a := inClause("model", f.Models); c != "" {
+		conds = append(conds, c)
+		args = append(args, a...)
+	}
+	if c, a := inClause("vendor", f.Vendors); c != "" {
+		conds = append(conds, c)
+		args = append(args, a...)
 	}
 	if f.Status != nil {
 		conds = append(conds, "status = ?")
@@ -276,59 +291,21 @@ func (s *Store) SpendByUser(userID string, since *time.Time) (float64, error) {
 }
 
 // TotalSpend sums cost across all rows within the optional [since, until)
-// window. A non-empty userID restricts the sum to that consumer key's calls.
-func (s *Store) TotalSpend(userID string, since, until *time.Time) (float64, error) {
-	var (
-		conds []string
-		args  []any
-	)
-	if since != nil {
-		conds = append(conds, "ts >= ?")
-		args = append(args, since.UnixMilli())
-	}
-	if until != nil {
-		conds = append(conds, "ts < ?")
-		args = append(args, until.UnixMilli())
-	}
-	if userID != "" {
-		conds = append(conds, "user_id = ?")
-		args = append(args, userID)
-	}
-	query := `SELECT COALESCE(SUM(cost), 0) FROM calls`
-	if len(conds) > 0 {
-		query += " WHERE " + strings.Join(conds, " AND ")
-	}
+// window, narrowed by the scope (consumer key, models, providers).
+func (s *Store) TotalSpend(sc Scope, since, until *time.Time) (float64, error) {
+	clause, args := windowClause(sc, since, until)
 	var total float64
-	if err := s.db.QueryRow(query, args...).Scan(&total); err != nil {
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(cost), 0) FROM calls`+clause, args...).Scan(&total); err != nil {
 		return 0, fmt.Errorf("store: total spend: %w", err)
 	}
 	return total, nil
 }
 
 // SpendByModality returns cost summed per modality within the optional
-// [since, until) window. A non-empty userID restricts to that consumer key.
-func (s *Store) SpendByModality(userID string, since, until *time.Time) (map[string]float64, error) {
-	var (
-		conds []string
-		args  []any
-	)
-	if since != nil {
-		conds = append(conds, "ts >= ?")
-		args = append(args, since.UnixMilli())
-	}
-	if until != nil {
-		conds = append(conds, "ts < ?")
-		args = append(args, until.UnixMilli())
-	}
-	if userID != "" {
-		conds = append(conds, "user_id = ?")
-		args = append(args, userID)
-	}
-	query := `SELECT modality, COALESCE(SUM(cost), 0) FROM calls`
-	if len(conds) > 0 {
-		query += " WHERE " + strings.Join(conds, " AND ")
-	}
-	query += " GROUP BY modality"
+// [since, until) window, narrowed by the scope.
+func (s *Store) SpendByModality(sc Scope, since, until *time.Time) (map[string]float64, error) {
+	clause, args := windowClause(sc, since, until)
+	query := `SELECT modality, COALESCE(SUM(cost), 0) FROM calls` + clause + " GROUP BY modality"
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {

@@ -59,6 +59,23 @@ func parseIntDefault(r *http.Request, key string, def int) int {
 	return n
 }
 
+// statsScope builds the store.Scope an analytics query runs under: the
+// server-enforced consumer scope from scopeUserID, plus the dashboard's optional
+// models/providers filters read from the query string.
+//
+// The two filters are repeated params (`?models=a&models=b`) rather than a
+// comma-joined list, because model ids and vendor names are free-form operator
+// input and nothing forbids a comma in one. Absent params leave the slices nil,
+// which the store reads as "no filter".
+func statsScope(r *http.Request) store.Scope {
+	q := r.URL.Query()
+	return store.Scope{
+		UserID:  scopeUserID(r),
+		Models:  q["models"],
+		Vendors: q["vendors"],
+	}
+}
+
 // callFilterFromQuery builds a store.CallFilter from the request query,
 // applying the given default and cap to the limit.
 func callFilterFromQuery(r *http.Request, defLimit, capLimit int) store.CallFilter {
@@ -66,6 +83,8 @@ func callFilterFromQuery(r *http.Request, defLimit, capLimit int) store.CallFilt
 		UserID:   r.URL.Query().Get("user_id"),
 		Model:    r.URL.Query().Get("model"),
 		Vendor:   r.URL.Query().Get("vendor"),
+		Models:   r.URL.Query()["models"],
+		Vendors:  r.URL.Query()["vendors"],
 		FeedSort: r.URL.Query().Get("sort"),
 	}
 	if since, ok := parseUnixTime(r, "since"); ok {
@@ -115,7 +134,7 @@ func (a *api) handleOverview(w http.ResponseWriter, r *http.Request) {
 		until = *v
 	}
 
-	view, err := a.overviewData(scopeUserID(r), since, until)
+	view, err := a.overviewData(statsScope(r), since, until)
 	if err != nil {
 		a.writeDataErr(w, "overview", err)
 		return
@@ -127,25 +146,31 @@ func (a *api) handleOverview(w http.ResponseWriter, r *http.Request) {
 // spend by modality, request/error/latency stats, active vendors/users, daily
 // burn and (when any budget is set) runway in days.
 //
-// userID scopes every traffic aggregate to one consumer key; "" is the operator
-// (admin) view over all traffic. In user mode the fleet-wide fields — vendors
-// active, users active, active callers, and cross-user runway/daily-burn — are
-// meaningless and would leak other users' data, so they are left zero/nil and
-// only the caller's own spend/tokens/latency/error stats are returned.
-func (a *api) overviewData(userID string, since, until time.Time) (overviewView, error) {
-	totalSpend, err := a.store.TotalSpend(userID, &since, &until)
+// sc scopes every traffic aggregate: to one consumer key (UserID; "" is the
+// operator view over all traffic) and to the dashboard's selected models and
+// providers. In user mode the fleet-wide fields — vendors active, users active,
+// active callers, and cross-user runway/daily-burn — are meaningless and would
+// leak other users' data, so they are left zero/nil and only the caller's own
+// spend/tokens/latency/error stats are returned.
+//
+// Budget-derived figures (daily burn, runway) deliberately ignore the model and
+// provider filters: a budget is spent against the whole account, so a runway
+// computed from one model's slice of the burn would be a number that is true of
+// nothing. They stay whole-account even while the panels above them narrow.
+func (a *api) overviewData(sc store.Scope, since, until time.Time) (overviewView, error) {
+	totalSpend, err := a.store.TotalSpend(sc, &since, &until)
 	if err != nil {
 		return overviewView{}, err
 	}
-	byMod, err := a.store.SpendByModality(userID, &since, &until)
+	byMod, err := a.store.SpendByModality(sc, &since, &until)
 	if err != nil {
 		return overviewView{}, err
 	}
-	stats, err := a.store.OverviewStats(userID, &since, &until)
+	stats, err := a.store.OverviewStats(sc, &since, &until)
 	if err != nil {
 		return overviewView{}, err
 	}
-	tokens, err := a.store.TokenTotals(userID, &since, &until)
+	tokens, err := a.store.TokenTotals(sc, &since, &until)
 	if err != nil {
 		return overviewView{}, err
 	}
@@ -165,8 +190,8 @@ func (a *api) overviewData(userID string, since, until time.Time) (overviewView,
 	// Fleet-wide rollups are operator-only: skip them for a scoped (user) view so
 	// a consumer key never sees the vendor count, the user roster, other users'
 	// budgets, or the distinct-caller count.
-	if userID == "" {
-		activeCallers, err = a.store.DistinctUsers(&since, &until)
+	if sc.UserID == "" {
+		activeCallers, err = a.store.DistinctUsers(sc, &since, &until)
 		if err != nil {
 			return overviewView{}, err
 		}
@@ -203,7 +228,7 @@ func (a *api) overviewData(userID string, since, until time.Time) (overviewView,
 		// daily_burn = spend over the last 7 days / 7.
 		now := a.now().UTC()
 		weekAgo := now.AddDate(0, 0, -7)
-		weekSpend, err := a.store.TotalSpend("", &weekAgo, &now)
+		weekSpend, err := a.store.TotalSpend(store.Scope{}, &weekAgo, &now)
 		if err != nil {
 			return overviewView{}, err
 		}
@@ -253,7 +278,7 @@ func (a *api) handleSessionsOverview(w http.ResponseWriter, r *http.Request) {
 		until = *v
 	}
 
-	st, err := a.store.SessionStats(scopeUserID(r), &since, &until)
+	st, err := a.store.SessionStats(statsScope(r), &since, &until)
 	if err != nil {
 		a.writeDataErr(w, "sessions overview", err)
 		return
@@ -477,7 +502,7 @@ func (a *api) handleTokensByModel(w http.ResponseWriter, r *http.Request) {
 		a.writeDataErr(w, "tokens by model", err)
 		return
 	}
-	models, buckets, err := a.store.TokensByModelSeries(scopeUserID(r), dim, since, until, bucket)
+	models, buckets, err := a.store.TokensByModelSeries(statsScope(r), dim, since, until, bucket)
 	if err != nil {
 		if errors.Is(err, store.ErrTooManyBuckets) {
 			a.writeDataErr(w, "tokens by model", badRequestErr("requested range is too large for the chosen bucket"))
@@ -530,7 +555,7 @@ func (a *api) handleSuccessByModel(w http.ResponseWriter, r *http.Request) {
 		a.writeDataErr(w, "success by model", err)
 		return
 	}
-	models, buckets, err := a.store.SuccessByModelSeries(scopeUserID(r), dim, since, until, bucket)
+	models, buckets, err := a.store.SuccessByModelSeries(statsScope(r), dim, since, until, bucket)
 	if err != nil {
 		if errors.Is(err, store.ErrTooManyBuckets) {
 			a.writeDataErr(w, "success by model", badRequestErr("requested range is too large for the chosen bucket"))
@@ -580,7 +605,7 @@ func (a *api) handleCacheByModel(w http.ResponseWriter, r *http.Request) {
 		a.writeDataErr(w, "cache by model", err)
 		return
 	}
-	models, buckets, err := a.store.CacheByModelSeries(scopeUserID(r), dim, since, until, bucket)
+	models, buckets, err := a.store.CacheByModelSeries(statsScope(r), dim, since, until, bucket)
 	if err != nil {
 		if errors.Is(err, store.ErrTooManyBuckets) {
 			a.writeDataErr(w, "cache by model", badRequestErr("requested range is too large for the chosen bucket"))
@@ -701,7 +726,7 @@ func (a *api) handleTopErrorCodes(w http.ResponseWriter, r *http.Request) {
 	}
 	key := r.URL.Query().Get("key")
 
-	rows, err := a.store.TopErrorCodes(scopeUserID(r), dim, key, &since, &until, 8)
+	rows, err := a.store.TopErrorCodes(statsScope(r), dim, key, &since, &until, 8)
 	if err != nil {
 		if errors.Is(err, store.ErrBadDimension) {
 			a.writeDataErr(w, "usage error codes", badRequestErr("dimension must be model, vendor, or user"))
@@ -719,6 +744,43 @@ func (a *api) handleTopErrorCodes(w http.ResponseWriter, r *http.Request) {
 		Range: rangeView{Since: since.Unix(), Until: until.Unix()},
 		Rows:  views,
 	})
+}
+
+// handleUsageFacets returns the option lists behind the dashboard's Models and
+// Providers filters: the distinct models and vendors seen in the window, ranked
+// by request count (default last 30d, matching the other summary endpoints).
+//
+// The lists are what ran, not what is configured, and are never cross-filtered
+// by the caller's current selection — see store.Facets for why.
+func (a *api) handleUsageFacets(w http.ResponseWriter, r *http.Request) {
+	now := a.now().UTC()
+	since := now.AddDate(0, 0, -30)
+	until := now
+	if v, ok := parseUnixTime(r, "since"); ok {
+		since = *v
+	}
+	if v, ok := parseUnixTime(r, "until"); ok {
+		until = *v
+	}
+
+	models, vendors, err := a.store.Facets(statsScope(r), &since, &until)
+	if err != nil {
+		a.writeDataErr(w, "usage facets", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, facetsView{
+		Range:   rangeView{Since: since.Unix(), Until: until.Unix()},
+		Models:  facetRows(models),
+		Vendors: facetRows(vendors),
+	})
+}
+
+func facetRows(rows []store.FacetRow) []facetRow {
+	out := make([]facetRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, facetRow{Key: r.Key, Requests: r.Requests})
+	}
+	return out
 }
 
 // handleCalls returns a filtered, paginated page of call entries plus the
@@ -1065,7 +1127,7 @@ func (a *api) handleContextComposition(w http.ResponseWriter, r *http.Request) {
 		until = *v
 	}
 
-	agg, err := a.store.AggregateComposition(scopeUserID(r), &since, &until)
+	agg, err := a.store.AggregateComposition(statsScope(r), &since, &until)
 	if err != nil {
 		a.writeDataErr(w, "context composition", err)
 		return

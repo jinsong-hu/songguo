@@ -372,6 +372,22 @@ type errorCodesView struct {
 	Rows  []errorCodeRow `json:"rows"`
 }
 
+// facetRow is one selectable value of a dashboard filter and the request count
+// that ranked it.
+type facetRow struct {
+	Key      string `json:"key"`
+	Requests int    `json:"requests"`
+}
+
+// facetsView is the GET /api/usage/facets response: the models and vendors that
+// appear in the window, ranked by request count desc, for the Overview page's
+// Models and Providers filters.
+type facetsView struct {
+	Range   rangeView  `json:"range"`
+	Models  []facetRow `json:"models"`
+	Vendors []facetRow `json:"vendors"`
+}
+
 // callsView is the GET /api/calls response.
 type callsView struct {
 	Entries []entryView `json:"entries"`

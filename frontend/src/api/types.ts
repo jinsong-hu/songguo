@@ -890,8 +890,37 @@ export interface CallsFilters {
   user_id?: string;
   model?: string;
   vendor?: string;
+  /** Multi-value form of model/vendor, serialized as repeated query params.
+   *  Empty or omitted means all — see UsageFilter. */
+  models?: string[];
+  vendors?: string[];
   status?: StatusGroup;
   sort?: FeedSort;
   limit?: number;
   offset?: number;
+}
+
+/**
+ * The dashboard's Models/Providers filter, as every windowed analytics call
+ * takes it. An empty array means "all" — the same convention a user key's model
+ * scope uses — and the client simply omits the param, so the default costs
+ * nothing on the wire.
+ */
+export interface UsageFilter {
+  models: string[];
+  vendors: string[];
+}
+
+/** One selectable value of a filter, with the request count that ranked it. */
+export interface Facet {
+  key: string;
+  requests: number;
+}
+
+/** GET /api/usage/facets — the option lists behind the two filters. Both are
+ *  what actually ran in the window, ranked by requests desc. */
+export interface UsageFacets {
+  range: Range;
+  models: Facet[];
+  vendors: Facet[];
 }

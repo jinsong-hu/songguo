@@ -21,7 +21,7 @@ func TestTokenTotalsAndSeries(t *testing.T) {
 		}
 	}
 
-	tt, err := s.TokenTotals("", nil, nil)
+	tt, err := s.TokenTotals(Scope{}, nil, nil)
 	if err != nil {
 		t.Fatalf("TokenTotals: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestTokenTotalsAndSeries(t *testing.T) {
 
 func TestTokenTotalsEmpty(t *testing.T) {
 	s := openTestStore(t)
-	tt, err := s.TokenTotals("", nil, nil)
+	tt, err := s.TokenTotals(Scope{}, nil, nil)
 	if err != nil {
 		t.Fatalf("TokenTotals: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestDistinctUsers(t *testing.T) {
 			t.Fatalf("AppendCall[%d]: %v", i, err)
 		}
 	}
-	n, err := s.DistinctUsers(nil, nil)
+	n, err := s.DistinctUsers(Scope{}, nil, nil)
 	if err != nil {
 		t.Fatalf("DistinctUsers: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestDistinctUsers(t *testing.T) {
 	// Windowed: only b's row falls in [t+2m, t+3m).
 	since := base.Add(2 * time.Minute)
 	until := base.Add(3 * time.Minute)
-	n, err = s.DistinctUsers(&since, &until)
+	n, err = s.DistinctUsers(Scope{}, &since, &until)
 	if err != nil {
 		t.Fatalf("DistinctUsers(window): %v", err)
 	}

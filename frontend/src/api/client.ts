@@ -31,6 +31,8 @@ import type {
   SessionStats,
   Settings,
   User,
+  UsageFacets,
+  UsageFilter,
   UsageSeries,
   UsageDimension,
   TokensByModelSeries,
@@ -95,13 +97,31 @@ function handleUnauthorized(): void {
   for (const fn of unauthorizedListeners) fn();
 }
 
-function qs(params: Record<string, string | number | undefined | null>): string {
+/**
+ * Build a query string. An array value becomes one repeated param per entry
+ * (`?models=a&models=b`) — the form the backend reads for the multi-value
+ * filters, chosen because model ids and vendor names are free-form operator
+ * input and a comma-joined list could not be split back apart safely. An empty
+ * array emits nothing, so "all" costs nothing on the wire.
+ */
+function qs(
+  params: Record<string, string | number | string[] | undefined | null>,
+): string {
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== null && v !== '') sp.set(k, String(v));
+    if (Array.isArray(v)) {
+      for (const item of v) if (item !== '') sp.append(k, item);
+    } else if (v !== undefined && v !== null && v !== '') {
+      sp.set(k, String(v));
+    }
   }
   const s = sp.toString();
   return s ? `?${s}` : '';
+}
+
+/** Spread a UsageFilter into qs() params; an absent filter contributes nothing. */
+function filterParams(f?: UsageFilter): { models?: string[]; vendors?: string[] } {
+  return { models: f?.models, vendors: f?.vendors };
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -146,6 +166,8 @@ function callsQuery(f: CallsFilters): string {
     user_id: f.user_id,
     model: f.model,
     vendor: f.vendor,
+    models: f.models,
+    vendors: f.vendors,
     status: f.status && f.status !== 'all' ? f.status : undefined,
     sort: f.sort && f.sort !== 'recent' ? f.sort : undefined,
     limit: f.limit,
@@ -159,24 +181,33 @@ export const api = {
 
   settings: () => request<Settings>('/settings'),
 
-  overview: (since: number, until: number) =>
-    request<Overview>(`/overview${qs({ since, until })}`),
+  overview: (since: number, until: number, filter?: UsageFilter) =>
+    request<Overview>(`/overview${qs({ since, until, ...filterParams(filter) })}`),
 
-  /** Aggregate stats over coding-agent sessions in the window. */
-  sessionsOverview: (since: number, until: number) =>
-    request<SessionStats>(`/sessions/overview${qs({ since, until })}`),
+  /** Aggregate stats over coding-agent sessions in the window. Under a filter
+   *  these are the sessions that *touched* a selected model or provider, with
+   *  their whole-session figures — see the backend's SessionStats. */
+  sessionsOverview: (since: number, until: number, filter?: UsageFilter) =>
+    request<SessionStats>(`/sessions/overview${qs({ since, until, ...filterParams(filter) })}`),
 
   series: (since: number, until: number, bucket: Bucket) =>
     request<UsageSeries>(`/usage/series${qs({ since, until, bucket })}`),
+
+  /** The models and providers with traffic in the window, ranked by requests —
+   *  the option lists for the two top-bar filters. Deliberately unfiltered by
+   *  the current selection, so choosing a model never removes providers. */
+  facets: (since: number, until: number) =>
+    request<UsageFacets>(`/usage/facets${qs({ since, until })}`),
 
   tokensByModel: (
     since: number,
     until: number,
     bucket: Bucket,
     dimension: UsageDimension = 'model',
+    filter?: UsageFilter,
   ) =>
     request<TokensByModelSeries>(
-      `/usage/tokens-by-model${qs({ since, until, bucket, dimension })}`,
+      `/usage/tokens-by-model${qs({ since, until, bucket, dimension, ...filterParams(filter) })}`,
     ),
 
   successByModel: (
@@ -184,9 +215,10 @@ export const api = {
     until: number,
     bucket: Bucket,
     dimension: UsageDimension = 'model',
+    filter?: UsageFilter,
   ) =>
     request<SuccessByModelSeries>(
-      `/usage/success-by-model${qs({ since, until, bucket, dimension })}`,
+      `/usage/success-by-model${qs({ since, until, bucket, dimension, ...filterParams(filter) })}`,
     ),
 
   cacheByModel: (
@@ -194,9 +226,10 @@ export const api = {
     until: number,
     bucket: Bucket,
     dimension: UsageDimension = 'model',
+    filter?: UsageFilter,
   ) =>
     request<CacheByModelSeries>(
-      `/usage/cache-by-model${qs({ since, until, bucket, dimension })}`,
+      `/usage/cache-by-model${qs({ since, until, bucket, dimension, ...filterParams(filter) })}`,
     ),
 
   breakdown: (dimension: BreakdownDimension, since: number, until: number) =>
@@ -215,9 +248,16 @@ export const api = {
     until: number,
     dimension?: UsageDimension,
     key?: string,
+    filter?: UsageFilter,
   ) =>
     request<ErrorCodesBreakdown>(
-      `/usage/error-codes${qs({ since, until, dimension: key ? dimension : undefined, key })}`,
+      `/usage/error-codes${qs({
+        since,
+        until,
+        dimension: key ? dimension : undefined,
+        key,
+        ...filterParams(filter),
+      })}`,
     ),
 
   calls: (f: CallsFilters) => request<CallsPage>(`/calls${callsQuery(f)}`),
@@ -236,8 +276,10 @@ export const api = {
     request<SessionMessages>(`/sessions/${encodeURIComponent(id)}/messages`),
 
   /** Aggregated context-window composition over a range (Overview sunburst). */
-  contextComposition: (since: number, until: number) =>
-    request<ContextComposition>(`/context/composition${qs({ since, until })}`),
+  contextComposition: (since: number, until: number, filter?: UsageFilter) =>
+    request<ContextComposition>(
+      `/context/composition${qs({ since, until, ...filterParams(filter) })}`,
+    ),
 
   /** Per-turn context growth, snapshot, and dwell for one session, scoped to one
    *  agent (agent="" or omitted → the main loop). */

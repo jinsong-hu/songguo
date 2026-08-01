@@ -122,9 +122,10 @@ var adminRoutes = []adminRoute{
 	// user key, the models it may play. Accepts either key type.
 	{"GET", "/api/me", (*api).handleMe, true},
 	// Overview analytics are Shared: a consumer key reaches them too, but each
-	// handler restricts results to the caller's own traffic via scopeUserID (the
-	// admin key stays unscoped). The cross-user surfaces below — /usage/breakdown,
-	// /usage/errors, /usage/series — stay admin-only.
+	// handler restricts results to the caller's own traffic via statsScope, which
+	// takes the user scope from scopeUserID (the admin key stays unscoped) and the
+	// optional models/providers filters from the query. The cross-user surfaces
+	// below — /usage/breakdown, /usage/errors, /usage/series — stay admin-only.
 	{"GET", "/api/overview", (*api).handleOverview, true},
 	{"GET", "/api/usage/series", (*api).handleUsageSeries, false},
 	{"GET", "/api/usage/tokens-by-model", (*api).handleTokensByModel, true},
@@ -133,6 +134,10 @@ var adminRoutes = []adminRoute{
 	{"GET", "/api/usage/breakdown", (*api).handleBreakdown, false},
 	{"GET", "/api/usage/errors", (*api).handleErrors, false},
 	{"GET", "/api/usage/error-codes", (*api).handleTopErrorCodes, true},
+	// The dashboard's Models/Providers filter option lists. Shared and scoped the
+	// same way as the panels they filter, so a consumer key is offered only the
+	// models and providers its own traffic actually used.
+	{"GET", "/api/usage/facets", (*api).handleUsageFacets, true},
 	{"GET", "/api/context/composition", (*api).handleContextComposition, true},
 	{"GET", "/api/feed", (*api).handleFeed, true},
 	{"GET", "/api/calls", (*api).handleCalls, false},

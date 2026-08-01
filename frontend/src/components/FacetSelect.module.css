@@ -1,0 +1,219 @@
+.root {
+  position: relative;
+  display: inline-block;
+}
+
+/* Same 30px chrome as TimeRangePicker's trigger and the .seg buttons, so the
+   three toolbar controls sit on one line. */
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 9px 0 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.trigger:hover {
+  background: var(--surface-2);
+}
+
+.trigger[aria-expanded='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* A filter that is doing something reads as accent-tinted even while closed —
+   otherwise "All models" and "2 models" are the same shape at a glance, and a
+   forgotten filter is the classic way to misread a dashboard. */
+.triggerActive {
+  border-color: var(--accent);
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+.triggerActive:hover {
+  background: var(--accent-weak);
+}
+
+/* The label is the only elastic part of the toolbar: a long model id would
+   otherwise push the row wider than the viewport, since .toolbarActions never
+   shrinks or wraps. */
+.triggerLabel {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Absolutely-positioned children shrink-to-fit their containing block, and .root
+   is only as wide as the trigger — so like TimeRangePicker's panel this needs an
+   explicit width rather than `auto`, or it collapses to the trigger's size. */
+.panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  width: 288px;
+  max-width: calc(100vw - 24px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 12%);
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.search {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.search:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+
+.clear {
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.clear:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+/* With no search box beside it the button is the whole header row, so let it
+   span the width rather than sit in a corner of empty space. */
+.clear:only-child {
+  flex: 1;
+}
+
+/* Disabled is the resting state whenever no filter is set, so it must read as
+   "already the case", not as "broken". */
+.clear:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  /* Cap the drop rather than the viewport: a fleet with forty models should
+     scroll here, not push the panel off the bottom of the screen. */
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.opt:hover {
+  background: var(--surface-2);
+}
+
+/* The native input carries the semantics (and stays reachable by keyboard and by
+   getByRole in tests); .box draws the tick. Clipping to 1px rather than
+   display:none is what keeps it focusable. */
+.check {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.box {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface);
+  color: #fff;
+}
+
+.check:checked + .box {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.check:focus-visible + .box {
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+
+/* A fixed slot, held even when renderIcon returns nothing: plenty of providers
+   are resellers with no brand we recognize, and letting their rows collapse the
+   slot leaves the names on a ragged left edge next to the branded ones. */
+.icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.count {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.empty {
+  padding: 10px 6px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  text-align: center;
+}

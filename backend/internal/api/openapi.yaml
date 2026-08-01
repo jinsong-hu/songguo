@@ -41,6 +41,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Since"
         - $ref: "#/components/parameters/Until"
+        - $ref: "#/components/parameters/Models"
+        - $ref: "#/components/parameters/Vendors"
       responses:
         "200":
           description: Overview
@@ -80,6 +82,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Since"
         - $ref: "#/components/parameters/Until"
+        - $ref: "#/components/parameters/Models"
+        - $ref: "#/components/parameters/Vendors"
         - name: bucket
           in: query
           schema: { type: string, pattern: "^(hour|day|[0-9]+[smhd])$" }
@@ -104,6 +108,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Since"
         - $ref: "#/components/parameters/Until"
+        - $ref: "#/components/parameters/Models"
+        - $ref: "#/components/parameters/Vendors"
         - name: bucket
           in: query
           schema: { type: string, pattern: "^(hour|day|[0-9]+[smhd])$" }
@@ -132,6 +138,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Since"
         - $ref: "#/components/parameters/Until"
+        - $ref: "#/components/parameters/Models"
+        - $ref: "#/components/parameters/Vendors"
         - name: bucket
           in: query
           schema: { type: string, pattern: "^(hour|day|[0-9]+[smhd])$" }
@@ -160,6 +168,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Since"
         - $ref: "#/components/parameters/Until"
+        - $ref: "#/components/parameters/Models"
+        - $ref: "#/components/parameters/Vendors"
       responses:
         "200":
           description: Context composition
@@ -216,6 +226,8 @@ paths:
         - { name: key, in: query, schema: { type: string }, description: "Scope to one series (e.g. one model); empty means all traffic." }
         - $ref: "#/components/parameters/Since"
         - $ref: "#/components/parameters/Until"
+        - $ref: "#/components/parameters/Models"
+        - $ref: "#/components/parameters/Vendors"
       responses:
         "200":
           description: Error counts by upstream status code, ranked by count (top 8)
@@ -223,6 +235,27 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/UsageErrorCodes" }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/usage/facets:
+    get:
+      tags: [usage]
+      summary: Distinct models and providers seen in a window, ranked by requests
+      description: >-
+        The option lists behind the dashboard's Models and Providers filters.
+        These are the values that actually appear in the call log over the
+        window, not everything configured, so every option is guaranteed to
+        change what you see. The lists are never cross-filtered by a current
+        selection — passing models= does not shrink the vendors list.
+      operationId: getUsageFacets
+      parameters:
+        - $ref: "#/components/parameters/Since"
+        - $ref: "#/components/parameters/Until"
+      responses:
+        "200":
+          description: Model and provider facets
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UsageFacets" }
         "401": { $ref: "#/components/responses/Unauthorized" }
   /api/feed:
     get:
@@ -236,6 +269,8 @@ paths:
         - { name: status, in: query, schema: { type: integer }, description: HTTP status filter (per-call, before grouping) }
         - $ref: "#/components/parameters/Since"
         - $ref: "#/components/parameters/Until"
+        - $ref: "#/components/parameters/Models"
+        - $ref: "#/components/parameters/Vendors"
         - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 500 } }
         - { name: offset, in: query, schema: { type: integer, default: 0 } }
       responses:
@@ -253,6 +288,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Since"
         - $ref: "#/components/parameters/Until"
+        - $ref: "#/components/parameters/Models"
+        - $ref: "#/components/parameters/Vendors"
       responses:
         "200":
           description: Session aggregate stats
@@ -792,6 +829,25 @@ components:
       in: query
       schema: { type: integer, format: int64 }
       description: Window end, unix seconds.
+    Models:
+      name: models
+      in: query
+      explode: true
+      style: form
+      schema: { type: array, items: { type: string } }
+      description: >-
+        Restrict the aggregate to these models. Repeat the param
+        (models=a&models=b) rather than comma-joining — model ids are free-form
+        operator input and may contain a comma. Omit for all models.
+    Vendors:
+      name: vendors
+      in: query
+      explode: true
+      style: form
+      schema: { type: array, items: { type: string } }
+      description: >-
+        Restrict the aggregate to these providers, repeated like models. Omit for
+        all providers.
   responses:
     Unauthorized:
       description: Missing or invalid admin key
@@ -1031,6 +1087,21 @@ components:
             properties:
               status: { type: integer, description: Upstream HTTP status (0 = transport error) }
               count: { type: integer }
+    UsageFacets:
+      type: object
+      properties:
+        range: { $ref: "#/components/schemas/Range" }
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/Facet" }
+        vendors:
+          type: array
+          items: { $ref: "#/components/schemas/Facet" }
+    Facet:
+      type: object
+      properties:
+        key: { type: string, description: The model id or vendor name }
+        requests: { type: integer, description: Calls in the window that carried it }
     Call:
       type: object
       properties:

@@ -43,6 +43,7 @@ served **without** auth — it describes shapes only and carries no secrets.
 |---|---|
 | `GET /api/overview` | Spend & health summary for a window (total spend, by modality, error rate, latency, burn, runway). |
 | `GET /api/usage/series` | Cost/request/error totals bucketed over time (`hour`, `day`, or a size like `5m`/`6h`/`7d`). |
+| `GET /api/usage/facets` | Distinct models and providers seen in a window, ranked by requests — the option lists for the dashboard's Models/Providers filters. |
 | `GET /api/calls` | Browse the per-call ledger (filter by user/model/vendor/status/time, paginated). |
 | `GET /api/calls/export` | Download filtered calls as CSV or JSON. |
 | `GET /api/calls/{id}/trace` | Captured request/response payload for a call (when capture is enabled for that user). Covers gateway-denied calls too — an unmatched `404`, scope `403`, budget `402`, or rate-limit `429` saves the request plus the synthesized error body, so a rejected request is as inspectable as a forwarded one. (Upstream transport/build `502` failures record a row but no payload — there is no served response to pair.) |
@@ -60,6 +61,37 @@ served **without** auth — it describes shapes only and carries no secrets.
 | `GET /api/catalog` · `GET /api/wires` | Provider presets / registered wire names. |
 | `GET /api/settings` | Read runtime settings. |
 | `GET /api/pricing` | Flattened per-provider model prices. |
+
+### Narrowing an aggregate: `models` and `vendors`
+
+Every windowed analytics endpoint the dashboard's Overview page reads — the eight
+above marked with a `since`/`until` window, plus `/api/feed` — also accepts
+optional `models` and `vendors` filters. Both are **repeated** params rather than
+a comma-joined list, because model ids and vendor names are free-form operator
+input and nothing forbids a comma in one:
+
+```
+GET /api/overview?since=…&until=…&models=claude-opus-5&models=gpt-5.6-sol&vendors=anyrouter
+```
+
+Omitting a param means "all" — the same convention `User.scope` uses for model
+allowlists. The filters AND with the server-enforced user scope, so a consumer
+key can only ever narrow its own traffic, never widen to someone else's.
+
+Two things deliberately **ignore** them:
+
+- **Daily burn and runway** on `/api/overview`. A budget is spent against the
+  whole account; a runway derived from one model's slice of the burn would be a
+  number that is true of nothing.
+- **The facet lists** on `/api/usage/facets`. Cross-filtering them would make
+  options vanish as you select, and can strand a selection you can no longer see
+  to clear.
+
+`/api/sessions/overview` is the one endpoint where the filter changes meaning
+rather than just narrowing: it selects sessions that **touched** one of the
+chosen models or providers, and still reports each one's whole-session turns,
+duration, and tokens. The `sessions` rollup has no model column, and a coding
+agent's run is not divisible by model — see `store.SessionStats`.
 
 The precise request/response schemas are in the OpenAPI 3.1 spec, served by the
 binary and embedded at `backend/internal/api/openapi.yaml`:

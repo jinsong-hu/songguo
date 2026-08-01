@@ -1,8 +1,8 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { api } from '../api/client';
-import type { CallsFilters, FeedRow, FeedSort } from '../api/types';
+import type { CallsFilters, FeedRow, FeedSort, UsageFilter } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Skeleton } from '../components/Skeleton';
@@ -25,6 +25,10 @@ const TOP_KEYS = TOP_SORTS.map((t) => t.key);
 interface ActivityFeedProps {
   since: number;
   until: number;
+  /** The page's Models/Providers filter. Applied per call before grouping, so a
+   *  session row appears when any of its calls match — and its rollups then
+   *  cover only the matching ones. */
+  filter?: UsageFilter;
   /** Whether rows open a detail page on click. Off for the scoped user shell,
    *  which has no session/call detail routes (and no access to those APIs). */
   interactive?: boolean;
@@ -40,7 +44,7 @@ interface ActivityFeedProps {
  * that re-rank the whole window server-side (see FeedSort). Changing the sort
  * resets to the first page.
  */
-export function ActivityFeed({ since, until, interactive = true }: ActivityFeedProps) {
+export function ActivityFeed({ since, until, filter, interactive = true }: ActivityFeedProps) {
   const [offset, setOffset] = useState(0);
   const [sort, setSort] = useState<FeedSort>('recent');
   const navigate = useNavigate();
@@ -52,9 +56,21 @@ export function ActivityFeed({ since, until, interactive = true }: ActivityFeedP
     setOffset(0);
   }, []);
 
+  // Scalar fingerprint of the filter: useFetch spreads deps into a useEffect
+  // array, where a fresh array identity would refetch every render.
+  const filterKey = `${(filter?.models ?? []).join(' ')}|${(filter?.vendors ?? []).join(' ')}`;
+
+  // A narrower filter means a shorter list, so a held offset can land past its
+  // end and show an empty page — same hazard as changing the sort.
+  useEffect(() => {
+    setOffset(0);
+  }, [filterKey]);
+
   const filters: CallsFilters = {
     since,
     until,
+    models: filter?.models,
+    vendors: filter?.vendors,
     sort,
     limit: PAGE_SIZE,
     offset,
@@ -62,7 +78,7 @@ export function ActivityFeed({ since, until, interactive = true }: ActivityFeedP
 
   const { data, error, initialLoading, refetch } = useFetch(
     () => api.feed(filters),
-    [since, until, sort, offset],
+    [since, until, sort, offset, filterKey],
     { intervalMs: REFRESH_MS },
   );
 

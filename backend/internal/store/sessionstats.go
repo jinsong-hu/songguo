@@ -61,9 +61,17 @@ type SessionStats struct {
 // NOT a live GROUP BY over calls. The window filters on each session's last
 // activity (last_ts), the same key the rollup is pruned by. Outcomes, totals,
 // and per-session percentiles are derived from the rolled-up rows.
-func (s *Store) SessionStats(userID string, since, until *time.Time) (SessionStats, error) {
+//
+// A model/provider filter selects sessions that **touched** one of the chosen
+// models or providers; the per-session figures it reports are still the whole
+// session's. That asymmetry is deliberate and is the only honest reading
+// available: the rollup has no model column, and a session is a single agent run
+// whose turn count and duration are not divisible by model. "Sessions that used
+// claude-opus-5, and how those runs behaved" is a real question; "the 40% of
+// this session that was opus" is not.
+func (s *Store) SessionStats(sc Scope, since, until *time.Time) (SessionStats, error) {
 	// windowClause emits predicates on `ts`; the sessions table keys activity on
-	// last_ts, so build the clause by hand. A non-empty userID restricts to that
+	// last_ts, so build the clause by hand. A non-empty UserID restricts to that
 	// consumer key's own sessions (rows predating the user_id column carry '' and
 	// so only ever appear in the unscoped operator view).
 	var (
@@ -78,9 +86,19 @@ func (s *Store) SessionStats(userID string, since, until *time.Time) (SessionSta
 		conds = append(conds, "last_ts < ?")
 		args = append(args, until.UnixMilli())
 	}
-	if userID != "" {
+	if sc.UserID != "" {
 		conds = append(conds, "user_id = ?")
-		args = append(args, userID)
+		args = append(args, sc.UserID)
+	}
+	if sc.filtered() {
+		// The model/provider predicate lives on `calls`, so reach it through the
+		// session ids that satisfy it. Scoped to the same window as the outer
+		// query: a session whose only opus turns fell outside the window should
+		// not be pulled in by them.
+		sub, subArgs := windowClause(Scope{Models: sc.Models, Vendors: sc.Vendors}, since, until)
+		conds = append(conds,
+			"id IN (SELECT DISTINCT session_id FROM calls"+sub+" AND session_id != '')")
+		args = append(args, subArgs...)
 	}
 	clause := ""
 	if len(conds) > 0 {

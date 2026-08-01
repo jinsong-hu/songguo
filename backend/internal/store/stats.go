@@ -44,13 +44,72 @@ type ModelStat struct {
 	AvgLatency float64 // milliseconds
 }
 
-// windowClause builds the optional "[since, until)" WHERE clause shared by the
-// stats queries.
-// windowClause builds the time-window (and optional per-user) WHERE clause
-// shared by the aggregate stats queries. userID == "" leaves the query unscoped
-// (the operator/admin view); a non-empty userID restricts to that consumer key's
-// own calls via the indexed user_id column.
-func windowClause(userID string, since, until *time.Time) (string, []any) {
+// Scope narrows which rows of the call log an aggregate query considers. It
+// carries two kinds of narrowing that happen to share a WHERE clause but not a
+// provenance, and the difference matters:
+//
+//   - UserID is server-enforced. It comes from the authenticated key (see
+//     api.scopeUserID) and is never read from the query string. "" means the
+//     operator view — all traffic.
+//   - Models and Vendors are the operator's own dashboard filters, read from the
+//     request. They can only ever narrow what the caller may already see, so
+//     they need no enforcement of their own.
+//
+// An empty slice means "no filter", matching the convention User.Scope already
+// uses for model allowlists — none selected = all.
+type Scope struct {
+	UserID  string
+	Models  []string
+	Vendors []string
+}
+
+// filtered reports whether any model/provider filter is set. Callers that must
+// reach for a more expensive query shape when filtering (SessionStats, which
+// aggregates a rollup table with no model column) branch on this.
+func (sc Scope) filtered() bool { return len(sc.Models) > 0 || len(sc.Vendors) > 0 }
+
+// conds returns the scope's WHERE conjuncts and their bound args, all predicates
+// on the `calls` table. Column names are literals here, never caller input.
+func (sc Scope) conds() ([]string, []any) {
+	var (
+		conds []string
+		args  []any
+	)
+	if sc.UserID != "" {
+		conds = append(conds, "user_id = ?")
+		args = append(args, sc.UserID)
+	}
+	if c, a := inClause("model", sc.Models); c != "" {
+		conds = append(conds, c)
+		args = append(args, a...)
+	}
+	if c, a := inClause("vendor", sc.Vendors); c != "" {
+		conds = append(conds, c)
+		args = append(args, a...)
+	}
+	return conds, args
+}
+
+// inClause builds a `col IN (?, ?, ...)` predicate for a value allowlist. An
+// empty list yields an empty clause — no filter — rather than `IN ()`, which
+// would match nothing and silently blank the dashboard.
+func inClause(col string, vals []string) (string, []any) {
+	if len(vals) == 0 {
+		return "", nil
+	}
+	args := make([]any, len(vals))
+	placeholders := make([]string, len(vals))
+	for i, v := range vals {
+		placeholders[i] = "?"
+		args[i] = v
+	}
+	return col + " IN (" + strings.Join(placeholders, ", ") + ")", args
+}
+
+// windowClause builds the time-window (and scope) WHERE clause shared by the
+// aggregate stats queries over `calls`. A zero Scope leaves the query unscoped
+// (the operator/admin view, all models, all providers).
+func windowClause(sc Scope, since, until *time.Time) (string, []any) {
 	var (
 		conds []string
 		args  []any
@@ -63,31 +122,31 @@ func windowClause(userID string, since, until *time.Time) (string, []any) {
 		conds = append(conds, "ts < ?")
 		args = append(args, until.UnixMilli())
 	}
-	if userID != "" {
-		conds = append(conds, "user_id = ?")
-		args = append(args, userID)
-	}
+	scopeConds, scopeArgs := sc.conds()
+	conds = append(conds, scopeConds...)
+	args = append(args, scopeArgs...)
 	if len(conds) == 0 {
 		return "", nil
 	}
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
-// userScopeClause returns a trailing ` AND user_id = ?` fragment (and its bound
-// arg) for the per-user-scoped series queries that build their WHERE by hand.
-// userID == "" yields an empty clause and no args, leaving the query unscoped.
-func userScopeClause(userID string) (string, []any) {
-	if userID == "" {
+// scopeClause returns a trailing ` AND ...` fragment (and its bound args) for the
+// series queries that build their WHERE by hand. A zero Scope yields an empty
+// clause and no args, leaving the query unscoped.
+func scopeClause(sc Scope) (string, []any) {
+	conds, args := sc.conds()
+	if len(conds) == 0 {
 		return "", nil
 	}
-	return " AND user_id = ?", []any{userID}
+	return " AND " + strings.Join(conds, " AND "), args
 }
 
 // OverviewStats returns total requests, error count, and p50/p95/p99 latency
 // (ms) over the optional [since, until) window. It pulls the latencies sorted
 // from SQLite and computes percentiles in Go via nearest-rank.
-func (s *Store) OverviewStats(userID string, since, until *time.Time) (OverviewStats, error) {
-	clause, args := windowClause(userID, since, until)
+func (s *Store) OverviewStats(sc Scope, since, until *time.Time) (OverviewStats, error) {
+	clause, args := windowClause(sc, since, until)
 
 	rows, err := s.db.Query(
 		`SELECT latency_ms, status, ttft_ms, generation_ms, output_tokens
@@ -149,7 +208,7 @@ func (s *Store) OverviewStats(userID string, since, until *time.Time) (OverviewS
 // last status over the optional [since, until) window. The map is keyed by
 // vendor name; vendors with no rows in the window are absent.
 func (s *Store) VendorStats(since, until *time.Time) (map[string]VendorStat, error) {
-	clause, args := windowClause("", since, until)
+	clause, args := windowClause(Scope{}, since, until)
 
 	// Aggregate counts and average latency per vendor.
 	aggRows, err := s.db.Query(
@@ -220,7 +279,7 @@ func (s *Store) VendorStats(since, until *time.Time) (map[string]VendorStat, err
 // the optional [since, until) window. The map is keyed by model name; models
 // with no rows in the window are absent.
 func (s *Store) ModelStats(since, until *time.Time) (map[string]ModelStat, error) {
-	clause, args := windowClause("", since, until)
+	clause, args := windowClause(Scope{}, since, until)
 
 	rows, err := s.db.Query(
 		`SELECT model,
@@ -263,8 +322,8 @@ type TokenTotals struct {
 }
 
 // TokenTotals sums normalized tokens over the optional [since, until) window.
-func (s *Store) TokenTotals(userID string, since, until *time.Time) (TokenTotals, error) {
-	clause, args := windowClause(userID, since, until)
+func (s *Store) TokenTotals(sc Scope, since, until *time.Time) (TokenTotals, error) {
+	clause, args := windowClause(sc, since, until)
 	var t TokenTotals
 	err := s.db.QueryRow(
 		`SELECT COALESCE(SUM(input_tokens), 0),
@@ -282,9 +341,11 @@ func (s *Store) TokenTotals(userID string, since, until *time.Time) (TokenTotals
 
 // DistinctUsers counts distinct non-empty user_ids with at least one call in the
 // optional [since, until) window. The empty user id (admin/unknown traffic) is
-// excluded so the count reflects real callers.
-func (s *Store) DistinctUsers(since, until *time.Time) (int, error) {
-	clause, args := windowClause("", since, until)
+// excluded so the count reflects real callers. The scope's model/provider
+// filters narrow which calls count, so the KPI answers "callers of the models
+// I am looking at" rather than "callers of anything".
+func (s *Store) DistinctUsers(sc Scope, since, until *time.Time) (int, error) {
+	clause, args := windowClause(sc, since, until)
 	if clause == "" {
 		clause = " WHERE user_id != ''"
 	} else {
@@ -295,6 +356,64 @@ func (s *Store) DistinctUsers(since, until *time.Time) (int, error) {
 		return 0, fmt.Errorf("store: distinct users: %w", err)
 	}
 	return n, nil
+}
+
+// FacetRow is one selectable value of a dashboard filter, with the request count
+// that earned it a place in the list.
+type FacetRow struct {
+	Key      string
+	Requests int
+}
+
+// Facets lists the distinct models and vendors that actually appear in the call
+// log over the window, ranked by request count — the option lists behind the
+// Overview page's Models and Providers filters.
+//
+// Two deliberate choices:
+//
+//   - Observed, not configured. A provider may declare fifty models; the filter
+//     offers the handful that ran. This keeps the list short and means every
+//     option is guaranteed to change what you see.
+//   - No cross-filtering. Only sc.UserID narrows this query — a caller's own
+//     model/provider selections are ignored, so picking a model never removes
+//     providers from the other list. Cross-filtered facets read as options
+//     "disappearing" and can strand a selection the user can no longer clear.
+func (s *Store) Facets(sc Scope, since, until *time.Time) (models, vendors []FacetRow, err error) {
+	scope := Scope{UserID: sc.UserID}
+	clause, args := windowClause(scope, since, until)
+
+	load := func(col string) ([]FacetRow, error) {
+		// col is a literal from this function's own two call sites, never input.
+		rows, qerr := s.db.Query(
+			`SELECT `+col+` AS k, COUNT(*) AS n
+			   FROM calls`+clause+`
+			  GROUP BY k
+			 HAVING k != ''
+			  ORDER BY n DESC, k ASC`,
+			args...,
+		)
+		if qerr != nil {
+			return nil, fmt.Errorf("store: facets %s: %w", col, qerr)
+		}
+		defer rows.Close()
+		out := []FacetRow{}
+		for rows.Next() {
+			var r FacetRow
+			if serr := rows.Scan(&r.Key, &r.Requests); serr != nil {
+				return nil, fmt.Errorf("store: scan facets %s: %w", col, serr)
+			}
+			out = append(out, r)
+		}
+		return out, rows.Err()
+	}
+
+	if models, err = load("model"); err != nil {
+		return nil, nil, err
+	}
+	if vendors, err = load("vendor"); err != nil {
+		return nil, nil, err
+	}
+	return models, vendors, nil
 }
 
 // BreakdownDimension is a column the call log can be grouped by.
@@ -353,7 +472,7 @@ func (s *Store) Breakdown(dimension BreakdownDimension, since, until *time.Time)
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrBadDimension, dimension)
 	}
-	clause, args := windowClause("", since, until)
+	clause, args := windowClause(Scope{}, since, until)
 	rows, err := s.db.Query(
 		`SELECT `+col+` AS k,
 		        COUNT(*),
@@ -403,7 +522,7 @@ type ErrorClasses struct {
 // ErrorClassCounts groups error rows into {rate-limited, client, server,
 // transport} over the optional [since, until) window.
 func (s *Store) ErrorClassCounts(since, until *time.Time) (ErrorClasses, error) {
-	clause, args := windowClause("", since, until)
+	clause, args := windowClause(Scope{}, since, until)
 	var c ErrorClasses
 	err := s.db.QueryRow(
 		`SELECT
@@ -432,10 +551,11 @@ type ErrorCodeRow struct {
 // recognized dimension and key is non-empty, the count is scoped to rows whose
 // dimension column equals key (e.g. one model, vendor, or user); an empty key
 // leaves the result unscoped. An unrecognized non-empty dim returns
-// ErrBadDimension. limit <= 0 defaults to 8. userID, when non-empty, further
-// restricts the count to that consumer key's own calls (ANDed with any dim/key
-// scope), so a user cannot read another user's error breakdown.
-func (s *Store) TopErrorCodes(userID string, dim BreakdownDimension, key string, since, until *time.Time, limit int) ([]ErrorCodeRow, error) {
+// ErrBadDimension. limit <= 0 defaults to 8. The scope further restricts the
+// count — to that consumer key's own calls, and to the dashboard's selected
+// models/providers — ANDed with any dim/key scope, so a user cannot read another
+// user's error breakdown.
+func (s *Store) TopErrorCodes(sc Scope, dim BreakdownDimension, key string, since, until *time.Time, limit int) ([]ErrorCodeRow, error) {
 	if limit <= 0 {
 		limit = 8
 	}
@@ -459,13 +579,14 @@ func (s *Store) TopErrorCodes(userID string, dim BreakdownDimension, key string,
 		conds = append(conds, col+" = ?")
 		args = append(args, key)
 	}
-	// Per-user scope is a separate conjunct so it composes with (dim,key): a user
-	// probing another user's rows via ?dimension=user&key=<other> still gets
-	// user_id = <other> AND user_id = <self> → empty.
-	if userID != "" {
-		conds = append(conds, "user_id = ?")
-		args = append(args, userID)
-	}
+	// Scope is a separate conjunct so it composes with (dim,key) rather than
+	// replacing it: a user probing another user's rows via
+	// ?dimension=user&key=<other> still gets user_id = <other> AND
+	// user_id = <self> → empty. The dashboard's model/provider filters compose
+	// the same way, so clicking a Success row narrows within the filter.
+	scopeConds, scopeArgs := sc.conds()
+	conds = append(conds, scopeConds...)
+	args = append(args, scopeArgs...)
 	args = append(args, limit)
 
 	rows, err := s.db.Query(
@@ -668,7 +789,7 @@ type TokensByModelBucket struct {
 // slice is that key set, ordered descending by total tokens with "Other" (when
 // present) last. Bucket timestamps are UTC. Empty key values are reported as
 // "unknown". An unrecognized dimension returns ErrBadDimension.
-func (s *Store) TokensByModelSeries(userID string, dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []TokensByModelBucket, error) {
+func (s *Store) TokensByModelSeries(sc Scope, dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []TokensByModelBucket, error) {
 	col, ok := breakdownColumn(dim)
 	if !ok {
 		return nil, nil, ErrBadDimension
@@ -694,7 +815,7 @@ func (s *Store) TokensByModelSeries(userID string, dim BreakdownDimension, since
 
 	// col comes from the breakdownColumn whitelist, so it is safe to interpolate
 	// (column names cannot be bound as query parameters).
-	userClause, userArgs := userScopeClause(userID)
+	scopeSQL, scopeArgs := scopeClause(sc)
 	rows, err := s.db.Query(
 		fmt.Sprintf(`SELECT (ts / ?) * ? AS bucket_start,
 		        %s,
@@ -706,8 +827,8 @@ func (s *Store) TokensByModelSeries(userID string, dim BreakdownDimension, since
 		        COUNT(CASE WHEN generation_ms > 0 AND output_tokens > 0 THEN 1 END)
 		   FROM calls
 		  WHERE ts >= ? AND ts < ?%s
-		  GROUP BY bucket_start, %s`, col, userClause, col),
-		append([]any{bucketMs, bucketMs, sinceMs, untilMs}, userArgs...)...,
+		  GROUP BY bucket_start, %s`, col, scopeSQL, col),
+		append([]any{bucketMs, bucketMs, sinceMs, untilMs}, scopeArgs...)...,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("store: tokens by model series: %w", err)
@@ -870,7 +991,7 @@ type SuccessByModelBucket struct {
 // total requests with "Other" (when present) last. Bucket timestamps are UTC. An
 // "error" is any row whose status is 0 (transport failure) or >= 400. Empty key
 // values are reported as "unknown". An unrecognized dimension returns ErrBadDimension.
-func (s *Store) SuccessByModelSeries(userID string, dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []SuccessByModelBucket, error) {
+func (s *Store) SuccessByModelSeries(sc Scope, dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []SuccessByModelBucket, error) {
 	col, ok := breakdownColumn(dim)
 	if !ok {
 		return nil, nil, ErrBadDimension
@@ -896,7 +1017,7 @@ func (s *Store) SuccessByModelSeries(userID string, dim BreakdownDimension, sinc
 
 	// col comes from the breakdownColumn whitelist, so it is safe to interpolate
 	// (column names cannot be bound as query parameters).
-	userClause, userArgs := userScopeClause(userID)
+	scopeSQL, scopeArgs := scopeClause(sc)
 	rows, err := s.db.Query(
 		fmt.Sprintf(`SELECT (ts / ?) * ? AS bucket_start,
 		        %s,
@@ -904,8 +1025,8 @@ func (s *Store) SuccessByModelSeries(userID string, dim BreakdownDimension, sinc
 		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END)
 		   FROM calls
 		  WHERE ts >= ? AND ts < ?%s
-		  GROUP BY bucket_start, %s`, col, userClause, col),
-		append([]any{bucketMs, bucketMs, sinceMs, untilMs}, userArgs...)...,
+		  GROUP BY bucket_start, %s`, col, scopeSQL, col),
+		append([]any{bucketMs, bucketMs, sinceMs, untilMs}, scopeArgs...)...,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("store: success by model series: %w", err)
@@ -1035,7 +1156,7 @@ type CacheByModelBucket struct {
 // The returned slice is that key set, ordered descending by total input with "Other"
 // (when present) last. Bucket timestamps are UTC. Empty key values are reported as
 // "unknown". An unrecognized dimension returns ErrBadDimension.
-func (s *Store) CacheByModelSeries(userID string, dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []CacheByModelBucket, error) {
+func (s *Store) CacheByModelSeries(sc Scope, dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []CacheByModelBucket, error) {
 	col, ok := breakdownColumn(dim)
 	if !ok {
 		return nil, nil, ErrBadDimension
@@ -1061,7 +1182,7 @@ func (s *Store) CacheByModelSeries(userID string, dim BreakdownDimension, since,
 
 	// col comes from the breakdownColumn whitelist, so it is safe to interpolate
 	// (column names cannot be bound as query parameters).
-	userClause, userArgs := userScopeClause(userID)
+	scopeSQL, scopeArgs := scopeClause(sc)
 	rows, err := s.db.Query(
 		fmt.Sprintf(`SELECT (ts / ?) * ? AS bucket_start,
 		        %s,
@@ -1069,8 +1190,8 @@ func (s *Store) CacheByModelSeries(userID string, dim BreakdownDimension, since,
 		        COALESCE(SUM(input_tokens + cache_read_input_tokens + cache_creation_input_tokens), 0)
 		   FROM calls
 		  WHERE ts >= ? AND ts < ?%s
-		  GROUP BY bucket_start, %s`, col, userClause, col),
-		append([]any{bucketMs, bucketMs, sinceMs, untilMs}, userArgs...)...,
+		  GROUP BY bucket_start, %s`, col, scopeSQL, col),
+		append([]any{bucketMs, bucketMs, sinceMs, untilMs}, scopeArgs...)...,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("store: cache by model series: %w", err)
