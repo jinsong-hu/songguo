@@ -25,7 +25,10 @@ func newEnvRouter(t *testing.T, snap func() *config.Snapshot, st *store.Store, o
 	})
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return &testEnv{server: srv, store: st, client: srv.Client()}
+	// Drain the background forks before the store's cleanup closes the database
+	// under them (t.Cleanup is LIFO, and openStore registered its close first).
+	t.Cleanup(h.Close)
+	return &testEnv{server: srv, store: st, client: srv.Client(), handler: h}
 }
 
 // setStatus changes the forced status mid-test, so a vendor can fail and then

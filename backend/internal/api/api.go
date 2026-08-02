@@ -18,8 +18,10 @@ import (
 
 	"github.com/songguo/songguo/internal/concurrency"
 	"github.com/songguo/songguo/internal/config"
+	"github.com/songguo/songguo/internal/ledger"
 	"github.com/songguo/songguo/internal/outbound"
 	"github.com/songguo/songguo/internal/router"
+	"github.com/songguo/songguo/internal/spend"
 	"github.com/songguo/songguo/internal/store"
 )
 
@@ -32,32 +34,41 @@ type Deps struct {
 	Router *router.Router
 	// Gate exposes live per-provider concurrency for vendor inspection.
 	// Optional: nil simply reports no occupancy.
-	Gate       *concurrency.Gate
-	Reload     func() error // rebuild the live snapshot after a config write
-	AdminKey   string       // from SONGGUO_ADMIN_KEY; empty = unprotected (logged once)
-	Logger     *slog.Logger
-	HTTPClient *http.Client      // for vendor test-connection; default if nil
-	Outbound   *outbound.Manager // optional; shared in production
-	Now        func() time.Time  // defaults to time.Now
-	Version    string            // build version string, default "dev"
-	ListenAddr string            // from SONGGUO_LISTEN; shown in settings
-	DBPath     string
+	Gate *concurrency.Gate
+	// Spend is the running per-user cost total. Shared with the proxy so the
+	// dashboard reports the same number budget enforcement acts on, rather than
+	// a second, disagreeing figure. Optional: nil falls back to the call log.
+	Spend *spend.Tracker
+	// LedgerStats reports the ledger write queue's occupancy, so an operator can
+	// see backlog and whether any request has ever had to wait on it. Optional.
+	LedgerStats func() ledger.Stats
+	Reload      func() error // rebuild the live snapshot after a config write
+	AdminKey    string       // from SONGGUO_ADMIN_KEY; empty = unprotected (logged once)
+	Logger      *slog.Logger
+	HTTPClient  *http.Client      // for vendor test-connection; default if nil
+	Outbound    *outbound.Manager // optional; shared in production
+	Now         func() time.Time  // defaults to time.Now
+	Version     string            // build version string, default "dev"
+	ListenAddr  string            // from SONGGUO_LISTEN; shown in settings
+	DBPath      string
 }
 
 // api is the concrete handler holding resolved dependencies.
 type api struct {
-	store      *store.Store
-	snapshot   func() *config.Snapshot
-	router     *router.Router
-	gate       *concurrency.Gate
-	reload     func() error
-	adminKey   string
-	logger     *slog.Logger
-	outbound   *outbound.Manager
-	now        func() time.Time
-	version    string
-	listenAddr string
-	dbPath     string
+	store       *store.Store
+	snapshot    func() *config.Snapshot
+	router      *router.Router
+	gate        *concurrency.Gate
+	spend       *spend.Tracker
+	ledgerStats func() ledger.Stats
+	reload      func() error
+	adminKey    string
+	logger      *slog.Logger
+	outbound    *outbound.Manager
+	now         func() time.Time
+	version     string
+	listenAddr  string
+	dbPath      string
 	// bootTime is when this gateway process started. A call row still pending
 	// that was created before it cannot be owned by any live request — which is
 	// the only honest way to tell "running now" from "never finished", short of
@@ -94,19 +105,21 @@ func newAPI(d Deps) *api {
 	}
 
 	return &api{
-		store:      d.Store,
-		snapshot:   d.Snapshot,
-		router:     d.Router,
-		gate:       d.Gate,
-		reload:     reload,
-		adminKey:   d.AdminKey,
-		logger:     logger,
-		outbound:   out,
-		now:        now,
-		version:    version,
-		listenAddr: d.ListenAddr,
-		dbPath:     d.DBPath,
-		bootTime:   now(),
+		store:       d.Store,
+		snapshot:    d.Snapshot,
+		router:      d.Router,
+		gate:        d.Gate,
+		spend:       d.Spend,
+		ledgerStats: d.LedgerStats,
+		reload:      reload,
+		adminKey:    d.AdminKey,
+		logger:      logger,
+		outbound:    out,
+		now:         now,
+		version:     version,
+		listenAddr:  d.ListenAddr,
+		dbPath:      d.DBPath,
+		bootTime:    now(),
 	}
 }
 

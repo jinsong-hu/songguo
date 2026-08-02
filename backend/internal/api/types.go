@@ -742,10 +742,29 @@ type testProxyView struct {
 // settingsView is the GET /api/settings response. It never exposes the admin
 // key.
 type settingsView struct {
-	Listen         string `json:"listen"`
-	DBPath         string `json:"db_path"`
-	AdminProtected bool   `json:"admin_protected"`
-	Version        string `json:"version"`
+	Listen         string      `json:"listen"`
+	DBPath         string      `json:"db_path"`
+	AdminProtected bool        `json:"admin_protected"`
+	Version        string      `json:"version"`
+	Ledger         *ledgerView `json:"ledger,omitempty"`
+}
+
+// ledgerView is the ledger write queue's occupancy — the gateway's clearest
+// load signal, since every proxied call passes through it.
+//
+// Depth is live and should read ~0: the writer drains far faster than a gateway
+// proxying (inherently slow) LLM calls can fill it. HighWater is what reveals a
+// burst that has already drained. Blocked is the one that matters — the queue
+// never discards a record, so when it is full a request WAITS, and a non-zero
+// count here is the only visible sign that the database could not keep up.
+type ledgerView struct {
+	Capacity  int   `json:"capacity"`
+	Depth     int   `json:"depth"`
+	HighWater int   `json:"high_water"`
+	Written   int64 `json:"written"`
+	Failed    int64 `json:"failed"`
+	Blocked   int64 `json:"blocked"`
+	BlockedMS int64 `json:"blocked_ms"`
 }
 
 // traceSideView is one side (request or response) of a captured trace.

@@ -211,6 +211,20 @@ func (s *Store) migrate() error {
 			data       TEXT NOT NULL DEFAULT '{}',
 			created_at INTEGER NOT NULL
 		)`,
+		// user_spend is the running per-user cost total that backs budget
+		// enforcement. It exists because SUM(cost) over calls was both slow (an
+		// aggregate scan on the request path, growing forever) and WRONG:
+		// retention prunes calls at 90 days, so a user's lifetime spend silently
+		// decreased over time and their budget refilled on its own. A running
+		// total does not live in the rows being deleted.
+		//
+		// Deliberately no FK to users: an orphaned spend row must never block
+		// deleting a user, and DeleteUser drops it explicitly.
+		`CREATE TABLE IF NOT EXISTS user_spend (
+			user_id    TEXT PRIMARY KEY,
+			spend      REAL NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_ts ON calls(ts)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_user_id ON calls(user_id)`,
 		// context_composition holds the estimated context-window decomposition for
@@ -548,6 +562,16 @@ func (s *Store) migrate() error {
 	// rollup is never rebuilt afterward — see docs/arch-insights.md); without it,
 	// historical sessions would show nothing until new traffic arrives.
 	if err := s.backfillSessions(); err != nil {
+		return err
+	}
+
+	// Seed the per-user running spend totals from the existing call log, once,
+	// when user_spend first appears. This is the ONLY place spend is ever
+	// derived from calls: doing it at read time instead has an unresolvable
+	// double-counting race against charges already held in memory (see
+	// internal/spend). After this, user_spend is the sole source of truth and
+	// stops decaying as retention prunes.
+	if err := s.backfillUserSpend(); err != nil {
 		return err
 	}
 	return nil

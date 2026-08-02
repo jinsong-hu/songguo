@@ -214,7 +214,7 @@ func (a *api) overviewData(sc store.Scope, since, until time.Time) (overviewView
 			}
 			if u.Budget != nil {
 				anyBudget = true
-				spent, err := a.store.SpendByUser(u.ID, nil)
+				spent, err := a.spendOf(u.ID)
 				if err != nil {
 					return overviewView{}, err
 				}
@@ -1712,7 +1712,7 @@ func (a *api) usersData() ([]userView, error) {
 	}
 	views := make([]userView, 0, len(users))
 	for _, u := range users {
-		spent, err := a.store.SpendByUser(u.ID, nil)
+		spent, err := a.spendOf(u.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -1742,7 +1742,7 @@ func (a *api) handleGetUser(w http.ResponseWriter, r *http.Request) {
 		a.writeDataErr(w, "get user", err)
 		return
 	}
-	spent, err := a.store.SpendByUser(u.ID, nil)
+	spent, err := a.spendOf(u.ID)
 	if err != nil {
 		a.writeDataErr(w, "get user spend", err)
 		return
@@ -1855,7 +1855,7 @@ func (a *api) adoptExistingUser(u store.User, req createUserReq) (userView, erro
 		}
 		u = updated
 	}
-	spent, err := a.store.SpendByUser(u.ID, nil)
+	spent, err := a.spendOf(u.ID)
 	if err != nil {
 		return userView{}, err
 	}
@@ -1915,7 +1915,7 @@ func (a *api) updateUserData(id string, req patchUserReq) (userView, error) {
 		}
 		return userView{}, err
 	}
-	spent, err := a.store.SpendByUser(usr.ID, nil)
+	spent, err := a.spendOf(usr.ID)
 	if err != nil {
 		return userView{}, err
 	}
@@ -1945,7 +1945,7 @@ func (a *api) revokeUserData(id string) (userView, error) {
 	if err != nil {
 		return userView{}, err
 	}
-	spent, err := a.store.SpendByUser(usr.ID, nil)
+	spent, err := a.spendOf(usr.ID)
 	if err != nil {
 		return userView{}, err
 	}
@@ -1974,6 +1974,13 @@ func (a *api) deleteUserData(id string) error {
 		}
 		return err
 	}
+	// user_spend has no FK to users (an orphaned total must never be able to
+	// block deleting a user), so drop the row and the cached total explicitly.
+	// Otherwise a recreated id would inherit the old user's spend.
+	if err := a.store.DeleteSpend(id); err != nil {
+		a.logger.Error("delete user spend failed", "err", err, "user_id", id)
+	}
+	a.spend.Forget(id)
 	return nil
 }
 
@@ -2080,12 +2087,37 @@ func (a *api) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 // settingsData returns non-secret runtime settings (never the admin key).
 func (a *api) settingsData() settingsView {
-	return settingsView{
+	v := settingsView{
 		Listen:         a.listenAddr,
 		DBPath:         a.dbPath,
 		AdminProtected: a.adminKey != "",
 		Version:        a.version,
 	}
+	if a.ledgerStats != nil {
+		s := a.ledgerStats()
+		v.Ledger = &ledgerView{
+			Capacity:  s.Capacity,
+			Depth:     s.Depth,
+			HighWater: s.HighWater,
+			Written:   s.Written,
+			Failed:    s.Failed,
+			Blocked:   s.Blocked,
+			BlockedMS: s.BlockedMS,
+		}
+	}
+	return v
+}
+
+// spendOf reports a user's total spend. It prefers the running total, which is
+// both O(1) and correct across retention — SUM(cost) silently DECREASES as the
+// janitor prunes calls, which let a spent budget refill on its own. The
+// fallback keeps this working for an api constructed without a tracker (tests,
+// or any embedder not running the proxy).
+func (a *api) spendOf(userID string) (float64, error) {
+	if a.spend != nil {
+		return a.spend.Get(userID)
+	}
+	return a.store.SpendByUser(userID, nil)
 }
 
 // handlePricing returns a flattened list of all per-vendor model prices.

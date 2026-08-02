@@ -286,6 +286,47 @@ export function SettingsPage() {
           </div>
         </div>
 
+        {/* Ledger queue — the gateway's clearest load signal. */}
+        {settings.ledger && (
+          <div className={`card ${styles.panel}`}>
+            <div className={styles.panelTitle}>Ledger queue</div>
+            <div className={styles.panelDesc}>
+              Every proxied call is recorded through this queue, off the request path.
+              Depth should sit near zero.
+            </div>
+            <div className={styles.meta}>
+              <span className={styles.metaKey}>Queued now</span>
+              <span className={styles.metaVal}>
+                {settings.ledger.depth.toLocaleString()} /{' '}
+                {settings.ledger.capacity.toLocaleString()}
+              </span>
+
+              <span className={styles.metaKey}>Peak queued</span>
+              <span className={styles.metaVal}>
+                {settings.ledger.high_water.toLocaleString()}
+              </span>
+
+              <span className={styles.metaKey}>Records written</span>
+              <span className={styles.metaVal}>
+                {settings.ledger.written.toLocaleString()}
+                {settings.ledger.failed > 0 && (
+                  <> · {settings.ledger.failed.toLocaleString()} failed</>
+                )}
+              </span>
+
+              {/* The queue never drops a call record, so a full queue makes
+                  requests wait instead. Non-zero here is the only visible sign
+                  the database could not keep up — surface it, don't bury it. */}
+              <span className={styles.metaKey}>Requests delayed</span>
+              <span className={styles.metaVal}>
+                {settings.ledger.blocked === 0
+                  ? 'None'
+                  : `${settings.ledger.blocked.toLocaleString()} · ${settings.ledger.blocked_ms.toLocaleString()} ms total`}
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Pricing */}
         <div className={`card ${styles.panel}`}>
           <div className={styles.panelTitle}>Pricing</div>

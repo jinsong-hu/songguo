@@ -169,8 +169,9 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 		}
 	}
 	if user.Budget != nil {
-		spent, err := h.store.SpendByUser(user.ID, nil)
+		spent, err := h.spend.Get(user.ID)
 		if err != nil {
+			// Fail OPEN, as before: a bookkeeping failure must not deny a call.
 			h.logger.Error("budget lookup failed", "err", err)
 		} else if spent >= *user.Budget {
 			writeError(w, http.StatusPaymentRequired, "budget_exceeded", "budget exceeded")

@@ -129,9 +129,21 @@ func openStore(t *testing.T) *store.Store {
 
 // testEnv bundles everything an integration test drives.
 type testEnv struct {
-	server *httptest.Server
-	store  *store.Store
-	client *http.Client
+	server  *httptest.Server
+	store   *store.Store
+	client  *http.Client
+	handler *handler
+}
+
+// drain blocks until every ledger write queued so far has been applied.
+//
+// Ledger writes are asynchronous (see internal/ledger), so a test that reads
+// the store straight after a request is racing the writer. Every helper that
+// inspects persisted state calls this first, which is why the individual tests
+// did not have to change.
+func (e *testEnv) drain(t *testing.T) {
+	t.Helper()
+	e.handler.ledger.Flush()
 }
 
 // post issues a POST to the proxy with the given path, token and body.
@@ -195,6 +207,7 @@ func (e *testEnv) doPinned(t *testing.T, method, path, token, providerID, body s
 
 func (e *testEnv) callRows(t *testing.T) []callRow {
 	t.Helper()
+	e.drain(t)
 	entries, err := e.store.QueryCalls(storeFilterAll())
 	if err != nil {
 		t.Fatalf("QueryCalls: %v", err)
@@ -261,7 +274,11 @@ func newEnv(t *testing.T, snap func() *config.Snapshot, st *store.Store) *testEn
 	})
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return &testEnv{server: srv, store: st, client: srv.Client()}
+	// Drain the background forks before the store's own cleanup closes the
+	// database under them. t.Cleanup is LIFO and openStore registered its close
+	// first, so this runs earlier — the same ordering main.go relies on.
+	t.Cleanup(h.Close)
+	return &testEnv{server: srv, store: st, client: srv.Client(), handler: h}
 }
 
 func mustUser(t *testing.T, st *store.Store, nt store.NewUser) (store.User, string) {
@@ -591,6 +608,50 @@ vendors:
 	defer r2.Body.Close()
 	if r2.StatusCode != http.StatusPaymentRequired {
 		t.Fatalf("second call status = %d, want 402", r2.StatusCode)
+	}
+}
+
+// Budget enforcement must not depend on the ledger having caught up. Cost is
+// charged to the in-memory running total on the request goroutine, BEFORE the
+// row is queued — otherwise a burst of calls would all read a stale total and
+// sail past a budget that was already spent.
+//
+// This asserts deliberately WITHOUT calling env.drain: the point is that the
+// charge is visible while the write is still sitting in the queue.
+func TestBudgetIsChargedBeforeTheLedgerCatchesUp(t *testing.T) {
+	up := &mockUpstream{}
+	mock := httptest.NewServer(up.handler())
+	defer mock.Close()
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: vendorA
+    origin: %s/v1
+    served_models: [gpt-4o]
+    priority: 1
+    wires: [openai/chat]
+    credential: {id: credA, api_key: k}
+    prices:
+      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+`, mock.URL)
+	st := openStore(t)
+	budget := 1000.0 // generous: this test is about timing, not denial
+	user, key := mustUser(t, st, store.NewUser{Name: "t", Budget: &budget})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	body := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
+	resp := env.post(t, "/v1/chat/completions", key, body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	spent, err := env.handler.spend.Get(user.ID)
+	if err != nil {
+		t.Fatalf("spend.Get: %v", err)
+	}
+	if spent <= 0 {
+		t.Fatalf("spend = %v immediately after the response, want > 0 "+
+			"(the charge is waiting on the ledger queue instead of being applied inline)", spent)
 	}
 }
 
@@ -1749,6 +1810,7 @@ vendors:
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 
+	env.drain(t)
 	entries, err := st.QueryCalls(storeFilterAll())
 	if err != nil {
 		t.Fatalf("QueryCalls: %v", err)
@@ -1814,6 +1876,7 @@ vendors:
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 
+	env.drain(t)
 	entries, err := st.QueryCalls(storeFilterAll())
 	if err != nil {
 		t.Fatalf("QueryCalls: %v", err)

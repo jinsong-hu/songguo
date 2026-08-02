@@ -57,12 +57,14 @@ import (
 	"github.com/songguo/songguo/internal/compose"
 	"github.com/songguo/songguo/internal/concurrency"
 	"github.com/songguo/songguo/internal/config"
+	"github.com/songguo/songguo/internal/ledger"
 	"github.com/songguo/songguo/internal/meter"
 	"github.com/songguo/songguo/internal/outbound"
 	"github.com/songguo/songguo/internal/parse"
 	"github.com/songguo/songguo/internal/pricing"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/sessiontitle"
+	"github.com/songguo/songguo/internal/spend"
 	"github.com/songguo/songguo/internal/store"
 	"github.com/songguo/songguo/internal/wire"
 )
@@ -87,6 +89,8 @@ type Deps struct {
 	Store      *store.Store
 	Router     *router.Router
 	Gate       *concurrency.Gate // per-provider in-flight limit; a nil Gate is unlimited
+	Ledger     *ledger.Writer    // optional; constructed if nil
+	Spend      *spend.Tracker    // optional; constructed if nil
 	Logger     *slog.Logger
 	HTTPClient *http.Client      // optional; default constructed if nil
 	Outbound   *outbound.Manager // optional; shared in production
@@ -103,12 +107,22 @@ type handler struct {
 	now      func() time.Time
 	gate     *concurrency.Gate
 	limiter  *rateLimiter
+	ledger   *ledger.Writer
+	spend    *spend.Tracker
 	parse    *parsePipeline
 	insight  *insightsFork
+	// ownLedger records whether this handler constructed the ledger writer, so
+	// Close only drains one it owns — a caller that shares a writer across
+	// handlers closes it itself.
+	ownLedger bool
 }
 
 // NewHandler builds the transparent proxy handler.
-func NewHandler(d Deps) http.Handler {
+//
+// It returns *handler rather than http.Handler so the caller can reach Close.
+// The ledger fork is only non-blocking because its writes are queued, and a
+// queue that is never drained loses call records on every shutdown.
+func NewHandler(d Deps) *handler {
 	logger := d.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -125,19 +139,50 @@ func NewHandler(d Deps) http.Handler {
 	if gate == nil {
 		gate = concurrency.New()
 	}
+	sp := d.Spend
+	if sp == nil {
+		sp = spend.New(d.Store, logger)
+	}
+	led, own := d.Ledger, false
+	if led == nil {
+		led, own = ledger.New(d.Store, logger, 0), true
+	}
 	return &handler{
-		snapshot: d.Snapshot,
-		store:    d.Store,
-		router:   d.Router,
-		logger:   logger,
-		outbound: out,
-		now:      now,
-		gate:     gate,
-		limiter:  newRateLimiter(now),
-		parse:    newParsePipeline(d.Store, logger, 0, 0),
-		insight:  newInsightsFork(d.Store, logger, 0, 0),
+		snapshot:  d.Snapshot,
+		store:     d.Store,
+		router:    d.Router,
+		logger:    logger,
+		outbound:  out,
+		now:       now,
+		gate:      gate,
+		limiter:   newRateLimiter(now),
+		ledger:    led,
+		spend:     sp,
+		ownLedger: own,
+		parse:     newParsePipeline(d.Store, logger, 0, 0),
+		insight:   newInsightsFork(d.Store, logger, 0, 0),
 	}
 }
+
+// Close drains the background forks and stops them, in dependency order: the
+// ledger first, because its post-write hand-off feeds the other two.
+//
+// The caller must run this BEFORE closing the store. Skipping it does not just
+// lose a derived rollup any more — every call record still in the ledger queue
+// goes with it.
+func (h *handler) Close() {
+	if h.ownLedger {
+		h.ledger.Close()
+	}
+	h.parse.Close()
+	h.insight.Close()
+	if err := h.spend.Flush(); err != nil {
+		h.logger.Error("final spend flush failed", "err", err)
+	}
+}
+
+// Stats exposes the ledger queue's occupancy for the admin API.
+func (h *handler) Stats() ledger.Stats { return h.ledger.Stats() }
 
 // insights hands a finalized call to the async insights fork (fire and forget).
 // It never blocks or fails the forward; see docs/arch-insights.md.
@@ -216,8 +261,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 4. Budget (coarse pre-check). A denial is recorded and captured like any
 	// other gateway-originated outcome (see denyCapture).
 	if user.Budget != nil {
-		spent, err := h.store.SpendByUser(user.ID, nil)
+		spent, err := h.spend.Get(user.ID)
 		if err != nil {
+			// Fail OPEN, as before: a bookkeeping failure must not deny a call.
 			h.logger.Error("budget lookup failed", "err", err)
 		} else if spent >= *user.Budget {
 			h.denyCapture(w, r, body, capture, calls.Entry{
@@ -419,9 +465,12 @@ func resolveWires(targets []router.Target, method, path string) (kept []router.T
 // createCall opens the ledger row for a request at its start (phase 1,
 // create-at-start). It records the minted id, start time, and user; the rest of
 // the identity (model/vendor/session) is filled by the finalizing path, which
-// knows the resolved values. A failure here is logged, not surfaced: the forward
-// still proceeds, and the missing row just means this call won't appear in the
-// ledger. See docs/arch-gateway.md.
+// knows the resolved values. See docs/arch-gateway.md.
+//
+// The write is queued, not performed: this runs before the vendor is dialled,
+// so a synchronous INSERT here sat directly in front of the client's first
+// byte. Ordering against the later finalize is guaranteed by the ledger's
+// single writer, not by this call having completed.
 func (h *handler) createCall(callID, userID string, r *http.Request, body []byte) {
 	attr := extractAttribution(r.Header)
 	client := calls.ParseClientInfo(r.UserAgent(), r.Header.Get("X-Stainless-Os"))
@@ -431,7 +480,7 @@ func (h *handler) createCall(callID, userID string, r *http.Request, body []byte
 	// the original bytes are still forwarded verbatim.
 	entryBody := bodyForMeter(body, r.Header.Get("Content-Encoding"), h.logger)
 	entrypoint := calls.ClassifyEntrypoint(r.URL.Path, entryBody)
-	if err := h.store.CreateCall(calls.Entry{
+	h.ledger.Submit(ledger.Op{Kind: ledger.KindCreate, Entry: calls.Entry{
 		ID:            callID,
 		TS:            h.now(),
 		UserID:        userID,
@@ -444,9 +493,7 @@ func (h *handler) createCall(callID, userID string, r *http.Request, body []byte
 		// Caller OS, read-only from headers (X-Stainless-Os, else codex UA comment).
 		ClientOS:        client.OS,
 		ClientOSVersion: client.OSVersion,
-	}); err != nil {
-		h.logger.Error("call create failed", "err", err, "call_id", callID)
-	}
+	}})
 }
 
 // denyCapture finalizes a gateway-originated rejection (phase 2) on the row
@@ -472,20 +519,36 @@ func (h *handler) denyCapture(w http.ResponseWriter, r *http.Request, body []byt
 	if e.Confidence == "" {
 		e.Confidence = calls.ConfidenceUnknown
 	}
-	err := h.store.FinalizeCall(e)
-	if err != nil {
-		h.logger.Error("call finalize failed", "err", err, "vendor", e.Vendor, "model", e.Model)
-	}
-
 	// Build the exact bytes the client will receive, so the captured response is
-	// byte-identical to what was served.
+	// byte-identical to what was served, and serve them BEFORE touching the
+	// ledger — the client's response never waits on bookkeeping.
 	respBytes, _ := json.Marshal(errorBody{Error: errorDetail{Message: message, Type: "songguo_" + reason}})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(respBytes)
 
-	if capture && err == nil {
-		if perr := h.store.SavePayload(store.Payload{
+	title := ""
+	if capture && e.SessionID != "" {
+		reqBody := bodyForMeter(body, r.Header.Get("Content-Encoding"), h.logger)
+		title = capturedSessionTitle(r.Header, e.Wire, reqBody, respBytes)
+	}
+
+	// Charge the user before queueing, so a budget check moments from now sees
+	// this call even if the ledger is behind. A denial costs 0, so this is
+	// normally a no-op; it is here so every finalize path charges identically.
+	h.spend.Add(e.UserID, e.Cost)
+
+	// Phase 2, queued. Insights runs from the ledger worker once the row is
+	// written, so a derived rollup can never precede the row it summarizes.
+	entry := e
+	h.ledger.Submit(ledger.Op{
+		Kind:  ledger.KindFinalize,
+		Entry: entry,
+		After: func() { h.insights(entry, title) },
+	})
+
+	if capture {
+		h.ledger.Submit(ledger.Op{Kind: ledger.KindPayload, CallID: e.ID, Payload: &store.Payload{
 			CallID:          e.ID,
 			ReqHeaders:      redactHeaders(r.Header),
 			ReqBody:         body,
@@ -494,19 +557,8 @@ func (h *handler) denyCapture(w http.ResponseWriter, r *http.Request, body []byt
 			RespBody:        respBytes,
 			RespContentType: "application/json",
 			CreatedAt:       h.now(),
-		}); perr != nil {
-			h.logger.Error("save payload failed", "err", perr, "call_id", e.ID)
-		}
+		}})
 	}
-
-	title := ""
-	if capture && err == nil && e.SessionID != "" {
-		reqBody := bodyForMeter(body, r.Header.Get("Content-Encoding"), h.logger)
-		title = capturedSessionTitle(r.Header, e.Wire, reqBody, respBytes)
-	}
-
-	// Hand the finalized denial to insights (async fork — fire and forget).
-	h.insights(e, title)
 }
 
 // resolve builds the route with a single rule: match the wire by path suffix,
@@ -988,20 +1040,28 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		ClientOS:        client.OS,
 		ClientOSVersion: client.OSVersion,
 	}
-	// Phase 2, update-at-end: finalize the row opened at request-start.
-	if err := h.store.FinalizeCall(entry); err != nil {
-		h.logger.Error("call finalize failed", "err", err, "vendor", t.Vendor.Name, "model", model)
-		return
-	}
 	id := callID
 	title := ""
 	if capture && entry.SessionID != "" {
 		reqForTitle := bodyForMeter(reqBody, r.Header.Get("Content-Encoding"), h.logger)
 		title = capturedSessionTitle(r.Header, wireName, reqForTitle, parseRespBody)
 	}
-	// Hand the finalized call to insights (async fork — fire and forget; never
-	// blocks or fails the forward). See docs/arch-insights.md.
-	h.insights(entry, title)
+
+	// Charge the user before queueing the row. Spend is a running total held in
+	// memory (internal/spend), so the cost lands immediately and a budget check
+	// moments from now sees it even if the ledger writer is behind.
+	h.spend.Add(entry.UserID, entry.Cost)
+
+	// Phase 2, update-at-end: finalize the row opened at request-start. Queued,
+	// not written — the client already has its bytes and must not wait on the
+	// database. Insights runs from the ledger worker after the row lands, which
+	// is also what keeps the session rollup behind the row it summarizes.
+	finalized := entry
+	h.ledger.Submit(ledger.Op{
+		Kind:  ledger.KindFinalize,
+		Entry: finalized,
+		After: func() { h.insights(finalized, title) },
+	})
 
 	// Context-window composition: read-only sniff of the already-buffered request
 	// body to decompose the input context across sources (system, tool schemas,
@@ -1020,17 +1080,16 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	if modality == calls.ModalityChat && rw.matched && totalInput > 0 {
 		if comp, ok := compose.Compose(rw.wire.Name, reqBody,
 			int64(ext.Norm.CachedInputTokens)); ok {
-			if err := h.store.SaveComposition(id, comp); err != nil {
-				h.logger.Error("save composition failed", "err", err, "call_id", id)
-			}
+			h.ledger.Submit(ledger.Op{Kind: ledger.KindComposition, CallID: id, Composition: &comp})
 		}
 	}
 
 	if capture {
-		h.savePayload(id, r, reqBody, resp, respBody)
-		// Hand the captured bytes to the async parse pipeline. This is the
-		// "full parse" — off the hot path; the call is already metered above.
-		h.parse.submit(parseJob{
+		// The parse pipeline writes parsed_calls, a FOREIGN KEY onto calls(id),
+		// so it must not run before the row exists. Hanging it off the payload
+		// op's After puts it behind the create in the ledger's single ordered
+		// queue — the reason that ordering is worth having.
+		job := parseJob{
 			callID: id,
 			at:     h.now(),
 			in: parse.Input{
@@ -1043,15 +1102,17 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 				ReqBody:         reqBody,
 				RespBody:        parseRespBody,
 			},
-		})
+		}
+		h.savePayload(id, r, reqBody, resp, respBody, func() { h.parse.submit(job) })
 	}
 }
 
-// savePayload builds and persists the redacted request/response payload for the
-// served attempt. Any failure is logged only — never surfaced to the client.
+// savePayload queues the redacted request/response payload for the served
+// attempt, running after once the row is on disk. Any failure is logged by the
+// ledger writer — never surfaced to the client.
 func (h *handler) savePayload(callID string, r *http.Request, reqBody []byte,
-	resp *http.Response, respBody []byte) {
-	p := store.Payload{
+	resp *http.Response, respBody []byte, after func()) {
+	h.ledger.Submit(ledger.Op{Kind: ledger.KindPayload, CallID: callID, After: after, Payload: &store.Payload{
 		CallID:          callID,
 		ReqHeaders:      redactHeaders(r.Header),
 		ReqBody:         reqBody,
@@ -1060,10 +1121,7 @@ func (h *handler) savePayload(callID string, r *http.Request, reqBody []byte,
 		RespBody:        respBody,
 		RespContentType: resp.Header.Get("Content-Type"),
 		CreatedAt:       h.now(),
-	}
-	if err := h.store.SavePayload(p); err != nil {
-		h.logger.Error("save payload failed", "err", err, "call_id", callID)
-	}
+	}})
 }
 
 // streamBody tees the SSE stream to the client, the wire's usage scanner (when
@@ -1259,15 +1317,15 @@ func (h *handler) append(e calls.Entry) {
 	if e.TSEnd.IsZero() {
 		e.TSEnd = h.now()
 	}
-	if err := h.store.CreateCall(e); err != nil {
-		h.logger.Error("call create failed", "err", err, "vendor", e.Vendor, "model", e.Model)
-		return
-	}
-	if err := h.store.FinalizeCall(e); err != nil {
-		h.logger.Error("call finalize failed", "err", err, "vendor", e.Vendor, "model", e.Model)
-		return
-	}
-	h.insights(e, "")
+	// One ordered op rather than two: this call's whole life is already known,
+	// and create+finalize must never be separable in the queue.
+	h.spend.Add(e.UserID, e.Cost)
+	entry := e
+	h.ledger.Submit(ledger.Op{
+		Kind:  ledger.KindUpsert,
+		Entry: entry,
+		After: func() { h.insights(entry, "") },
+	})
 }
 
 func capturedSessionTitle(headers http.Header, wireName string, reqBody, respBody []byte) string {

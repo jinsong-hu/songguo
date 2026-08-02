@@ -54,7 +54,7 @@ func TestCaptureNonStreaming(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("call rows = %d, want 1", len(rows))
 	}
-	callID := callIDForVendor(t, st, "vendorA")
+	callID := callIDForVendor(t, env, "vendorA")
 
 	p, err := st.GetPayload(callID)
 	if err != nil {
@@ -101,7 +101,7 @@ func TestCaptureStreaming(t *testing.T) {
 		t.Errorf("client stream missing first chunk:\n%s", streamed)
 	}
 
-	callID := callIDForVendor(t, st, "vendorA")
+	callID := callIDForVendor(t, env, "vendorA")
 	p, err := st.GetPayload(callID)
 	if err != nil {
 		t.Fatalf("GetPayload: %v", err)
@@ -126,7 +126,7 @@ func TestCaptureOffStoresNothing(t *testing.T) {
 	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","messages":[]}`)
 	resp.Body.Close()
 
-	callID := callIDForVendor(t, st, "vendorA")
+	callID := callIDForVendor(t, env, "vendorA")
 	if _, err := st.GetPayload(callID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected no payload when capture off, got err %v", err)
 	}
@@ -223,6 +223,7 @@ vendors:
 		t.Fatalf("status = %d, want 502 (transport failure surfaced verbatim)", resp.StatusCode)
 	}
 
+	env.drain(t)
 	entries, err := st.QueryCalls(storeFilterAll())
 	if err != nil {
 		t.Fatalf("QueryCalls: %v", err)
@@ -260,7 +261,7 @@ func TestCaptureDeniedUnmatched(t *testing.T) {
 	if rows := env.callRows(t); len(rows) != 1 {
 		t.Fatalf("call rows = %d, want 1", len(rows))
 	}
-	callID := callIDForVendor(t, st, "vendorA")
+	callID := callIDForVendor(t, env, "vendorA")
 	p, err := st.GetPayload(callID)
 	if err != nil {
 		t.Fatalf("denied 404 should be captured: GetPayload: %v", err)
@@ -291,16 +292,18 @@ func TestCaptureOffDeniedNoPayload(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
-	callID := callIDForVendor(t, st, "vendorA")
+	callID := callIDForVendor(t, env, "vendorA")
 	if _, err := st.GetPayload(callID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected no payload when capture off, got %v", err)
 	}
 }
 
-// callIDForVendor returns the id of the single call row for a vendor.
-func callIDForVendor(t *testing.T, st *store.Store, vendor string) string {
+// callIDForVendor returns the id of the single call row for a vendor. It
+// drains the ledger first, since the row is written asynchronously.
+func callIDForVendor(t *testing.T, e *testEnv, vendor string) string {
 	t.Helper()
-	entries, err := st.QueryCalls(storeFilterAll())
+	e.drain(t)
+	entries, err := e.store.QueryCalls(storeFilterAll())
 	if err != nil {
 		t.Fatalf("QueryCalls: %v", err)
 	}

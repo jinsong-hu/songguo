@@ -887,11 +887,32 @@ export interface Catalog {
   vendors: CatalogVendor[];
 }
 
+/**
+ * Ledger write-queue occupancy — the gateway's clearest load signal, since
+ * every proxied call passes through it.
+ *
+ * `depth` should read ~0: the writer drains far faster than a gateway proxying
+ * (inherently slow) LLM calls can fill it. `high_water` reveals a burst that
+ * has already drained. `blocked` is the one that matters — the queue never
+ * discards a call record, so when it is full a request WAITS, and a non-zero
+ * count is the only visible sign the database could not keep up.
+ */
+export interface LedgerStats {
+  capacity: number;
+  depth: number;
+  high_water: number;
+  written: number;
+  failed: number;
+  blocked: number;
+  blocked_ms: number;
+}
+
 export interface Settings {
   listen: string;
   db_path: string;
   admin_protected: boolean;
   version: string;
+  ledger?: LedgerStats;
 }
 
 export interface PricingRow {

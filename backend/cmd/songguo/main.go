@@ -18,6 +18,7 @@ import (
 	"github.com/songguo/songguo/internal/proxy"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/server"
+	"github.com/songguo/songguo/internal/spend"
 	"github.com/songguo/songguo/internal/store"
 )
 
@@ -57,6 +58,17 @@ func main() {
 		logger.Error("failed to open store", "path", dbPath, "err", err)
 		os.Exit(1)
 	}
+
+	// From here on a failure must NOT call os.Exit directly: that skips every
+	// defer below, including the ledger drain, and losing the queued call
+	// records is a worse outcome than the failure being reported a moment later.
+	// Registered before st.Close so it runs last of all.
+	exitCode := 0
+	defer func() {
+		if exitCode != 0 {
+			os.Exit(exitCode)
+		}
+	}()
 	defer st.Close()
 
 	// Mirror the admin key as a consumer user so it authenticates proxied
@@ -79,11 +91,17 @@ func main() {
 	// WHERE (see internal/concurrency).
 	gate := concurrency.New()
 	out := outbound.New(outbound.Options{})
+
+	// Running per-user spend, shared so the admin API reports the same number
+	// budget enforcement acts on. Flushed on a ticker by spendTracker.Run below.
+	spendTracker := spend.New(st, logger)
+
 	proxyDeps := proxy.Deps{
 		Snapshot: manager.Current,
 		Store:    st,
 		Router:   rt,
 		Gate:     gate,
+		Spend:    spendTracker,
 		Logger:   logger,
 		Outbound: out,
 	}
@@ -95,6 +113,10 @@ func main() {
 		Snapshot: manager.Current,
 		Router:   rt,
 		Gate:     gate,
+		Spend:    spendTracker,
+		// Ledger queue occupancy, so an operator can see backlog and whether
+		// any request has ever had to wait on it.
+		LedgerStats: proxyHandler.Stats,
 		Reload: func() error {
 			if err := manager.Reload(); err != nil {
 				return err
@@ -152,14 +174,23 @@ func main() {
 		Sessions: getdays("SONGGUO_RETAIN_SESSIONS_DAYS", 90),
 	}, time.Hour)
 
-	// Deferred calls run LIFO, so these three are registered in reverse of the
-	// order they must happen in: stopJanitor cancels the sweep, jan.Wait blocks
-	// until the in-flight DELETE has actually returned, and only then does the
-	// `defer st.Close()` registered further up run. Closing the database while a
-	// prune is still executing is the race this ordering removes.
+	// Deferred calls run LIFO, so these are registered in reverse of the order
+	// they must happen in. On the way out: cancel the janitor and the spend
+	// flusher, wait for both to return, drain the proxy's background forks, and
+	// only then does the `defer st.Close()` registered further up run.
+	//
+	// Draining the proxy is not optional. Its ledger queue is what makes the
+	// request path non-blocking, and everything still in it at exit is a call
+	// record — not a derived rollup — so skipping the drain loses ledger rows on
+	// every restart.
+	spendCtx, stopSpend := context.WithCancel(context.Background())
+	defer proxyHandler.Close()
+	defer spendTracker.Wait()
 	defer jan.Wait()
+	defer stopSpend()
 	defer stopJanitor()
 	go jan.Run(janitorCtx)
+	go spendTracker.Run(spendCtx, 0)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -174,7 +205,7 @@ func main() {
 	case err := <-errCh:
 		if err != nil {
 			logger.Error("server failed", "err", err)
-			os.Exit(1)
+			exitCode = 1
 		}
 	case sig := <-sigCh:
 		logger.Info("shutting down", "signal", sig.String())
@@ -182,7 +213,7 @@ func main() {
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
 			logger.Error("graceful shutdown failed", "err", err)
-			os.Exit(1)
+			exitCode = 1
 		}
 	}
 }

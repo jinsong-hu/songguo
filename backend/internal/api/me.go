@@ -24,7 +24,7 @@ type meView struct {
 func (a *api) handleMe(w http.ResponseWriter, r *http.Request) {
 	if roleFrom(r) == roleUser {
 		u, _ := userFrom(r)
-		spend, err := a.store.SpendByUser(u.ID, nil)
+		spend, err := a.spendOf(u.ID)
 		if err != nil {
 			a.writeDataErr(w, "user spend", err)
 			return

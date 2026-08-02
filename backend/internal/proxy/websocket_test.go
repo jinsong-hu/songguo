@@ -316,6 +316,7 @@ func TestWebSocketHappyPath(t *testing.T) {
 	}
 
 	// Modality must be realtime.
+	env.drain(t)
 	entries, err := st.QueryCalls(storeFilterAll())
 	if err != nil {
 		t.Fatalf("QueryCalls: %v", err)
@@ -355,6 +356,7 @@ func TestWebSocketUpstreamRefuses(t *testing.T) {
 	if rows[0].Wire != "volc/asr-stream-async" {
 		t.Errorf("row wire = %q, want volc/asr-stream-async", rows[0].Wire)
 	}
+	env.drain(t)
 	entries, _ := st.QueryCalls(storeFilterAll())
 	if entries[0].Modality != "realtime" {
 		t.Errorf("modality = %q, want realtime", entries[0].Modality)
