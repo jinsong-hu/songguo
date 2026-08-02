@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -431,6 +432,7 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	defer clientConn.Close()
+	enableKeepAlive(clientConn, h.logger)
 
 	// Complete the client's handshake: write the upstream's 101 status line and
 	// handshake headers back over the hijacked conn.
@@ -664,6 +666,51 @@ func wsTargetOf(origin string) (host string, useTLS bool, err error) {
 		}
 	}
 	return net.JoinHostPort(hostname, port), useTLS, nil
+}
+
+// clientKeepAlivePeriod is how often the kernel probes an idle hijacked client
+// connection. Matches the period the outbound dialer already sets on the
+// upstream side (internal/outbound), so both halves of a relay detect a dead
+// peer on the same timescale.
+const clientKeepAlivePeriod = 30 * time.Second
+
+// enableKeepAlive turns on TCP keepalive for a hijacked client connection.
+//
+// This is the only thing standing between songguo and a permanently leaked
+// provider concurrency slot. Once a connection is hijacked, net/http stops
+// watching it: the request context is never cancelled, Server.Shutdown ignores
+// it, and pipeWebSocket clears the conn deadline for the life of the session.
+// If the client then disappears without a FIN — a NAT table eviction, a laptop
+// lid, a yanked cable — both io.Copy goroutines block forever on a socket that
+// will never produce another byte, wg.Wait never returns, and the slot that
+// request holds is gone until the process restarts. On a credential with a
+// small max_concurrency, a handful of those takes the provider out entirely.
+//
+// Keepalive is not a timeout, so it does not conflict with songguo inventing
+// none: it never interrupts a working connection, however long it idles. It
+// only asks the kernel to notice when the peer has stopped existing, which is
+// information we are currently choosing not to receive.
+//
+// Best-effort by design. A conn that is not TCP (a TLS wrapper we cannot
+// unwrap, a test pipe) simply keeps today's behaviour.
+func enableKeepAlive(c net.Conn, logger *slog.Logger) {
+	tcp, ok := c.(*net.TCPConn)
+	if !ok {
+		// TLS-terminated connections wrap the TCP conn; reach through when we can.
+		if tc, isTLS := c.(*tls.Conn); isTLS {
+			tcp, ok = tc.NetConn().(*net.TCPConn)
+		}
+	}
+	if !ok || tcp == nil {
+		return
+	}
+	if err := tcp.SetKeepAlive(true); err != nil {
+		logger.Warn("enable client keepalive failed", "err", err)
+		return
+	}
+	if err := tcp.SetKeepAlivePeriod(clientKeepAlivePeriod); err != nil {
+		logger.Warn("set client keepalive period failed", "err", err)
+	}
 }
 
 // hostOnly returns the hostname portion of a host:port, for the TLS ServerName.

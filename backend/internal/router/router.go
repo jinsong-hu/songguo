@@ -415,7 +415,49 @@ func (r *Router) order(sel Selector, vendors []config.Vendor) []Target {
 	// only the vendor that serves the requested path.
 	//
 	// Drawn under the lock so that an injected Rand need not be goroutine-safe.
+	ranks := r.rankVendors(sel, vendors, pinned)
+
+	sort.SliceStable(ranks, func(a, b int) bool {
+		x, y := ranks[a], ranks[b]
+		if x.health != y.health {
+			return x.health < y.health
+		}
+		if x.sticky != y.sticky {
+			return x.sticky < y.sticky
+		}
+		if x.priority != y.priority {
+			return x.priority < y.priority
+		}
+		if x.draw != y.draw {
+			return x.draw < y.draw
+		}
+		return x.decl < y.decl
+	})
+
+	targets := make([]Target, len(ranks))
+	for i, rv := range ranks {
+		targets[i] = Target{Vendor: rv.vendor, Credential: rv.vendor.Credential}
+	}
+	return targets
+}
+
+// rankVendors builds the sort key for each vendor under r.mu.
+//
+// This is its own function purely so the unlock can be a defer. The region is
+// on the hot path for every single request through the gateway, and it used to
+// unlock at the end of a straight-line block — correct, but only as long as
+// nothing in the middle ever panicked. If one did, net/http recovers per
+// connection, so the PROCESS would survive while r.mu stayed locked forever:
+// every subsequent Select blocks on it and the gateway stops serving entirely,
+// silently, until someone restarts it. A recoverable panic must not be able to
+// become a total outage.
+//
+// The sort deliberately stays with the caller, outside the lock — it is the
+// expensive part and needs none of this state.
+func (r *Router) rankVendors(sel Selector, vendors []config.Vendor, pinned string) []rankedVendor {
 	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	now := r.now()
 
 	draws := make(map[string]float64, len(vendors))
@@ -447,30 +489,7 @@ func (r *Router) order(sel Selector, vendors []config.Vendor) []Target {
 			decl:     i,
 		}
 	}
-	r.mu.Unlock()
-
-	sort.SliceStable(ranks, func(a, b int) bool {
-		x, y := ranks[a], ranks[b]
-		if x.health != y.health {
-			return x.health < y.health
-		}
-		if x.sticky != y.sticky {
-			return x.sticky < y.sticky
-		}
-		if x.priority != y.priority {
-			return x.priority < y.priority
-		}
-		if x.draw != y.draw {
-			return x.draw < y.draw
-		}
-		return x.decl < y.decl
-	})
-
-	targets := make([]Target, len(ranks))
-	for i, rv := range ranks {
-		targets[i] = Target{Vendor: rv.vendor, Credential: rv.vendor.Credential}
-	}
-	return targets
+	return ranks
 }
 
 // weightedDraw converts a uniform sample into a sort value where a vendor with
