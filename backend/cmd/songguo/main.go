@@ -146,12 +146,19 @@ func main() {
 	// gateway hot path. Windows are days, overridable per tier; 0 disables a tier.
 	// See docs/arch.md.
 	janitorCtx, stopJanitor := context.WithCancel(context.Background())
-	defer stopJanitor()
 	jan := janitor.New(st, logger, janitor.Windows{
 		Raw:      getdays("SONGGUO_RETAIN_RAW_DAYS", 7),
 		Calls:    getdays("SONGGUO_RETAIN_CALLS_DAYS", 90),
 		Sessions: getdays("SONGGUO_RETAIN_SESSIONS_DAYS", 90),
 	}, time.Hour)
+
+	// Deferred calls run LIFO, so these three are registered in reverse of the
+	// order they must happen in: stopJanitor cancels the sweep, jan.Wait blocks
+	// until the in-flight DELETE has actually returned, and only then does the
+	// `defer st.Close()` registered further up run. Closing the database while a
+	// prune is still executing is the race this ordering removes.
+	defer jan.Wait()
+	defer stopJanitor()
 	go jan.Run(janitorCtx)
 
 	errCh := make(chan error, 1)

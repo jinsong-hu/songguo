@@ -7,6 +7,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -28,28 +29,71 @@ type Store struct {
 	db *sql.DB
 }
 
+// dsnPragmas are applied by the driver on EVERY new connection, which is the
+// whole point — see Open. `busy_timeout` is listed first only for readability;
+// the driver sorts it first regardless, so the other pragmas are already
+// protected by it when they run.
+//
+// Values use pragma function-call syntax (`foreign_keys(1)`, not
+// `foreign_keys=1`): the driver prefixes each value with "pragma " verbatim.
+const dsnPragmas = "_pragma=busy_timeout(5000)" +
+	"&_pragma=journal_mode(WAL)" +
+	"&_pragma=foreign_keys(1)" +
+	"&_pragma=synchronous(1)"
+
+// Maximum concurrent connections. SQLite allows many readers but only one
+// writer, so this bounds memory and file descriptors rather than throughput;
+// the cap exists because the default is unlimited, and an unbounded pool is
+// what let the pragma bug below go unnoticed for so long.
+const (
+	maxOpenConns = 16
+	maxIdleConns = 8
+)
+
 // Open opens (creating if needed) the SQLite database at path, applies the
 // required pragmas, and runs idempotent migrations.
+//
+// The pragmas ride on the DSN rather than being executed after opening. That is
+// not a style choice: three of the four are per-CONNECTION settings, and
+// database/sql hands out an unbounded pool. `db.Exec("PRAGMA ...")` applies to
+// whichever single connection happens to serve that one call, so every
+// connection opened afterwards runs without them.
+//
+// The DSN keeps the bare path rather than a `file:` URI on purpose. The driver
+// strips the query string from the path for non-`file:` DSNs and passes the
+// path through untouched, whereas a `file:` URI is opened with SQLITE_OPEN_URI
+// and gets percent-decoded — which would corrupt any path containing a '%'.
+//
+// > History: until this change the four pragmas were executed via db.Exec after
+// > sql.Open. Only `journal_mode=WAL` actually stuck, because it is persisted in
+// > the database file header; `busy_timeout`, `foreign_keys` and `synchronous`
+// > silently reverted to their defaults on every connection but the first. The
+// > effect was a busy_timeout of 0 — so any write-lock contention (the hourly
+// > janitor sweep against live traffic) failed instantly with SQLITE_BUSY
+// > instead of waiting, and those errors are logged-and-swallowed on the proxy
+// > path, losing ledger rows — and foreign_keys OFF, which silently skipped the
+// > ON DELETE CASCADE that retention relies on to drop each pruned call's raw
+// > blobs. TestPragmasApplyToEveryConnection is the regression guard.
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	// A '?' in the path would be parsed as the start of the query string by the
+	// driver, silently truncating the filename and swallowing our pragmas.
+	if strings.ContainsRune(path, '?') {
+		return nil, fmt.Errorf("store: open %q: database path must not contain '?'", path)
+	}
+
+	db, err := sql.Open("sqlite", path+"?"+dsnPragmas)
 	if err != nil {
 		return nil, fmt.Errorf("store: open %q: %w", path, err)
 	}
+	db.SetMaxOpenConns(maxOpenConns)
+	db.SetMaxIdleConns(maxIdleConns)
 
-	// WAL allows concurrent readers + one writer; the driver serializes
-	// writes through the shared *sql.DB. busy_timeout avoids spurious
-	// SQLITE_BUSY under contention.
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA busy_timeout=5000",
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA synchronous=NORMAL",
-	}
-	for _, p := range pragmas {
-		if _, err := db.Exec(p); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("store: %s: %w", p, err)
-		}
+	// sql.Open is lazy — it does not dial. Force one connection now so a bad
+	// path or an unapplicable pragma is reported here rather than on the first
+	// query, which is what the old db.Exec loop did incidentally.
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: open %q: %w", path, err)
 	}
 
 	s := &Store{db: db}
@@ -812,11 +856,26 @@ func (s *Store) migrateCallsToUUID() error {
 	// Rebuilding calls (and its children) means dropping a table other tables
 	// reference by foreign key. Disable FK enforcement for the duration — it
 	// cannot be toggled inside a transaction, so do it around the whole rebuild
-	// and restore it after. Open() set it ON globally, so restore to ON.
-	if _, err := s.db.Exec(`PRAGMA foreign_keys=OFF`); err != nil {
+	// and restore it after.
+	//
+	// foreign_keys is a PER-CONNECTION setting, so this has to be pinned to one
+	// connection: issued through s.db.Exec it lands on an arbitrary member of
+	// the pool, quite possibly not the one that goes on to run the transaction
+	// below — leaving the rebuild running with FKs still enforced while some
+	// idle connection sits there with them disabled.
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("store: pin connection for calls migration: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
 		return fmt.Errorf("store: disable fk for calls migration: %w", err)
 	}
-	defer s.db.Exec(`PRAGMA foreign_keys=ON`)
+	// Restore before the connection goes back to the pool. Every other
+	// connection still has FKs on from the DSN, so only this one needs it.
+	defer conn.ExecContext(ctx, `PRAGMA foreign_keys=ON`)
 
 	// Preserve every current column except the retired `attempt`; map id → TEXT
 	// and splice in ts_end (NULL for historical rows). Column list is discovered
@@ -840,7 +899,8 @@ func (s *Store) migrateCallsToUUID() error {
 		}
 	}
 
-	tx, err := s.db.Begin()
+	// Begun on the pinned connection, so it inherits the foreign_keys=OFF above.
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: begin calls uuid migration: %w", err)
 	}

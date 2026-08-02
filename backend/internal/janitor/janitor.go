@@ -6,6 +6,7 @@ package janitor
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -35,6 +36,7 @@ type Janitor struct {
 	windows  Windows
 	interval time.Duration
 	now      func() time.Time
+	done     chan struct{}
 }
 
 // New builds a Janitor. A non-positive interval defaults to hourly.
@@ -45,7 +47,10 @@ func New(st *store.Store, logger *slog.Logger, w Windows, interval time.Duration
 	if interval <= 0 {
 		interval = time.Hour
 	}
-	return &Janitor{store: st, logger: logger, windows: w, interval: interval, now: time.Now}
+	return &Janitor{
+		store: st, logger: logger, windows: w, interval: interval,
+		now: time.Now, done: make(chan struct{}),
+	}
 }
 
 // Run prunes once immediately, then on each interval tick until ctx is done. It
@@ -53,7 +58,8 @@ func New(st *store.Store, logger *slog.Logger, w Windows, interval time.Duration
 // errors are logged and the loop continues (a transient DB error must not stop
 // future sweeps).
 func (j *Janitor) Run(ctx context.Context) {
-	j.sweep()
+	defer close(j.done)
+	j.sweep(ctx)
 	t := time.NewTicker(j.interval)
 	defer t.Stop()
 	for {
@@ -61,35 +67,49 @@ func (j *Janitor) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			j.sweep()
+			j.sweep(ctx)
 		}
 	}
 }
 
+// Wait blocks until Run has returned, so a caller that cancels the context can
+// be sure no DELETE is still in flight before it closes the store. Closing the
+// database underneath a running sweep is the race this exists to remove.
+//
+// It blocks forever if Run was never started; pair the two.
+func (j *Janitor) Wait() { <-j.done }
+
 // sweep runs all three prunes once. Order matters only for logging: raw first
 // (shortest window), then calls (whose cascade also drops any straggler raw),
 // then sessions.
-func (j *Janitor) sweep() {
+//
+// ctx cancellation stops a prune part-way. That is not an error worth
+// reporting — the rows that survive are simply pruned by the next sweep — so
+// cancellation is separated from a genuine DB failure here.
+func (j *Janitor) sweep(ctx context.Context) {
 	now := j.now()
-	if j.windows.Raw > 0 {
-		if n, err := j.store.PruneRaw(now.Add(-j.windows.Raw)); err != nil {
-			j.logger.Error("prune raw failed", "err", err)
-		} else if n > 0 {
-			j.logger.Info("pruned raw bodies", "rows", n, "older_than", j.windows.Raw.String())
+	report := func(what string, window time.Duration, n int64, err error) {
+		switch {
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			if n > 0 {
+				j.logger.Info("prune interrupted by shutdown", "what", what, "rows", n)
+			}
+		case err != nil:
+			j.logger.Error("prune failed", "what", what, "err", err)
+		case n > 0:
+			j.logger.Info("pruned", "what", what, "rows", n, "older_than", window.String())
 		}
+	}
+	if j.windows.Raw > 0 {
+		n, err := j.store.PruneRaw(ctx, now.Add(-j.windows.Raw))
+		report("raw bodies", j.windows.Raw, n, err)
 	}
 	if j.windows.Calls > 0 {
-		if n, err := j.store.PruneCalls(now.Add(-j.windows.Calls)); err != nil {
-			j.logger.Error("prune calls failed", "err", err)
-		} else if n > 0 {
-			j.logger.Info("pruned calls", "rows", n, "older_than", j.windows.Calls.String())
-		}
+		n, err := j.store.PruneCalls(ctx, now.Add(-j.windows.Calls))
+		report("calls", j.windows.Calls, n, err)
 	}
 	if j.windows.Sessions > 0 {
-		if n, err := j.store.PruneSessions(now.Add(-j.windows.Sessions)); err != nil {
-			j.logger.Error("prune sessions failed", "err", err)
-		} else if n > 0 {
-			j.logger.Info("pruned sessions", "rows", n, "older_than", j.windows.Sessions.String())
-		}
+		n, err := j.store.PruneSessions(ctx, now.Add(-j.windows.Sessions))
+		report("sessions", j.windows.Sessions, n, err)
 	}
 }

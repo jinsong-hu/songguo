@@ -59,6 +59,17 @@ func (s *Store) CreateCall(e calls.Entry) error {
 // identity fields written at create are left untouched except model/modality/
 // vendor/credential, which finalize overwrites with their resolved values (a
 // denial may know them only at the end). Usage and Tags are JSON-encoded.
+//
+// It returns ErrNotFound when no row matched, rather than reporting success on
+// an UPDATE that changed nothing. An unmatched finalize means the phase-1 row is
+// missing — CreateCall failed and its error was swallowed, or the id is wrong —
+// and the entire outcome of the call (status, usage, cost) has just been thrown
+// away. That is precisely the case worth shouting about, and it is the one the
+// old code was quietest about.
+//
+// > History: the sql.Result was discarded here, so a finalize against a missing
+// > row returned nil and vanished without an error or a log line. Every other
+// > mutator in this package already checks RowsAffected (see users.go).
 func (s *Store) FinalizeCall(e calls.Entry) error {
 	if e.ID == "" {
 		return fmt.Errorf("store: finalize call: empty id")
@@ -75,7 +86,7 @@ func (s *Store) FinalizeCall(e calls.Entry) error {
 	if modality == "" {
 		modality = calls.ModalityUnknown
 	}
-	if _, err := s.db.Exec(
+	res, err := s.db.Exec(
 		`UPDATE calls SET
 		   ts_end = ?, model = ?, modality = ?, vendor = ?, credential_id = ?,
 		   status = ?, err = ?, usage = ?, cost = ?, latency_ms = ?, ttft_ms = ?,
@@ -92,8 +103,14 @@ func (s *Store) FinalizeCall(e calls.Entry) error {
 		e.Seconds, e.Chars,
 		e.ToolCalls, e.ToolTokens,
 		e.ID,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("store: finalize call: %w", err)
+	}
+	// A driver that cannot report RowsAffected must not turn into a spurious
+	// failure — only an authoritative zero counts as a missing row.
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("store: finalize call %s: %w", e.ID, ErrNotFound)
 	}
 	return nil
 }
