@@ -945,6 +945,7 @@ export interface CallsFilters {
    *  Empty or omitted means all — see UsageFilter. */
   models?: string[];
   vendors?: string[];
+  clients?: string[];
   status?: StatusGroup;
   sort?: FeedSort;
   limit?: number;
@@ -952,14 +953,19 @@ export interface CallsFilters {
 }
 
 /**
- * The dashboard's Models/Providers filter, as every windowed analytics call
- * takes it. An empty array means "all" — the same convention a user key's model
- * scope uses — and the client simply omits the param, so the default costs
+ * The dashboard's Models/Providers/Clients filter, as every windowed analytics
+ * call takes it. An empty array means "all" — the same convention a user key's
+ * model scope uses — and the client simply omits the param, so the default costs
  * nothing on the wire.
  */
 export interface UsageFilter {
   models: string[];
   vendors: string[];
+  /** Normalized caller clients (claude-code, codex-openai). Unlike the other two
+   *  this list is not exhaustive: traffic whose User-Agent named no recognized
+   *  client is selectable by no value, so picking every option is narrower than
+   *  picking none. See store.Facets. */
+  clients: string[];
 }
 
 /** One selectable value of a filter, with the request count that ranked it. */
@@ -968,10 +974,11 @@ export interface Facet {
   requests: number;
 }
 
-/** GET /api/usage/facets — the option lists behind the two filters. Both are
+/** GET /api/usage/facets — the option lists behind the three filters. All are
  *  what actually ran in the window, ranked by requests desc. */
 export interface UsageFacets {
   range: Range;
   models: Facet[];
   vendors: Facet[];
+  clients: Facet[];
 }

@@ -68,13 +68,15 @@ type SessionStats struct {
 // activity (last_ts), the same key the rollup is pruned by. Outcomes, totals,
 // and per-session percentiles are derived from the rolled-up rows.
 //
-// A model/provider filter selects sessions that **touched** one of the chosen
-// models or providers; the per-session figures it reports are still the whole
+// A model/provider/client filter selects sessions that **touched** one of the
+// chosen values; the per-session figures it reports are still the whole
 // session's. That asymmetry is deliberate and is the only honest reading
 // available: the rollup has no model column, and a session is a single agent run
 // whose turn count and duration are not divisible by model. "Sessions that used
 // claude-opus-5, and how those runs behaved" is a real question; "the 40% of
-// this session that was opus" is not.
+// this session that was opus" is not. For the client filter the asymmetry is
+// near-degenerate in practice — a run is one agent throughout — but the query
+// shape is shared, so the same "touched" reading applies.
 func (s *Store) SessionStats(sc Scope, since, until *time.Time) (SessionStats, error) {
 	// windowClause emits predicates on `ts`; the sessions table keys activity on
 	// last_ts, so build the clause by hand. A non-empty UserID restricts to that
@@ -97,11 +99,12 @@ func (s *Store) SessionStats(sc Scope, since, until *time.Time) (SessionStats, e
 		args = append(args, sc.UserID)
 	}
 	if sc.filtered() {
-		// The model/provider predicate lives on `calls`, so reach it through the
-		// session ids that satisfy it. Scoped to the same window as the outer
+		// The model/provider/client predicate lives on `calls`, so reach it through
+		// the session ids that satisfy it. Scoped to the same window as the outer
 		// query: a session whose only opus turns fell outside the window should
-		// not be pulled in by them.
-		sub, subArgs := windowClause(Scope{Models: sc.Models, Vendors: sc.Vendors}, since, until)
+		// not be pulled in by them. UserID is deliberately left out of the inner
+		// Scope — it has already been applied to the `sessions` rows above.
+		sub, subArgs := windowClause(Scope{Models: sc.Models, Vendors: sc.Vendors, Clients: sc.Clients}, since, until)
 		conds = append(conds,
 			"id IN (SELECT DISTINCT session_id FROM calls"+sub+" AND session_id != '')")
 		args = append(args, subArgs...)

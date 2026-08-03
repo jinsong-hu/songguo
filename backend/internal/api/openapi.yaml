@@ -43,6 +43,7 @@ paths:
         - $ref: "#/components/parameters/Until"
         - $ref: "#/components/parameters/Models"
         - $ref: "#/components/parameters/Vendors"
+        - $ref: "#/components/parameters/Clients"
       responses:
         "200":
           description: Overview
@@ -84,6 +85,7 @@ paths:
         - $ref: "#/components/parameters/Until"
         - $ref: "#/components/parameters/Models"
         - $ref: "#/components/parameters/Vendors"
+        - $ref: "#/components/parameters/Clients"
         - name: bucket
           in: query
           schema: { type: string, pattern: "^(hour|day|[0-9]+[smhd])$" }
@@ -110,6 +112,7 @@ paths:
         - $ref: "#/components/parameters/Until"
         - $ref: "#/components/parameters/Models"
         - $ref: "#/components/parameters/Vendors"
+        - $ref: "#/components/parameters/Clients"
         - name: bucket
           in: query
           schema: { type: string, pattern: "^(hour|day|[0-9]+[smhd])$" }
@@ -140,6 +143,7 @@ paths:
         - $ref: "#/components/parameters/Until"
         - $ref: "#/components/parameters/Models"
         - $ref: "#/components/parameters/Vendors"
+        - $ref: "#/components/parameters/Clients"
         - name: bucket
           in: query
           schema: { type: string, pattern: "^(hour|day|[0-9]+[smhd])$" }
@@ -170,6 +174,7 @@ paths:
         - $ref: "#/components/parameters/Until"
         - $ref: "#/components/parameters/Models"
         - $ref: "#/components/parameters/Vendors"
+        - $ref: "#/components/parameters/Clients"
       responses:
         "200":
           description: Context composition
@@ -228,6 +233,7 @@ paths:
         - $ref: "#/components/parameters/Until"
         - $ref: "#/components/parameters/Models"
         - $ref: "#/components/parameters/Vendors"
+        - $ref: "#/components/parameters/Clients"
       responses:
         "200":
           description: Error counts by upstream status code, ranked by count (top 8)
@@ -271,6 +277,7 @@ paths:
         - $ref: "#/components/parameters/Until"
         - $ref: "#/components/parameters/Models"
         - $ref: "#/components/parameters/Vendors"
+        - $ref: "#/components/parameters/Clients"
         - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 500 } }
         - { name: offset, in: query, schema: { type: integer, default: 0 } }
       responses:
@@ -290,6 +297,7 @@ paths:
         - $ref: "#/components/parameters/Until"
         - $ref: "#/components/parameters/Models"
         - $ref: "#/components/parameters/Vendors"
+        - $ref: "#/components/parameters/Clients"
       responses:
         "200":
           description: Session aggregate stats
@@ -848,6 +856,19 @@ components:
       description: >-
         Restrict the aggregate to these providers, repeated like models. Omit for
         all providers.
+    Clients:
+      name: clients
+      in: query
+      explode: true
+      style: form
+      schema: { type: array, items: { type: string } }
+      description: >-
+        Restrict the aggregate to these caller clients, repeated like models.
+        Values are the normalized slugs songguo parses from the User-Agent
+        (claude-code, codex-openai); a caller whose UA names no recognized client
+        is stored as the empty string and is offered by no facet, so unlike models
+        and providers, listing every value is narrower than omitting the param.
+        Omit for all clients.
   responses:
     Unauthorized:
       description: Missing or invalid admin key
@@ -1099,10 +1120,16 @@ components:
         vendors:
           type: array
           items: { $ref: "#/components/schemas/Facet" }
+        clients:
+          type: array
+          description: >-
+            Recognized caller clients only; traffic whose UA named none is
+            counted by no row here. See the clients query parameter.
+          items: { $ref: "#/components/schemas/Facet" }
     Facet:
       type: object
       properties:
-        key: { type: string, description: The model id or vendor name }
+        key: { type: string, description: The model id, vendor name, or client slug }
         requests: { type: integer, description: Calls in the window that carried it }
     Call:
       type: object

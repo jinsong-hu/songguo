@@ -53,9 +53,9 @@ type ModelStat struct {
 //   - UserID is server-enforced. It comes from the authenticated key (see
 //     api.scopeUserID) and is never read from the query string. "" means the
 //     operator view — all traffic.
-//   - Models and Vendors are the operator's own dashboard filters, read from the
-//     request. They can only ever narrow what the caller may already see, so
-//     they need no enforcement of their own.
+//   - Models, Vendors and Clients are the operator's own dashboard filters, read
+//     from the request. They can only ever narrow what the caller may already
+//     see, so they need no enforcement of their own.
 //
 // An empty slice means "no filter", matching the convention User.Scope already
 // uses for model allowlists — none selected = all.
@@ -63,12 +63,20 @@ type Scope struct {
 	UserID  string
 	Models  []string
 	Vendors []string
+	// Clients filters on the normalized caller client (calls.ParseClientInfo:
+	// claude-code, codex-openai). Unlike Models and Vendors the option list is
+	// not exhaustive — an unrecognized caller stores '' and is offered by no
+	// facet — so selecting every option is narrower than selecting none. See
+	// Facets for why we decline to synthesize an "Other".
+	Clients []string
 }
 
-// filtered reports whether any model/provider filter is set. Callers that must
-// reach for a more expensive query shape when filtering (SessionStats, which
+// filtered reports whether any model/provider/client filter is set. Callers that
+// must reach for a more expensive query shape when filtering (SessionStats, which
 // aggregates a rollup table with no model column) branch on this.
-func (sc Scope) filtered() bool { return len(sc.Models) > 0 || len(sc.Vendors) > 0 }
+func (sc Scope) filtered() bool {
+	return len(sc.Models) > 0 || len(sc.Vendors) > 0 || len(sc.Clients) > 0
+}
 
 // conds returns the scope's WHERE conjuncts and their bound args, all predicates
 // on the `calls` table. Column names are literals here, never caller input.
@@ -86,6 +94,10 @@ func (sc Scope) conds() ([]string, []any) {
 		args = append(args, a...)
 	}
 	if c, a := inClause("vendor", sc.Vendors); c != "" {
+		conds = append(conds, c)
+		args = append(args, a...)
+	}
+	if c, a := inClause("client_name", sc.Clients); c != "" {
 		conds = append(conds, c)
 		args = append(args, a...)
 	}
@@ -377,11 +389,11 @@ type FacetRow struct {
 	Requests int
 }
 
-// Facets lists the distinct models and vendors that actually appear in the call
-// log over the window, ranked by request count — the option lists behind the
-// Overview page's Models and Providers filters.
+// Facets lists the distinct models, vendors and clients that actually appear in
+// the call log over the window, ranked by request count — the option lists behind
+// the Overview page's Models, Providers and Clients filters.
 //
-// Two deliberate choices:
+// Three deliberate choices:
 //
 //   - Observed, not configured. A provider may declare fifty models; the filter
 //     offers the handful that ran. This keeps the list short and means every
@@ -390,12 +402,24 @@ type FacetRow struct {
 //     model/provider selections are ignored, so picking a model never removes
 //     providers from the other list. Cross-filtered facets read as options
 //     "disappearing" and can strand a selection the user can no longer clear.
-func (s *Store) Facets(sc Scope, since, until *time.Time) (models, vendors []FacetRow, err error) {
+//   - Recognized clients only, and no synthesized "Other". The HAVING clause
+//     drops the rows whose User-Agent named no client ParseClientInfo knows, and
+//     those rows get no facet of their own. An empty client_name does not mean
+//     "some other agent" — it is curl, a raw SDK, a browser, a health check — so
+//     offering it beside Claude Code and Codex would assert a peer client that
+//     does not exist. It is also not a stable bucket: teaching songguo a third
+//     client would silently move historical rows out of it, making it the one
+//     option whose meaning changes between releases. The consequence, unique to
+//     this column: the client list is not exhaustive, so selecting every option
+//     is narrower than selecting none. If "Other" is ever wanted, the honest
+//     route is for ParseClientInfo to *record* a value for an
+//     unrecognized-but-present UA, not for this query to invent one at read time.
+func (s *Store) Facets(sc Scope, since, until *time.Time) (models, vendors, clients []FacetRow, err error) {
 	scope := Scope{UserID: sc.UserID}
 	clause, args := windowClause(scope, since, until)
 
 	load := func(col string) ([]FacetRow, error) {
-		// col is a literal from this function's own two call sites, never input.
+		// col is a literal from this function's own call sites, never input.
 		rows, qerr := s.db.Query(
 			`SELECT `+col+` AS k, COUNT(*) AS n
 			   FROM calls`+clause+`
@@ -420,12 +444,15 @@ func (s *Store) Facets(sc Scope, since, until *time.Time) (models, vendors []Fac
 	}
 
 	if models, err = load("model"); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if vendors, err = load("vendor"); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return models, vendors, nil
+	if clients, err = load("client_name"); err != nil {
+		return nil, nil, nil, err
+	}
+	return models, vendors, clients, nil
 }
 
 // BreakdownDimension is a column the call log can be grouped by.

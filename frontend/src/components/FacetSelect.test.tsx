@@ -21,10 +21,12 @@ function Harness({
   options = OPTIONS,
   initial = [],
   onChange,
+  renderLabel,
 }: {
   options?: Facet[];
   initial?: string[];
   onChange?: (next: string[]) => void;
+  renderLabel?: (key: string) => string;
 }) {
   const [value, setValue] = useState<string[]>(initial);
   return (
@@ -36,6 +38,7 @@ function Harness({
         setValue(next);
         onChange?.(next);
       }}
+      renderLabel={renderLabel}
     />
   );
 }
@@ -164,6 +167,35 @@ describe('FacetSelect', () => {
 
     expect(checkbox(/claude-opus-5/)).toBeDefined();
     expect(screen.queryByRole('checkbox', { name: /model-4/ })).toBeNull();
+  });
+
+  it('searches on the display name but still reports the raw key', async () => {
+    const user = userEvent.setup();
+    // The Clients filter renders "Claude Code" over the key `claude-code`.
+    // Searching has to match what the user can see, while the selection stays
+    // the ledger value the API filters on.
+    const seen: string[][] = [];
+    const many: Facet[] = Array.from({ length: 10 }, (_, i) => ({
+      key: i === 0 ? 'claude-code' : `model-${i}`,
+      requests: 10 - i,
+    }));
+    render(
+      <Harness
+        options={many}
+        onChange={(n) => seen.push(n)}
+        renderLabel={(k) => (k === 'claude-code' ? 'Claude Code' : k)}
+      />,
+    );
+
+    await open(user);
+    await user.type(screen.getByRole('textbox', { name: /Filter models/ }), 'Claude Co');
+
+    expect(screen.queryByRole('checkbox', { name: /model-4/ })).toBeNull();
+
+    await user.click(checkbox(/Claude Code/));
+    expect(seen).toEqual([['claude-code']]);
+    // A lone selection labels the trigger with its display name, not its key.
+    expect(trigger().textContent).toContain('Claude Code');
   });
 });
 

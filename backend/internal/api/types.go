@@ -428,13 +428,16 @@ type facetRow struct {
 	Requests int    `json:"requests"`
 }
 
-// facetsView is the GET /api/usage/facets response: the models and vendors that
-// appear in the window, ranked by request count desc, for the Overview page's
-// Models and Providers filters.
+// facetsView is the GET /api/usage/facets response: the models, vendors and
+// caller clients that appear in the window, ranked by request count desc, for
+// the Overview page's Models, Providers and Clients filters.
 type facetsView struct {
 	Range   rangeView  `json:"range"`
 	Models  []facetRow `json:"models"`
 	Vendors []facetRow `json:"vendors"`
+	// Clients holds only the clients ParseClientInfo recognizes, so unlike the
+	// other two lists it is not exhaustive — see store.Facets.
+	Clients []facetRow `json:"clients"`
 }
 
 // callsView is the GET /api/calls response.

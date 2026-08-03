@@ -2,8 +2,6 @@ import { useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ChevronRight } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from 'recharts';
-import { svg as claudeCodeSvg } from 'thesvg/claude-code';
-import { svg as codexOpenAISvg } from 'thesvg/codex-openai';
 import { api } from '../api/client';
 import type { CallEntry, ContextBlock, SessionMessages, SourceSlice } from '../api/types';
 import { ContextSunburst, ContextDistributionCard, srcColor, srcLabel, type ContextSelection } from '../components/ContextSunburst';
@@ -24,6 +22,7 @@ import {
   type ChartConfig,
 } from '../components/ui/chart';
 import { useFetch } from '../lib/useFetch';
+import { clientIconSvg, clientLabel } from '../lib/client';
 import { dateTime, duration, elapsedSince, int, money } from '../lib/format';
 import styles from './Detail.module.css';
 
@@ -429,7 +428,7 @@ function dominantClient(entries: CallEntry[]): ClientBadgeData | null {
 }
 
 function ClientTile({ client }: { client: ClientBadgeData }) {
-  const label = client.name === 'claude-code' ? 'Claude Code' : client.name === 'codex-openai' ? 'Codex' : client.name;
+  const label = clientLabel(client.name);
   const icon = clientIconSvg(client.name);
 
   return (
@@ -444,12 +443,6 @@ function ClientTile({ client }: { client: ClientBadgeData }) {
       </div>
     </div>
   );
-}
-
-function clientIconSvg(name: string): string {
-  if (name === 'claude-code') return claudeCodeSvg;
-  if (name === 'codex-openai') return codexOpenAISvg;
-  return '';
 }
 
 function PromptReconstructionCard({

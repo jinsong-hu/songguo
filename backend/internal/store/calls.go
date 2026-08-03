@@ -160,8 +160,11 @@ type CallFilter struct {
 	// the singular fields rather than replacing them, so a caller that sets both
 	// gets the intersection — which is the only reading that cannot widen a
 	// filter someone else already applied.
-	Models    []string
-	Vendors   []string
+	Models  []string
+	Vendors []string
+	// Clients is the dashboard's Clients filter, on the normalized caller client
+	// (calls.ParseClientInfo). Same empty-means-all reading; see store.Scope.
+	Clients   []string
 	Status    *int
 	SessionID string
 	// FeedSort selects the feed ordering (and, for "failures", filters to errored
@@ -202,6 +205,10 @@ func (f CallFilter) where() (string, []any) {
 		args = append(args, a...)
 	}
 	if c, a := inClause("vendor", f.Vendors); c != "" {
+		conds = append(conds, c)
+		args = append(args, a...)
+	}
+	if c, a := inClause("client_name", f.Clients); c != "" {
 		conds = append(conds, c)
 		args = append(args, a...)
 	}

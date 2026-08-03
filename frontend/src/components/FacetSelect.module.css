@@ -193,6 +193,17 @@
   align-items: center;
   justify-content: center;
   width: 16px;
+  height: 16px;
+}
+
+/* Raw SVG markup — the client icons come from thesvg as a string — carries a
+   viewBox but no width/height, so without this it renders at the browser's
+   300x150 default. The lobehub icons BrandIcon draws size themselves off
+   font-size and are unaffected. */
+.icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .name {

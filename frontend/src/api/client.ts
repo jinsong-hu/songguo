@@ -120,8 +120,10 @@ function qs(
 }
 
 /** Spread a UsageFilter into qs() params; an absent filter contributes nothing. */
-function filterParams(f?: UsageFilter): { models?: string[]; vendors?: string[] } {
-  return { models: f?.models, vendors: f?.vendors };
+function filterParams(
+  f?: UsageFilter,
+): { models?: string[]; vendors?: string[]; clients?: string[] } {
+  return { models: f?.models, vendors: f?.vendors, clients: f?.clients };
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -168,6 +170,7 @@ function callsQuery(f: CallsFilters): string {
     vendor: f.vendor,
     models: f.models,
     vendors: f.vendors,
+    clients: f.clients,
     status: f.status && f.status !== 'all' ? f.status : undefined,
     sort: f.sort && f.sort !== 'recent' ? f.sort : undefined,
     limit: f.limit,
@@ -185,17 +188,19 @@ export const api = {
     request<Overview>(`/overview${qs({ since, until, ...filterParams(filter) })}`),
 
   /** Aggregate stats over coding-agent sessions in the window. Under a filter
-   *  these are the sessions that *touched* a selected model or provider, with
-   *  their whole-session figures — see the backend's SessionStats. */
+   *  these are the sessions that *touched* a selected model, provider or client,
+   *  with their whole-session figures — see the backend's SessionStats. */
   sessionsOverview: (since: number, until: number, filter?: UsageFilter) =>
     request<SessionStats>(`/sessions/overview${qs({ since, until, ...filterParams(filter) })}`),
 
   series: (since: number, until: number, bucket: Bucket) =>
     request<UsageSeries>(`/usage/series${qs({ since, until, bucket })}`),
 
-  /** The models and providers with traffic in the window, ranked by requests —
-   *  the option lists for the two top-bar filters. Deliberately unfiltered by
-   *  the current selection, so choosing a model never removes providers. */
+  /** The models, providers and clients with traffic in the window, ranked by
+   *  requests — the option lists for the three top-bar filters. Deliberately
+   *  unfiltered by the current selection, so choosing a model never removes
+   *  providers. The clients list holds only recognized clients, so it can be
+   *  empty on a gateway that sees no coding-agent traffic. */
   facets: (since: number, until: number) =>
     request<UsageFacets>(`/usage/facets${qs({ since, until })}`),
 

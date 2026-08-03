@@ -25,9 +25,9 @@ const TOP_KEYS = TOP_SORTS.map((t) => t.key);
 interface ActivityFeedProps {
   since: number;
   until: number;
-  /** The page's Models/Providers filter. Applied per call before grouping, so a
-   *  session row appears when any of its calls match — and its rollups then
-   *  cover only the matching ones. */
+  /** The page's Models/Providers/Clients filter. Applied per call before
+   *  grouping, so a session row appears when any of its calls match — and its
+   *  rollups then cover only the matching ones. */
   filter?: UsageFilter;
   /** Whether rows open a detail page on click. Off for the scoped user shell,
    *  which has no session/call detail routes (and no access to those APIs). */
@@ -58,7 +58,7 @@ export function ActivityFeed({ since, until, filter, interactive = true }: Activ
 
   // Scalar fingerprint of the filter: useFetch spreads deps into a useEffect
   // array, where a fresh array identity would refetch every render.
-  const filterKey = `${(filter?.models ?? []).join(' ')}|${(filter?.vendors ?? []).join(' ')}`;
+  const filterKey = `${(filter?.models ?? []).join(' ')}|${(filter?.vendors ?? []).join(' ')}|${(filter?.clients ?? []).join(' ')}`;
 
   // A narrower filter means a shorter list, so a held offset can land past its
   // end and show an empty page — same hazard as changing the sort.
@@ -71,6 +71,7 @@ export function ActivityFeed({ since, until, filter, interactive = true }: Activ
     until,
     models: filter?.models,
     vendors: filter?.vendors,
+    clients: filter?.clients,
     sort,
     limit: PAGE_SIZE,
     offset,

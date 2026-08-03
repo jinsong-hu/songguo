@@ -61,9 +61,9 @@ func parseIntDefault(r *http.Request, key string, def int) int {
 
 // statsScope builds the store.Scope an analytics query runs under: the
 // server-enforced consumer scope from scopeUserID, plus the dashboard's optional
-// models/providers filters read from the query string.
+// models/providers/clients filters read from the query string.
 //
-// The two filters are repeated params (`?models=a&models=b`) rather than a
+// The three filters are repeated params (`?models=a&models=b`) rather than a
 // comma-joined list, because model ids and vendor names are free-form operator
 // input and nothing forbids a comma in one. Absent params leave the slices nil,
 // which the store reads as "no filter".
@@ -73,6 +73,7 @@ func statsScope(r *http.Request) store.Scope {
 		UserID:  scopeUserID(r),
 		Models:  q["models"],
 		Vendors: q["vendors"],
+		Clients: q["clients"],
 	}
 }
 
@@ -85,6 +86,7 @@ func callFilterFromQuery(r *http.Request, defLimit, capLimit int) store.CallFilt
 		Vendor:   r.URL.Query().Get("vendor"),
 		Models:   r.URL.Query()["models"],
 		Vendors:  r.URL.Query()["vendors"],
+		Clients:  r.URL.Query()["clients"],
 		FeedSort: r.URL.Query().Get("sort"),
 	}
 	if since, ok := parseUnixTime(r, "since"); ok {
@@ -748,12 +750,14 @@ func (a *api) handleTopErrorCodes(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleUsageFacets returns the option lists behind the dashboard's Models and
-// Providers filters: the distinct models and vendors seen in the window, ranked
-// by request count (default last 30d, matching the other summary endpoints).
+// handleUsageFacets returns the option lists behind the dashboard's Models,
+// Providers and Clients filters: the distinct models, vendors and caller clients
+// seen in the window, ranked by request count (default last 30d, matching the
+// other summary endpoints).
 //
 // The lists are what ran, not what is configured, and are never cross-filtered
-// by the caller's current selection — see store.Facets for why.
+// by the caller's current selection — see store.Facets for why, and for why the
+// clients list offers only recognized clients.
 func (a *api) handleUsageFacets(w http.ResponseWriter, r *http.Request) {
 	now := a.now().UTC()
 	since := now.AddDate(0, 0, -30)
@@ -765,7 +769,7 @@ func (a *api) handleUsageFacets(w http.ResponseWriter, r *http.Request) {
 		until = *v
 	}
 
-	models, vendors, err := a.store.Facets(statsScope(r), &since, &until)
+	models, vendors, clients, err := a.store.Facets(statsScope(r), &since, &until)
 	if err != nil {
 		a.writeDataErr(w, "usage facets", err)
 		return
@@ -774,6 +778,7 @@ func (a *api) handleUsageFacets(w http.ResponseWriter, r *http.Request) {
 		Range:   rangeView{Since: since.Unix(), Until: until.Unix()},
 		Models:  facetRows(models),
 		Vendors: facetRows(vendors),
+		Clients: facetRows(clients),
 	})
 }
 
