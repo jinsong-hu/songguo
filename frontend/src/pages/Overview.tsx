@@ -1095,7 +1095,9 @@ function ErrorCodeList({ rows }: { rows: ErrorCodeRow[] }) {
             <span className={styles.ecStatus} style={{ color, borderColor: color }}>
               {outcomeLabel((r.outcome || 'vendor_error') as Outcome, r.status)}
             </span>
-            <span className={styles.ecReason}>{errorReason(r)}</span>
+            <span className={styles.ecReason} title={errorReason(r)}>
+              {errorReason(r)}
+            </span>
             <div className={styles.ecBarTrack}>
               <div
                 className={styles.ecBar}
