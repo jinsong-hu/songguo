@@ -41,7 +41,7 @@ served **without** auth — it describes shapes only and carries no secrets.
 
 | Method & path | What it does |
 |---|---|
-| `GET /api/overview` | Spend & health summary for a window (total spend, by modality, error rate, latency, burn, runway). |
+| `GET /api/overview` | Spend & health summary for a window (total spend, by modality, error rate, latency, burn, runway). `error_rate` is `errors/rated`, not `errors/requests` — see below. |
 | `GET /api/usage/series` | Cost/request/error totals bucketed over time (`hour`, `day`, or a size like `5m`/`6h`/`7d`). |
 | `GET /api/usage/facets` | Distinct models, providers and caller clients seen in a window, ranked by requests — the option lists for the dashboard's Models/Providers/Clients filters. |
 | `GET /api/calls` | Browse the per-call ledger (filter by user/model/vendor/status/time, paginated). |
@@ -61,6 +61,27 @@ served **without** auth — it describes shapes only and carries no secrets.
 | `GET /api/catalog` · `GET /api/wires` | Provider presets / registered wire names. |
 | `GET /api/settings` | Read runtime settings. |
 | `GET /api/pricing` | Flattened per-provider model prices. |
+
+### `requests` counts, `rated` grades
+
+Every aggregate that reports both carries three counters, and they answer
+different questions:
+
+| field | meaning |
+|---|---|
+| `requests` | every finalized call — a census. Ranks the rows and labels the bars. |
+| `rated` | the subset any rate may divide by: `requests` minus the calls songguo refused under a configured limit (budget `402`, rate `429`) and the ones the caller abandoned (`499`). |
+| `denied` | the refusals, so a consumer can say why a rate covers fewer calls than the count beside it. |
+
+A success rate is therefore `(rated - errors) / rated`. **`rated == 0` means "no
+opinion", not "everything succeeded"** — a caller whose whole window was budget-
+refused has `requests > 0`, `rated == 0` and `error_rate == 0`, and rendering
+that as 100% is wrong. Check `rated` before dividing.
+
+The refusals are still fully visible in `GET /api/usage/error-codes`,
+`GET /api/feed?sort=failures` and session error counts, which are censuses and
+count every call the caller got no answer for. See "Ledger transparency" in
+`CLAUDE.md` for why the two questions are kept apart.
 
 ### Narrowing an aggregate: `models`, `vendors` and `clients`
 

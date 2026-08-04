@@ -613,7 +613,7 @@ func (s *Store) backfillSessions() error {
 			MIN(c.ts),
 			MAX(COALESCE(c.ts_end, c.ts)),
 			SUM(CASE WHEN c.entrypoint != '' AND c.entrypoint != 'main' THEN 0 ELSE 1 END),
-			SUM(CASE WHEN ` + qualify(sqlFailed, "c") + ` THEN 1 ELSE 0 END),
+			SUM(CASE WHEN ` + qualify(sqlNotServed, "c") + ` THEN 1 ELSE 0 END),
 			COALESCE(SUM(c.input_tokens), 0),
 			COALESCE(SUM(c.output_tokens), 0),
 			COALESCE(SUM(c.cache_read_input_tokens), 0),

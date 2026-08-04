@@ -349,6 +349,55 @@ What we refuse to say is as load-bearing as what we say:
   400` — so abandoned calls quietly *raised* the success rate.
 - A caller pressing Esc (`499`) is nobody's failure, and songguo's own denials
   are not the provider's. Only `IsProviderFailure` counts against a vendor.
+- **A limit the operator configured is the gateway working, and is graded in
+  neither side of a rate either.** A budget refusal (`402`) and our own rate
+  limit (`429`) never reached a provider, so they are evidence about a budget and
+  about nothing else. `calls.IsPolicyDenial` is that set, and the aggregates ask
+  two questions instead of one: `sqlNotServed` — *did the caller get an answer?*
+  — for censuses, and `sqlRated`/`sqlRatedFailure` for every percentage.
+
+### The census and the rate are different questions
+
+This is the distinction the old single `sqlFailed` collapsed, and it cuts both
+ways — each half is a lie told in the other's direction:
+
+- **Dropping a refusal from the census hides it.** So the error-code list, the
+  feed's "failures" sort and a session's error count all still count it. A "946
+  refused" row is exactly what an operator needs to see.
+- **Grading a refusal blames the wrong thing.** A model at 28% with every
+  provider behind it healthy is not a report, it is noise — and the one real
+  signal in the window (an actual provider fault) is buried under it.
+
+Two consequences worth stating, because both were bugs before:
+
+- **Ungraded is not "success".** Leaving a call in the denominator alone converts
+  it into a success, which is how a caller's `499` used to *raise* the rate —
+  the same mistake as rule 1, one field over. `Rated` is the only legal
+  denominator; `Requests` stays a census because it also renders as the window's
+  call count.
+- **`Rated == 0` is "no opinion", never 100%.** A key whose every call was
+  refused has no success rate. The UI renders `—` and names the refusals beside
+  it, so the Success card and the `Budget × 946` row next to it reconcile.
+
+The exemption is deliberately narrower than "songguo's doing". `no_route`,
+`build_failed` and `unmatched` are ours too, and they are **misconfigurations**
+that must stay visible as failures. So is `denied_scope`: a budget resets and a
+rate window passes on their own, but a caller asking for a model its key does not
+carry fails identically forever until an operator changes something — and unlike
+a spent budget, which the Cost KPI and `runway_days` also report, nothing else on
+the page would show it. `TestPolicyDenialIsNarrowerThanGatewayBlame` is the guard.
+
+> History: until 2026-08-04 songguo's own denials counted as failures, on the
+> stated reasoning that "from the caller's seat a refused request did fail". True,
+> and beside the point: the panel is asking whether the *service* works, and a
+> refusal we issued answers a different question. A window with 946 budget
+> refusals put healthy models at 28% and 72%. The same edit split `sqlFailed`
+> into `sqlNotServed` (census) and `sqlRated`/`sqlRatedFailure` (rate) — the old
+> name was deleted rather than redefined, so the four census call sites had to be
+> re-decided at the compiler rather than change meaning by not being edited. It
+> also fixed two things that had been wrong the whole time: `499` counted as a
+> success (in the denominator, out of the numerator), and refusals sat in the
+> latency percentiles as `latency_ms = 0` rows, since `denyCapture` never sets one.
 
 > History: until 2026-08-01 the ledger stated four things that were false. A
 > truncated stream was stored as a clean `200` with no error. A failed WebSocket

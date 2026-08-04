@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ERR_SLUGS,
   blameFor,
+  isPolicyDenial,
   isProviderFailure,
   outcomeLabel,
   outcomeOf,
@@ -119,6 +120,29 @@ describe('blame', () => {
   it('has no verdict on work that has not finished', () => {
     expect(isProviderFailure('in_flight')).toBe(false);
     expect(isProviderFailure('abandoned')).toBe(false);
+  });
+});
+
+describe('isPolicyDenial', () => {
+  it('exempts the limits the operator set, which clear on their own', () => {
+    expect(isPolicyDenial('denied_budget')).toBe(true);
+    expect(isPolicyDenial('denied_rate')).toBe(true);
+  });
+
+  it('is narrower than gateway blame, so our bugs stay visible as failures', () => {
+    // All four are ours, and blameFor cannot tell them apart — which is the whole
+    // reason isPolicyDenial is its own list rather than a blame comparison.
+    for (const o of ['denied_scope', 'no_route', 'build_failed', 'unmatched'] as const) {
+      expect(blameFor(o)).toBe('gateway');
+      expect(isPolicyDenial(o)).toBe(false);
+    }
+  });
+
+  it('claims nothing a provider or a caller did', () => {
+    for (const o of ALL_OUTCOMES) {
+      if (o === 'denied_budget' || o === 'denied_rate') continue;
+      expect(isPolicyDenial(o)).toBe(false);
+    }
   });
 });
 

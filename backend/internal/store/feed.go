@@ -57,9 +57,13 @@ const feedGroupKey = `CASE WHEN session_id != '' THEN session_id ELSE 'req:' || 
 
 // feedErrorExpr counts a call as a failure. It drives both the ORDER BY and the
 // HAVING of the "Failures" sort, so it decides which rows appear on the page,
-// not just their order — which is why it must match sqlFailed exactly rather
-// than approximating it. See the rationale on sqlFailed in stats.go.
-const feedErrorExpr = `SUM(CASE WHEN ` + sqlFailed + ` THEN 1 ELSE 0 END)`
+// not just their order — which is why it must match sqlNotServed exactly rather
+// than approximating it. See the rationale on sqlNotServed in stats.go.
+//
+// The census predicate, not the rate one: a session whose calls were all refused
+// for budget is exactly what somebody sorting by "failures" is looking for, even
+// though those calls are graded in no success rate.
+const feedErrorExpr = `SUM(CASE WHEN ` + sqlNotServed + ` THEN 1 ELSE 0 END)`
 
 // feedTotalTokensExpr is the row's total token count across all input-side parts
 // plus output — the "tokens" sort key. Mirrors the frontend's usage total.

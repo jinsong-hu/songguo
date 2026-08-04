@@ -29,6 +29,14 @@ export interface Overview {
   spend_by_modality: Record<string, number>;
   tokens: TokenTotals;
   requests: number;
+  /**
+   * `requests` minus the calls nothing can be concluded from: refused by songguo
+   * under a configured limit, or abandoned by the caller. `error_rate` is
+   * errors/rated, so `rated === 0` means "no opinion", NOT "all good" — render
+   * `denied` beside any rate derived from this.
+   */
+  rated: number;
+  denied: number;
   errors: number;
   error_rate: number;
   latency_ms: LatencyMS;
@@ -85,6 +93,9 @@ export interface SeriesPoint {
   ts: string;
   cost: number;
   requests: number;
+  /** Graded subset of `requests` — the denominator for `errors`. See Overview. */
+  rated: number;
+  denied: number;
   errors: number;
   /** Fresh (uncached) input tokens. */
   input_tokens: number;
@@ -128,12 +139,20 @@ export interface TokensByModelSeries {
   points: TokensByModelPoint[];
 }
 
-// One bucket of the success-by-model series: request and error counts keyed by
-// dimension key. `requests` and `errors` carry the same key set; success % is
-// derived as (requests - errors) / requests.
+// One bucket of the success-by-model series: call counts keyed by dimension key.
+// All four records carry the same key set.
+//
+// Success % is (rated - errors) / rated — NOT over `requests`. `requests` is the
+// census that ranks the rows and labels the bars; `rated` drops the calls
+// songguo refused and the ones the caller abandoned, because neither says
+// anything about whether the service works. A key with requests > 0 and
+// rated === 0 was refused outright: it has no success rate, and rendering it as
+// 100% is the bug this split exists to prevent.
 export interface SuccessByModelPoint {
   ts: string;
   requests: Record<string, number>;
+  rated: Record<string, number>;
+  denied: Record<string, number>;
   errors: Record<string, number>;
 }
 
@@ -168,6 +187,9 @@ export type BreakdownDimension = 'model' | 'vendor' | 'user' | 'modality';
 export interface BreakdownRow {
   key: string;
   requests: number;
+  /** Graded subset of `requests` — the denominator for `errors`. See Overview. */
+  rated: number;
+  denied: number;
   errors: number;
   input_tokens: number;
   output_tokens: number;
@@ -582,6 +604,9 @@ export interface Price {
 
 export interface VendorStats {
   requests: number;
+  /** Graded subset of `requests` — the denominator for `error_rate`. */
+  rated: number;
+  denied: number;
   errors: number;
   error_rate: number;
   avg_latency_ms: number;
@@ -684,6 +709,9 @@ export interface ServiceProvider {
 
 export interface ServiceStats {
   requests: number;
+  /** Graded subset of `requests` — the denominator for `errors`. */
+  rated: number;
+  denied: number;
   errors: number;
   avg_latency_ms: number;
 }

@@ -395,3 +395,27 @@ func BlameFor(o Outcome) Blame {
 func IsProviderFailure(o Outcome) bool {
 	return BlameFor(o) == BlameProvider && o != OutcomeOK
 }
+
+// IsPolicyDenial reports whether an outcome is songguo enforcing a limit the
+// operator configured — the gateway working, not failing. Such a call never
+// reached a provider, so it is evidence about a budget or a rate limit and about
+// nothing else; it belongs in neither side of a success rate, exactly like a
+// pending row or a caller hanging up.
+//
+// Blame cannot express this. A routing miss and a budget refusal are both
+// BlameGateway, but the first is a misconfiguration that should show up as a
+// failure and the second is the configuration doing its job.
+//
+// The list is explicitly two cases rather than "gateway minus the malfunctions",
+// so a slug added later has to be classified deliberately instead of being
+// absorbed into the exemption by default. In particular OutcomeDeniedScope is
+// NOT here: a budget resets and a rate window passes, but a caller asking for a
+// model its key does not carry fails identically forever until an operator
+// changes something, and no other panel would show it.
+func IsPolicyDenial(o Outcome) bool {
+	switch o {
+	case OutcomeDeniedBudget, OutcomeDeniedRate:
+		return true
+	}
+	return false
+}

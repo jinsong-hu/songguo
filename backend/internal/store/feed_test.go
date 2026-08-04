@@ -1,6 +1,7 @@
 package store
 
 import (
+	"net/http"
 	"testing"
 	"time"
 
@@ -171,5 +172,37 @@ func TestFeedSort(t *testing.T) {
 	}
 	if rows[0].Model != "mC" {
 		t.Errorf("failures lead model = %q, want mC", rows[0].Model)
+	}
+}
+
+// TestFeedFailuresFindsRefusedCalls pins the feed to the CENSUS side of the
+// census/rate split. A call songguo refused for budget is graded in no success
+// rate — but somebody sorting by "failures" is looking for exactly that call,
+// and feedErrorExpr drives the HAVING as well as the ORDER BY, so following the
+// rate predicate here would not merely reorder the page: it would delete the row.
+func TestFeedFailuresFindsRefusedCalls(t *testing.T) {
+	s := openTestStore(t)
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	appends := []calls.Entry{
+		{TS: base.Add(10 * time.Minute), Model: "mOK", Vendor: "v", Status: 200, LatencyMS: 100},
+		{TS: base, Model: "mBroke", Vendor: "v", Status: http.StatusPaymentRequired,
+			Err: calls.ErrBudgetExceeded},
+	}
+	for i, e := range appends {
+		if _, err := s.AppendCall(e); err != nil {
+			t.Fatalf("AppendCall[%d]: %v", i, err)
+		}
+	}
+
+	rows, total, err := s.Feed(CallFilter{FeedSort: "failures"})
+	if err != nil {
+		t.Fatalf("Feed(failures): %v", err)
+	}
+	if total != 1 || len(rows) != 1 {
+		t.Fatalf("failures total/rows = %d/%d, want 1/1 (the refused call)", total, len(rows))
+	}
+	if rows[0].Model != "mBroke" {
+		t.Errorf("failures lead model = %q, want mBroke", rows[0].Model)
 	}
 }

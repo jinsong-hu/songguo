@@ -227,3 +227,22 @@ export function blameFor(o: Outcome | 'unknown'): Blame {
 export function isProviderFailure(o: Outcome | 'unknown'): boolean {
   return blameFor(o) === 'provider' && o !== 'ok';
 }
+
+/**
+ * True when songguo refused the call under a limit the operator configured —
+ * the gateway working, not failing. Mirrors `calls.IsPolicyDenial` in Go; keep
+ * the two lists in step.
+ *
+ * Such a call never reached a provider, so it says something about a budget and
+ * nothing about whether requests are being served: it belongs in neither side of
+ * a success rate, exactly like an in-flight call or one the caller abandoned.
+ *
+ * Narrower than `blameFor(o) === 'gateway'` on purpose. `no_route`,
+ * `build_failed` and `unmatched` are also ours, but they are misconfigurations
+ * that have to stay visible as failures. So is `denied_scope`: a budget resets
+ * and a rate window passes, but a caller asking for a model its key does not
+ * carry fails identically forever, and no other panel would report it.
+ */
+export function isPolicyDenial(o: Outcome | 'unknown'): boolean {
+  return o === 'denied_budget' || o === 'denied_rate';
+}

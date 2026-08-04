@@ -264,8 +264,14 @@ export function OverviewPage() {
   // the backend, top N + "Other"), each carrying a per-bucket bar (request volume
   // + success rate) and an overall success %. Bar height AND color both encode the
   // bucket's success rate, so a short bar always means a bad bucket regardless of
-  // the current view. Buckets with no requests carry rate=null (nothing failed, so
-  // BarStrip draws them as a clean full bar).
+  // the current view.
+  //
+  // The rate is over `rated`, not `requests`: songguo's own refusals under a
+  // configured limit never reached a provider, so they are in neither side of it
+  // (see isPolicyDenial). A bucket can therefore have requests > 0 and rated = 0
+  // — everything refused — which is NOT a clean 100%; it carries rate=null and
+  // `denied` so BarStrip can say what actually happened. Buckets with no traffic
+  // at all also carry rate=null, with denied=0 to tell the two apart.
   const { successRows } = useMemo(() => {
     const data = successSeries.data;
     const keys = data?.models ?? [];
@@ -273,21 +279,45 @@ export function OverviewPage() {
     const points = data?.points ?? [];
     const rows = keys.map((k) => {
       let totReq = 0;
+      let totRated = 0;
+      let totDenied = 0;
       let totErr = 0;
       const bars = points.map((p) => {
         const req = p.requests[k] ?? 0;
+        const rated = p.rated[k] ?? 0;
+        const denied = p.denied[k] ?? 0;
         const err = p.errors[k] ?? 0;
         totReq += req;
+        totRated += rated;
+        totDenied += denied;
         totErr += err;
-        return { req, rate: req > 0 ? (req - err) / req : null, label: bucketLabel(p.ts, bucket) };
+        return {
+          req,
+          denied,
+          rate: rated > 0 ? (rated - err) / rated : null,
+          label: bucketLabel(p.ts, bucket),
+        };
       });
-      // Zero volume → nothing failed, so show a clean 100% rather than an
-      // empty "—" that reads like a problem.
-      return { key: k, bars, requests: totReq, overall: totReq > 0 ? (totReq - totErr) / totReq : 1 };
+      // Nothing graded → no rate. Showing 100% here would read as "all good" for
+      // a row whose every call was refused, which is the opposite of the truth.
+      return {
+        key: k,
+        bars,
+        requests: totReq,
+        denied: totDenied,
+        overall: totRated > 0 ? (totRated - totErr) / totRated : null,
+      };
     });
     return { successRows: rows };
   }, [successSeries.data, reqBucket]);
   const successEmpty = successRows.length === 0;
+  // Refusals across every row in view — the Success panel names them so a
+  // "Budget × 946" row in the error-codes panel beside it reconciles with a rate
+  // that deliberately ignores those 946 calls.
+  const successDenied = useMemo(
+    () => successRows.reduce((n, r) => n + r.denied, 0),
+    [successRows],
+  );
   // Series-key -> display label for the Success dimension (user ids resolve to
   // names in the by-user view, like seriesLabel does for Usage).
   const successSeriesLabel = useMemo(() => {
@@ -466,8 +496,12 @@ export function OverviewPage() {
           icon={<ShieldCheck size={14} />}
           label="Success rate"
           loading={overview.initialLoading}
-          value={ov ? percent(1 - ov.error_rate) : '—'}
-          danger={ov != null && ov.error_rate > 0.05}
+          // error_rate divides by `rated`, so with nothing graded it is 0 and
+          // would render a confident 100% over no evidence at all. Show "—"
+          // instead, and name the refusals whenever there were any.
+          value={ov ? (ov.rated > 0 ? percent(1 - ov.error_rate) : '—') : '—'}
+          sub={ov && ov.denied > 0 ? `${int(ov.denied)} refused` : undefined}
+          danger={ov != null && ov.rated > 0 && ov.error_rate > 0.05}
         />
         <Kpi
           icon={<DatabaseZap size={14} />}
@@ -641,6 +675,10 @@ export function OverviewPage() {
       <div className={styles.grid2}>
         <Panel
           title={successDim === 'vendor' ? 'By provider' : successDim === 'user' ? 'By user' : 'By service'}
+          // Refusals are in neither side of these percentages, so say so here.
+          // Without it the panel is unreconcilable with the "Budget × N" row in
+          // Top error codes right beside it, and the rate looks simply wrong.
+          caption={successDenied > 0 ? `${int(successDenied)} refused · not counted` : undefined}
         >
           <Frame r={successSeries} height="" empty={successEmpty}>
             <div className={styles.svcTable} role="list">
@@ -1014,6 +1052,9 @@ function bandColor(rate: number | null): string {
 
 interface SuccessBar {
   req: number;
+  /** Calls songguo refused under a configured limit — graded in neither side. */
+  denied: number;
+  /** null when nothing in this bucket was graded: no traffic, or all refused. */
   rate: number | null;
   label: string;
 }
@@ -1025,23 +1066,37 @@ interface SuccessBar {
  * current view or traffic. No-traffic buckets (rate=null) count as a clean 100% —
  * nothing failed — so they render a full-height green bar rather than a gap; the
  * worst band still stands 20% tall so a 0%-ok bar is a visible red stub.
+ *
+ * A bucket whose calls were all refused also has no rate, but it is NOT the same
+ * as no traffic and must not borrow that green bar: it gets a full-height muted
+ * one, which reads as "nothing to grade here" rather than "all good".
  */
 function BarStrip({ bars }: { bars: SuccessBar[] }) {
   return (
     <div className={styles.barStrip} aria-hidden="true">
       {bars.map((b, i) => {
         // No traffic → nothing failed, so render a clean full-height 100% bar
-        // rather than a baseline tick that reads like a gap or a problem.
+        // rather than a baseline tick that reads like a gap or a problem. But an
+        // ungraded bucket that DID have calls was refused, not idle: same full
+        // height so it still reads as "no problem here", muted so it cannot be
+        // mistaken for a bucket that actually succeeded.
+        const refusedOnly = b.rate == null && b.denied > 0;
         const { color, height } = band(b.rate == null ? 1 : b.rate);
         return (
           <div key={i} className={styles.barSlot}>
             <div
               className={styles.bar}
-              style={{ height: `${height}%`, background: color }}
+              style={{
+                height: `${height}%`,
+                background: refusedOnly ? 'var(--text-muted)' : color,
+              }}
               title={
-                b.rate == null
-                  ? `${b.label}: no requests`
-                  : `${b.label}: ${Math.round(b.rate * 100)}% ok · ${b.req} req`
+                refusedOnly
+                  ? `${b.label}: ${b.denied} refused · nothing to grade`
+                  : b.rate == null
+                    ? `${b.label}: no requests`
+                    : `${b.label}: ${Math.round(b.rate * 100)}% ok · ${b.req} req` +
+                      (b.denied > 0 ? ` · ${b.denied} refused` : '')
               }
             />
           </div>

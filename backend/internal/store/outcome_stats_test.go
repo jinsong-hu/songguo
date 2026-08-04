@@ -2,6 +2,7 @@ package store
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,7 +39,7 @@ func seedOutcomeCalls(t *testing.T, s *Store) {
 
 const statusClientClosed = 499
 
-func TestOverviewStatsGivesPendingNoVerdict(t *testing.T) {
+func TestOverviewStatsGradesOnlyWhatItHasAnOpinionOn(t *testing.T) {
 	s := openTestStore(t)
 	seedOutcomeCalls(t, s)
 
@@ -46,20 +47,33 @@ func TestOverviewStatsGivesPendingNoVerdict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OverviewStats: %v", err)
 	}
-	// 5 finalized rows; the pending one is in neither numerator nor denominator.
-	// Counting it as a success (the old behavior — -1 is not >= 400) let
-	// abandoned calls quietly raise the success rate.
+	// Requests stays a census of the 5 finalized rows — it renders as the
+	// window's call count and has to reconcile with the facet counts beside it.
+	// Only the pending row is missing, because it has not finished.
 	if st.Requests != 5 {
-		t.Errorf("Requests = %d, want 5 (pending excluded from the denominator)", st.Requests)
+		t.Errorf("Requests = %d, want 5 (every finalized call, refusals included)", st.Requests)
 	}
-	// 500 and the budget denial failed; the 200 served, our 429 is a denial that
-	// also failed, and the client cancellation is nobody's failure.
-	if st.Errors != 3 {
-		t.Errorf("Errors = %d, want 3 (500 + our 429 + budget denial; not the 499)", st.Errors)
+	// Three of those five say nothing about whether requests get served: two
+	// refusals songguo issued under configured limits, and one caller who left.
+	if st.Rated != 2 {
+		t.Errorf("Rated = %d, want 2 (the 200 and the 500; not our 429/402, not the 499)", st.Rated)
+	}
+	if st.Denied != 2 {
+		t.Errorf("Denied = %d, want 2 (our rate limit + our budget refusal)", st.Denied)
+	}
+	// Only the provider's 500. Counting our own refusals here is what put a
+	// healthy model at 28% while every provider behind it was fine.
+	if st.Errors != 1 {
+		t.Errorf("Errors = %d, want 1 (the 500 alone)", st.Errors)
+	}
+	// The three excluded rows leave BOTH sides. Landing in the denominator only
+	// would silently reclassify each of them as a success.
+	if st.Requests-st.Rated != 3 {
+		t.Errorf("ungraded = %d, want 3", st.Requests-st.Rated)
 	}
 }
 
-func TestOverviewStatsExcludesPendingFromLatency(t *testing.T) {
+func TestOverviewStatsKeepsZeroLatencyRowsOutOfThePercentiles(t *testing.T) {
 	s := openTestStore(t)
 	seedOutcomeCalls(t, s)
 
@@ -67,10 +81,16 @@ func TestOverviewStatsExcludesPendingFromLatency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OverviewStats: %v", err)
 	}
-	// Sorted finalized latencies: [3, 5, 10, 100, 200]. A pending row's 0 would
-	// sort first and drag every percentile down a rank.
-	if st.P50 != 10 {
-		t.Errorf("P50 = %d, want 10 (a pending row's latency_ms=0 must not count)", st.P50)
+	// Graded latencies: [100, 200]. denyCapture never sets latency_ms, so in
+	// production a refusal is a 0 that sorts first and drags every percentile
+	// down a rank — the same way a pending row's 0 used to. (The fixture gives
+	// them 3ms and 5ms so this test fails loudly if they creep back in, rather
+	// than agreeing with the bug by coincidence.)
+	if st.P50 != 100 {
+		t.Errorf("P50 = %d, want 100 (only graded calls have a service latency)", st.P50)
+	}
+	if st.P95 != 200 {
+		t.Errorf("P95 = %d, want 200", st.P95)
 	}
 }
 
@@ -89,7 +109,77 @@ func TestClientCancellationIsNotAProviderFailure(t *testing.T) {
 		t.Errorf("vendor errors = %d, want 1 (only the provider's own 500)", v.Errors)
 	}
 	if v.Requests != 5 {
-		t.Errorf("vendor requests = %d, want 5 (pending excluded)", v.Requests)
+		t.Errorf("vendor requests = %d, want 5 (census: pending excluded)", v.Requests)
+	}
+	// The rate is Errors/Rated. Over Requests it would read 1/5 = 20% instead of
+	// 1/2 = 50%, understating a provider that failed half the calls it was given
+	// because three others never reached it.
+	if v.Rated != 2 {
+		t.Errorf("vendor rated = %d, want 2", v.Rated)
+	}
+	if v.Denied != 2 {
+		t.Errorf("vendor denied = %d, want 2", v.Denied)
+	}
+	// Averaged over the graded set for the same reason the percentiles are.
+	if v.AvgLatency != 150 {
+		t.Errorf("vendor avg latency = %v, want 150 (mean of 100 and 200)", v.AvgLatency)
+	}
+}
+
+func TestRefusalsAreCountedButNotGraded(t *testing.T) {
+	s := openTestStore(t)
+	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	// Every call for this model was refused for budget. Nothing was learned about
+	// the model, so it has no success rate — and reporting 100% (which is what a
+	// denominator of Requests, or of zero, produces) is the failure mode this
+	// whole split exists to prevent.
+	for i := 0; i < 3; i++ {
+		e := calls.Entry{
+			Status: http.StatusPaymentRequired, Err: calls.ErrBudgetExceeded,
+			TS: base.Add(time.Duration(i) * time.Minute), UserID: "u", Model: "broke", Vendor: "v",
+		}
+		if _, err := s.AppendCall(e); err != nil {
+			t.Fatalf("AppendCall[%d]: %v", i, err)
+		}
+	}
+
+	until := base.Add(time.Hour)
+	models, buckets, err := s.SuccessByModelSeries(Scope{}, BreakdownByModel, base, until, time.Hour)
+	if err != nil {
+		t.Fatalf("SuccessByModelSeries: %v", err)
+	}
+	// Ranking is by the census count, so a wholly-refused key still gets its own
+	// row instead of vanishing into "Other" — the case where the panel most needs
+	// to say what happened.
+	if len(models) != 1 || models[0] != "broke" {
+		t.Fatalf("models = %v, want [broke]", models)
+	}
+	if len(buckets) != 1 {
+		t.Fatalf("buckets = %d, want 1", len(buckets))
+	}
+	b := buckets[0]
+	if b.Requests["broke"] != 3 {
+		t.Errorf("requests = %d, want 3 (the refusals are still counted)", b.Requests["broke"])
+	}
+	if b.Rated["broke"] != 0 {
+		t.Errorf("rated = %d, want 0 (nothing here can be graded)", b.Rated["broke"])
+	}
+	if b.Denied["broke"] != 3 {
+		t.Errorf("denied = %d, want 3 (so the panel can say why the rate is empty)", b.Denied["broke"])
+	}
+	if b.Errors["broke"] != 0 {
+		t.Errorf("errors = %d, want 0 (a refusal is not the service failing)", b.Errors["broke"])
+	}
+
+	// The same calls remain fully visible in the census that ranks error codes.
+	// A rate that ignores them and a list that shows them is the intended shape;
+	// a list that ALSO dropped them would hide 946 refusals from the operator.
+	rows, err := s.TopErrorCodes(Scope{}, "", "", nil, nil, 8)
+	if err != nil {
+		t.Fatalf("TopErrorCodes: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Outcome != string(calls.OutcomeDeniedBudget) || rows[0].Count != 3 {
+		t.Errorf("error codes = %+v, want one denied_budget row of 3", rows)
 	}
 }
 
@@ -172,6 +262,41 @@ func TestErrorClassCountsSeparatesGatewayFromProvider(t *testing.T) {
 	}
 	if c.ClientError != 0 {
 		t.Errorf("ClientError = %d, want 0 (the 499 is the caller leaving, not an error)", c.ClientError)
+	}
+}
+
+func TestQualifyRewritesEveryPredicate(t *testing.T) {
+	// qualify is a substring rewrite, safe only because no slug in the predicates
+	// contains "status" or "err " with its trailing space. Both ways of breaking
+	// that are silent — the one caller's outer scope has a single table, so an
+	// unqualified column still resolves and the query still runs. This is the
+	// only thing standing between a new slug and a wrong session error count.
+	for _, pred := range []string{
+		sqlHasVerdict, sqlNotCallerAbort, sqlPolicyDenied,
+		sqlNotServed, sqlRated, sqlRatedFailure, sqlProviderFailed,
+	} {
+		got := qualify(pred, "c")
+		// Every column reference must have picked up the alias...
+		if strings.Contains(got, "c.c.") {
+			t.Errorf("qualify(%q) double-prefixed: %q", pred, got)
+		}
+		for _, bare := range []string{" status ", "(status ", " err ", "(err "} {
+			if strings.Contains(" "+got, bare) {
+				t.Errorf("qualify(%q) left a bare column %q: %q", pred, bare, got)
+			}
+		}
+		// ...and no string literal may have been rewritten along with them.
+		for _, lit := range []string{
+			"'client_gone'", "'budget_exceeded'", "'rate_limited'",
+			"'transport_error:%'", "'stream_error:%'",
+		} {
+			if strings.Contains(pred, lit) && !strings.Contains(got, lit) {
+				t.Errorf("qualify(%q) corrupted the literal %s: %q", pred, lit, got)
+			}
+		}
+	}
+	if got := qualify(sqlRated, ""); got != sqlRated {
+		t.Errorf("qualify with no alias must be identity, got %q", got)
 	}
 }
 

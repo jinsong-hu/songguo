@@ -13,11 +13,22 @@ import (
 // OverviewStats summarizes request volume, error rate, and latency
 // percentiles over a time window. Latencies are in milliseconds.
 //
+// Requests is a census — every finalized call, including the ones songguo
+// refused — because it also renders as the window's call count and has to
+// reconcile with the facet counts beside it. Rated is the subset we have an
+// opinion about, and the only legal denominator: Errors/Rated. Denied is the
+// gap, reported so the UI can say why a rate covers fewer calls than the count
+// above it rather than leaving a silent discrepancy.
+//
 // An "error" is any row whose upstream status is 0 (transport failure) or
 // >= 400. Percentiles use the nearest-rank method over the sorted, non-empty
-// set of latencies; they are 0 when there are no rows.
+// set of latencies drawn from the Rated set — a refusal is finalized with
+// latency_ms = 0 and those zeros sort first and drag every percentile down a
+// rank, the same way pending rows used to. They are 0 when there are no rows.
 type OverviewStats struct {
 	Requests     int
+	Rated        int
+	Denied       int
 	Errors       int
 	P50          int64
 	P95          int64
@@ -32,18 +43,28 @@ type OverviewStats struct {
 
 // VendorStat holds per-vendor request/error counts, average latency, and the
 // status of the most recent row (by ts) for that vendor.
+//
+// Requests/Rated/Denied carry the same meanings as on OverviewStats: a census, a
+// denominator, and the gap between them. Errors here is the narrowest count in
+// the package — only what the provider itself did wrong — so the rate to render
+// is Errors/Rated.
 type VendorStat struct {
 	Requests   int
+	Rated      int
+	Denied     int
 	Errors     int
-	AvgLatency float64 // milliseconds
+	AvgLatency float64 // milliseconds, over the rated set
 	LastStatus int     // status of the most recent row for this vendor
 }
 
-// ModelStat holds per-model request/error counts and average latency.
+// ModelStat holds per-model request/error counts and average latency. Requests
+// is a census and Rated is the denominator — see OverviewStats.
 type ModelStat struct {
 	Requests   int
+	Rated      int
+	Denied     int
 	Errors     int
-	AvgLatency float64 // milliseconds
+	AvgLatency float64 // milliseconds, over the rated set
 }
 
 // Scope narrows which rows of the call log an aggregate query considers. It
@@ -197,10 +218,26 @@ func (s *Store) OverviewStats(sc Scope, since, until *time.Time) (OverviewStats,
 			continue
 		}
 		out.Requests++
-		if isErrorStatus(status, callErr) {
-			out.Errors++
+		// A refusal songguo issued under a configured limit is graded in neither
+		// direction, and a caller who hung up is graded in neither either —
+		// counting the latter in the denominator alone quietly made it a success.
+		// Both leave the latency set with the rate: denyCapture never sets
+		// latency_ms, so a refusal is a 0 that sorts first and drags every
+		// percentile down a rank, exactly as pending rows used to.
+		//
+		// TTFT and output TPS are not filtered here. They have their own > 0
+		// guards below, which already exclude every refusal, and a cancelled call
+		// that streamed for a while did measure a real first-token time. Dropping
+		// those would discard a good sample to fix a problem they do not have.
+		if isRated(status, callErr) {
+			out.Rated++
+			if isErrorStatus(status, callErr) {
+				out.Errors++
+			}
+			latencies = append(latencies, latency)
+		} else if calls.IsPolicyDenial(calls.OutcomeOf(status, callErr)) {
+			out.Denied++
 		}
-		latencies = append(latencies, latency)
 		if ttft > 0 {
 			ttfts = append(ttfts, ttft)
 		}
@@ -231,12 +268,16 @@ func (s *Store) OverviewStats(sc Scope, since, until *time.Time) (OverviewStats,
 func (s *Store) VendorStats(since, until *time.Time) (map[string]VendorStat, error) {
 	clause, args := windowClause(Scope{}, since, until)
 
-	// Aggregate counts and average latency per vendor.
+	// Aggregate counts and average latency per vendor. Errors beside Requests was
+	// always the narrow sqlProviderFailed, so before Rated existed every vendor's
+	// error rate was diluted by refusals that never reached it.
 	aggRows, err := s.db.Query(
 		`SELECT vendor,
 		        `+sqlCountWhere(sqlHasVerdict)+`,
+		        `+sqlCountWhere(sqlRated)+`,
+		        `+sqlCountWhere(sqlPolicyDenied+` AND `+sqlHasVerdict)+`,
 		        `+sqlCountWhere(sqlProviderFailed)+`,
-		        COALESCE(AVG(CASE WHEN `+sqlHasVerdict+` THEN latency_ms END), 0)
+		        COALESCE(AVG(CASE WHEN `+sqlRated+` THEN latency_ms END), 0)
 		   FROM calls`+clause+`
 		  GROUP BY vendor`,
 		args...,
@@ -252,7 +293,8 @@ func (s *Store) VendorStats(since, until *time.Time) (map[string]VendorStat, err
 			vendor string
 			stat   VendorStat
 		)
-		if err := aggRows.Scan(&vendor, &stat.Requests, &stat.Errors, &stat.AvgLatency); err != nil {
+		if err := aggRows.Scan(&vendor, &stat.Requests, &stat.Rated, &stat.Denied,
+			&stat.Errors, &stat.AvgLatency); err != nil {
 			return nil, fmt.Errorf("store: scan vendor stats: %w", err)
 		}
 		out[vendor] = stat
@@ -308,8 +350,10 @@ func (s *Store) ModelStats(since, until *time.Time) (map[string]ModelStat, error
 	rows, err := s.db.Query(
 		`SELECT model,
 		        `+sqlCountWhere(sqlHasVerdict)+`,
-		        `+sqlCountWhere(sqlFailed)+`,
-		        COALESCE(AVG(CASE WHEN `+sqlHasVerdict+` THEN latency_ms END), 0)
+		        `+sqlCountWhere(sqlRated)+`,
+		        `+sqlCountWhere(sqlPolicyDenied+` AND `+sqlHasVerdict)+`,
+		        `+sqlCountWhere(sqlRatedFailure)+`,
+		        COALESCE(AVG(CASE WHEN `+sqlRated+` THEN latency_ms END), 0)
 		   FROM calls`+clause+`
 		  GROUP BY model`,
 		args...)
@@ -324,7 +368,8 @@ func (s *Store) ModelStats(since, until *time.Time) (map[string]ModelStat, error
 			model string
 			stat  ModelStat
 		)
-		if err := rows.Scan(&model, &stat.Requests, &stat.Errors, &stat.AvgLatency); err != nil {
+		if err := rows.Scan(&model, &stat.Requests, &stat.Rated, &stat.Denied,
+			&stat.Errors, &stat.AvgLatency); err != nil {
 			return nil, fmt.Errorf("store: scan model stats: %w", err)
 		}
 		out[model] = stat
@@ -488,10 +533,13 @@ func breakdownColumn(d BreakdownDimension) (string, bool) {
 
 // BreakdownRow is one group's aggregates in a Breakdown result. CachedTokens
 // (cache reads), CacheCreationTokens, and InputTokens are disjoint input parts;
-// ThinkingTokens is a subset of OutputTokens.
+// ThinkingTokens is a subset of OutputTokens. Requests is a census and Rated is
+// the denominator for Errors — see OverviewStats.
 type BreakdownRow struct {
 	Key                 string
 	Requests            int
+	Rated               int
+	Denied              int
 	Errors              int
 	InputTokens         float64
 	OutputTokens        float64
@@ -515,14 +563,16 @@ func (s *Store) Breakdown(dimension BreakdownDimension, since, until *time.Time)
 	rows, err := s.db.Query(
 		`SELECT `+col+` AS k,
 		        `+sqlCountWhere(sqlHasVerdict)+`,
-		        `+sqlCountWhere(sqlFailed)+`,
+		        `+sqlCountWhere(sqlRated)+`,
+		        `+sqlCountWhere(sqlPolicyDenied+` AND `+sqlHasVerdict)+`,
+		        `+sqlCountWhere(sqlRatedFailure)+`,
 		        COALESCE(SUM(input_tokens), 0),
 		        COALESCE(SUM(output_tokens), 0),
 		        COALESCE(SUM(cache_read_input_tokens), 0),
 		        COALESCE(SUM(cache_creation_input_tokens), 0),
 		        COALESCE(SUM(thinking_tokens), 0),
 		        COALESCE(SUM(cost), 0),
-		        COALESCE(AVG(CASE WHEN `+sqlHasVerdict+` THEN latency_ms END), 0)
+		        COALESCE(AVG(CASE WHEN `+sqlRated+` THEN latency_ms END), 0)
 		   FROM calls`+clause+`
 		  GROUP BY k
 		  ORDER BY COUNT(*) DESC, k ASC`,
@@ -536,7 +586,7 @@ func (s *Store) Breakdown(dimension BreakdownDimension, since, until *time.Time)
 	var out []BreakdownRow
 	for rows.Next() {
 		var r BreakdownRow
-		if err := rows.Scan(&r.Key, &r.Requests, &r.Errors,
+		if err := rows.Scan(&r.Key, &r.Requests, &r.Rated, &r.Denied, &r.Errors,
 			&r.InputTokens, &r.OutputTokens, &r.CachedTokens, &r.CacheCreationTokens,
 			&r.ThinkingTokens, &r.Cost, &r.AvgLatencyMS); err != nil {
 			return nil, fmt.Errorf("store: scan breakdown: %w", err)
@@ -581,7 +631,7 @@ func (s *Store) ErrorClassCounts(since, until *time.Time) (ErrorClasses, error) 
 			// status = 0 is legacy rows, which had no slug to carry the detail.
 			sqlHasVerdict+` AND (err LIKE 'transport_error:%' OR err LIKE 'stream_error:%'`+
 				` OR (err = '' AND status = 0))`)+`, 0),
-		   COALESCE(`+sqlCountWhere(sqlFailed+` AND NOT (`+sqlProviderFailed+`)`)+`, 0)
+		   COALESCE(`+sqlCountWhere(sqlNotServed+` AND NOT (`+sqlProviderFailed+`)`)+`, 0)
 		 FROM calls`+clause, args...,
 	).Scan(&c.RateLimited, &c.ClientError, &c.ServerError, &c.Transport, &c.Gateway)
 	if err != nil {
@@ -605,7 +655,14 @@ type ErrorCodeRow struct {
 
 // TopErrorCodes returns error rows grouped by upstream status, ranked by count
 // (desc, tie-broken by status asc), capped at limit. Only error rows are counted
-// — status 0 (transport failure) or >= 400, matching isErrorStatus. When dim is a
+// — status 0 (transport failure) or >= 400, matching isErrorStatus.
+//
+// This is a census, so it counts every call the caller got no answer for,
+// including the budget and rate refusals that no success rate grades. Those two
+// panels sit side by side on the Overview, so the Success card names its refusal
+// count: a "Budget × 946" row here and a 97% beside it have to reconcile.
+//
+// When dim is a
 // recognized dimension and key is non-empty, the count is scoped to rows whose
 // dimension column equals key (e.g. one model, vendor, or user); an empty key
 // leaves the result unscoped. An unrecognized non-empty dim returns
@@ -617,7 +674,7 @@ func (s *Store) TopErrorCodes(sc Scope, dim BreakdownDimension, key string, sinc
 	if limit <= 0 {
 		limit = 8
 	}
-	conds := []string{"(" + sqlFailed + ")"}
+	conds := []string{"(" + sqlNotServed + ")"}
 	var args []any
 	if since != nil {
 		conds = append(conds, "ts >= ?")
@@ -723,6 +780,8 @@ type SeriesPoint struct {
 	Bucket              time.Time
 	Cost                float64
 	Requests            int
+	Rated               int
+	Denied              int
 	Errors              int
 	InputTokens         float64
 	OutputTokens        float64
@@ -769,13 +828,15 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 		`SELECT (ts / ?) * ? AS bucket_start,
 		        COALESCE(SUM(cost), 0),
 		        `+sqlCountWhere(sqlHasVerdict)+`,
-		        `+sqlCountWhere(sqlFailed)+`,
+		        `+sqlCountWhere(sqlRated)+`,
+		        `+sqlCountWhere(sqlPolicyDenied+` AND `+sqlHasVerdict)+`,
+		        `+sqlCountWhere(sqlRatedFailure)+`,
 		        COALESCE(SUM(input_tokens), 0),
 		        COALESCE(SUM(output_tokens), 0),
 		        COALESCE(SUM(cache_read_input_tokens), 0),
 		        COALESCE(SUM(cache_creation_input_tokens), 0),
 		        COALESCE(SUM(thinking_tokens), 0),
-		        COALESCE(AVG(CASE WHEN `+sqlHasVerdict+` THEN latency_ms END), 0),
+		        COALESCE(AVG(CASE WHEN `+sqlRated+` THEN latency_ms END), 0),
 		        COALESCE(AVG(CASE WHEN ttft_ms > 0 THEN ttft_ms END), 0),
 		        COALESCE(AVG(CASE
 		          WHEN generation_ms > 0 AND output_tokens > 0
@@ -794,6 +855,8 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 	type agg struct {
 		cost         float64
 		requests     int
+		rated        int
+		denied       int
 		errors       int
 		inTokens     float64
 		outTokens    float64
@@ -810,7 +873,7 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 			bucketStart int64
 			a           agg
 		)
-		if err := rows.Scan(&bucketStart, &a.cost, &a.requests, &a.errors,
+		if err := rows.Scan(&bucketStart, &a.cost, &a.requests, &a.rated, &a.denied, &a.errors,
 			&a.inTokens, &a.outTokens, &a.cacheTok, &a.cacheCreate, &a.thinkingTok,
 			&a.avgLat, &a.avgTTFT, &a.avgOutputTPS); err != nil {
 			return nil, fmt.Errorf("store: scan usage series: %w", err)
@@ -828,6 +891,8 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 		if a, ok := byBucket[bs]; ok {
 			p.Cost = a.cost
 			p.Requests = a.requests
+			p.Rated = a.rated
+			p.Denied = a.denied
 			p.Errors = a.errors
 			p.InputTokens = a.inTokens
 			p.OutputTokens = a.outTokens
@@ -1063,12 +1128,22 @@ func (s *Store) TokensByModelSeries(sc Scope, dim BreakdownDimension, since, unt
 }
 
 // SuccessByModelBucket is one time bucket of the success-rate series: the bucket
-// start (UTC) and the request/error counts per dimension key. Requests and Errors
-// carry the same key set (top N by request volume + "Other"). Callers derive the
-// per-key success rate as (Requests-Errors)/Requests.
+// start (UTC) and the call counts per dimension key. All four maps carry the same
+// key set (top N by request volume + "Other").
+//
+// Callers derive the per-key success rate as (Rated-Errors)/Rated — NOT over
+// Requests. Requests is the census, which is what the bar's tooltip and the
+// ranking use; Rated is the subset we grade; Denied is the refusals sitting
+// between them, reported so the panel can name them instead of leaving a rate
+// that silently covers fewer calls than the count beside it.
+//
+// A key can have Requests > 0 and Rated == 0 — every call in the bucket refused.
+// That is not a 100%; it has no rate at all, and callers must render it as such.
 type SuccessByModelBucket struct {
 	Bucket   time.Time
 	Requests map[string]int
+	Rated    map[string]int
+	Denied   map[string]int
 	Errors   map[string]int
 }
 
@@ -1081,6 +1156,10 @@ type SuccessByModelBucket struct {
 // total requests with "Other" (when present) last. Bucket timestamps are UTC. An
 // "error" is any row whose status is 0 (transport failure) or >= 400. Empty key
 // values are reported as "unknown". An unrecognized dimension returns ErrBadDimension.
+//
+// Ranking is by the census count, not the graded one, so a key whose every call
+// was refused still gets its own row rather than disappearing into "Other" —
+// which is the case where the panel most needs to say what happened.
 func (s *Store) SuccessByModelSeries(sc Scope, dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []SuccessByModelBucket, error) {
 	col, ok := breakdownColumn(dim)
 	if !ok {
@@ -1112,7 +1191,9 @@ func (s *Store) SuccessByModelSeries(sc Scope, dim BreakdownDimension, since, un
 		fmt.Sprintf(`SELECT (ts / ?) * ? AS bucket_start,
 		        %s,
 		        `+sqlCountWhere(sqlHasVerdict)+`,
-		        `+sqlCountWhere(sqlFailed)+`
+		        `+sqlCountWhere(sqlRated)+`,
+		        `+sqlCountWhere(sqlPolicyDenied+` AND `+sqlHasVerdict)+`,
+		        `+sqlCountWhere(sqlRatedFailure)+`
 		   FROM calls
 		  WHERE ts >= ? AND ts < ?%s
 		  GROUP BY bucket_start, %s`, col, scopeSQL, col),
@@ -1123,29 +1204,35 @@ func (s *Store) SuccessByModelSeries(sc Scope, dim BreakdownDimension, since, un
 	}
 	defer rows.Close()
 
-	type cell struct {
-		bucket   int64
-		model    string
+	// counts travels as one value rather than four parallel maps, so the four
+	// numbers cannot drift out of step with each other during the fold.
+	type counts struct {
 		requests int
+		rated    int
+		denied   int
 		errors   int
+	}
+	type cell struct {
+		bucket int64
+		model  string
+		counts counts
 	}
 	var cells []cell
 	modelTotals := make(map[string]int)
 	for rows.Next() {
 		var (
-			b        int64
-			model    string
-			requests int
-			errCount int
+			b     int64
+			model string
+			c     counts
 		)
-		if err := rows.Scan(&b, &model, &requests, &errCount); err != nil {
+		if err := rows.Scan(&b, &model, &c.requests, &c.rated, &c.denied, &c.errors); err != nil {
 			return nil, nil, fmt.Errorf("store: scan success by model series: %w", err)
 		}
 		if model == "" {
 			model = "unknown"
 		}
-		cells = append(cells, cell{bucket: b, model: model, requests: requests, errors: errCount})
-		modelTotals[model] += requests
+		cells = append(cells, cell{bucket: b, model: model, counts: c})
+		modelTotals[model] += c.requests
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, fmt.Errorf("store: success by model series: %w", err)
@@ -1175,26 +1262,23 @@ func (s *Store) SuccessByModelSeries(sc Scope, dim BreakdownDimension, since, un
 	hasOther := len(ranked) > len(models)
 
 	// Fold each cell into its bucket, remapping non-top models to "Other".
-	// Requests and errors are folded in parallel so they share the same key set.
-	perBucketReq := make(map[int64]map[string]int)
-	perBucketErr := make(map[int64]map[string]int)
+	perBucket := make(map[int64]map[string]counts)
 	for _, c := range cells {
 		key := c.model
 		if !top[key] {
 			key = otherModelKey
 		}
-		mr := perBucketReq[c.bucket]
-		if mr == nil {
-			mr = make(map[string]int)
-			perBucketReq[c.bucket] = mr
+		m := perBucket[c.bucket]
+		if m == nil {
+			m = make(map[string]counts)
+			perBucket[c.bucket] = m
 		}
-		mr[key] += c.requests
-		me := perBucketErr[c.bucket]
-		if me == nil {
-			me = make(map[string]int)
-			perBucketErr[c.bucket] = me
-		}
-		me[key] += c.errors
+		agg := m[key]
+		agg.requests += c.counts.requests
+		agg.rated += c.counts.rated
+		agg.denied += c.counts.denied
+		agg.errors += c.counts.errors
+		m[key] = agg
 	}
 	if hasOther {
 		models = append(models, otherModelKey)
@@ -1203,23 +1287,28 @@ func (s *Store) SuccessByModelSeries(sc Scope, dim BreakdownDimension, since, un
 	out := make([]SuccessByModelBucket, 0, count)
 	for i := int64(0); i < count; i++ {
 		bs := startMs + i*bucketMs
-		requests := make(map[string]int, len(models))
-		errCounts := make(map[string]int, len(models))
-		for _, m := range models {
-			requests[m] = 0
-			errCounts[m] = 0
-		}
-		for m, v := range perBucketReq[bs] {
-			requests[m] += v
-		}
-		for m, v := range perBucketErr[bs] {
-			errCounts[m] += v
-		}
-		out = append(out, SuccessByModelBucket{
+		b := SuccessByModelBucket{
 			Bucket:   time.UnixMilli(bs).UTC(),
-			Requests: requests,
-			Errors:   errCounts,
-		})
+			Requests: make(map[string]int, len(models)),
+			Rated:    make(map[string]int, len(models)),
+			Denied:   make(map[string]int, len(models)),
+			Errors:   make(map[string]int, len(models)),
+		}
+		// Every key is seeded to zero first so all four maps carry the same key
+		// set even in a bucket where nothing happened.
+		for _, m := range models {
+			b.Requests[m] = 0
+			b.Rated[m] = 0
+			b.Denied[m] = 0
+			b.Errors[m] = 0
+		}
+		for m, c := range perBucket[bs] {
+			b.Requests[m] += c.requests
+			b.Rated[m] += c.rated
+			b.Denied[m] += c.denied
+			b.Errors[m] += c.errors
+		}
+		out = append(out, b)
 	}
 	return models, out, nil
 }
@@ -1389,12 +1478,20 @@ func (s *Store) CacheByModelSeries(sc Scope, dim BreakdownDimension, since, unti
 	return models, out, nil
 }
 
-// --- What counts as a failure -------------------------------------------------
+// --- What counts as a failure, and what is graded at all ----------------------
 //
 // These are the SQL form of calls.OutcomeOf, named so the aggregates below
 // cannot drift apart from each other or from the pill rendered beside them.
 //
-// Three rules, each of which the old `status = 0 OR status >= 400` broke:
+// Two questions live here, and conflating them is what every past bug in this
+// block was:
+//
+//   - a CENSUS question — "did the caller get an answer?" — which is what an
+//     error list, a failure feed and a session's error count are counting;
+//   - a RATE question — "of the calls we have an opinion about, how many
+//     failed?" — which is the only thing a percentage may be built from.
+//
+// Four rules, each of which some earlier form of this block broke:
 //
 //  1. A pending row carries no verdict. It used to count as a SUCCESS — -1 is
 //     not >= 400 — so abandoned calls quietly raised the success rate. Now
@@ -1403,10 +1500,23 @@ func (s *Store) CacheByModelSeries(sc Scope, dim BreakdownDimension, since, unti
 //  2. A client cancellation is not a failure. router.Classify already calls it
 //     neutral and proxy.go says 499 exists to stay out of the error rate, yet
 //     every ratio counted it. A user pressing Esc must not mark a provider down.
+//     It was removed from the numerator but left in the denominator, which meant
+//     it counted as a SUCCESS instead — the same mistake as rule 1, one field
+//     over. sqlRated is the fix.
 //  3. The status alone cannot say whose fault it was. songguo mints 402/403/404/
 //     429/502 of its own, so a budget denial was indistinguishable from the
 //     provider rejecting the request. sqlProviderFailed is the narrower question
 //     and is what per-vendor stats must use.
+//  4. A limit the operator configured is the gateway working, not failing. A
+//     budget refusal never reached a provider; grading it says something about a
+//     budget and nothing about whether requests get served. See
+//     calls.IsPolicyDenial for why this is narrower than "songguo's doing" —
+//     a routing miss is also ours, and stays a failure.
+//
+// Rule 4 is why there is no `sqlFailed` any more. The name answered both
+// questions at once, and when they parted the four census call sites would have
+// changed meaning by NOT being edited. Two names that each answer one question
+// make the compiler ask at every site.
 const (
 	// sqlHasVerdict: the call finished, so it can be counted at all.
 	sqlHasVerdict = `status <> -1`
@@ -1414,11 +1524,30 @@ const (
 	// sqlNotCallerAbort: exclude calls the caller walked away from.
 	sqlNotCallerAbort = `err <> 'client_gone'`
 
-	// sqlFailed: the caller got no answer, and it was not their own doing.
-	// Includes songguo's denials — from the caller's seat a refused request did
-	// fail. `status = 0` matches legacy rows only; nothing writes it now.
-	sqlFailed = sqlHasVerdict + ` AND ` + sqlNotCallerAbort +
+	// sqlPolicyDenied: songguo refused it under a limit the operator set. The SQL
+	// twin of calls.IsPolicyDenial — keep the two lists in step. Deliberately not
+	// every denial: model_not_allowed and vendor_not_allowed are graded, because
+	// unlike a budget or a rate window they never clear on their own.
+	sqlPolicyDenied = `err IN ('budget_exceeded', 'rate_limited')`
+
+	// sqlNotServed: the caller got no answer, and it was not their own doing.
+	// The CENSUS predicate — what an error list or a failure count is asking.
+	// Includes songguo's denials: from the caller's seat a refused request did
+	// fail, and it must stay findable. `status = 0` matches legacy rows only;
+	// nothing writes it now.
+	sqlNotServed = sqlHasVerdict + ` AND ` + sqlNotCallerAbort +
 		` AND (status = 0 OR status >= 400 OR err <> '')`
+
+	// sqlRated: the call is evidence about whether requests get served, so it
+	// belongs in a rate. The DENOMINATOR — and the set every latency percentile
+	// is drawn from, since a refusal is finalized with latency_ms = 0 and those
+	// zeros sort first and drag every percentile down a rank.
+	sqlRated = sqlHasVerdict + ` AND ` + sqlNotCallerAbort +
+		` AND NOT (` + sqlPolicyDenied + `)`
+
+	// sqlRatedFailure: the NUMERATOR, a strict subset of sqlRated. Same failure
+	// test as sqlNotServed, asked only of the calls we grade.
+	sqlRatedFailure = sqlRated + ` AND (status = 0 OR status >= 400 OR err <> '')`
 
 	// sqlProviderFailed: the PROVIDER failed — the only thing that may count
 	// against a vendor. A forwarded error (err = '') is theirs, as is a transport
@@ -1435,9 +1564,15 @@ func sqlCountWhere(pred string) string {
 }
 
 // qualify prefixes the column names in one of the predicates above with a table
-// alias, for the joined queries that need `c.status` rather than `status`. It
-// rewrites only the two identifiers the predicates use, so it cannot corrupt the
-// string literals ('client_gone', the LIKE patterns) alongside them.
+// alias, for the joined queries that need `c.status` rather than `status`.
+//
+// It is a substring rewrite of the two identifiers the predicates use, which is
+// safe only because no slug in them contains "status" or "err " — a property of
+// the current slug set, not of the function. Two ways to break it silently:
+// write a predicate as `err\n IN (...)` and the trailing space stops matching,
+// or add a slug containing either token. Neither produces an error, because the
+// one caller's outer scope has a single table and a bare column still resolves.
+// TestQualifyRewritesEveryPredicate is what actually holds this together.
 func qualify(pred, alias string) string {
 	if alias == "" {
 		return pred
@@ -1452,6 +1587,10 @@ func qualify(pred, alias string) string {
 // IsCallError reports whether a finalized call failed and it was not the
 // caller's doing. Exported so the API's live session rollup agrees with the
 // stored aggregates instead of keeping its own copy of the rule.
+//
+// This is the CENSUS question — a refused call counts, because a session that
+// spent its budget did have calls go wrong and they must stay findable. For the
+// RATE question use isRated/isRatedFailure.
 func IsCallError(status int, err string) bool { return isErrorStatus(status, err) }
 
 // lastStatusFilter appends sqlHasVerdict to a query that may or may not already
@@ -1466,7 +1605,7 @@ func lastStatusFilter(clause string) string {
 }
 
 // isErrorStatus reports whether a finalized call failed and it was not the
-// caller's doing — the Go twin of sqlFailed. It takes err as well as status
+// caller's doing — the Go twin of sqlNotServed. It takes err as well as status
 // because the status alone cannot tell a provider's 429 from songguo's.
 func isErrorStatus(status int, err string) bool {
 	switch calls.OutcomeOf(status, err) {
@@ -1475,6 +1614,23 @@ func isErrorStatus(status int, err string) bool {
 		return false
 	}
 	return true
+}
+
+// isRated reports whether a finalized call is evidence about whether requests
+// get served — the Go twin of sqlRated, and the denominator of every rate.
+func isRated(status int, err string) bool {
+	o := calls.OutcomeOf(status, err)
+	switch o {
+	case calls.OutcomeInFlight, calls.OutcomeAbandoned, calls.OutcomeClientGone:
+		return false
+	}
+	return !calls.IsPolicyDenial(o)
+}
+
+// isRatedFailure reports whether a graded call failed — the Go twin of
+// sqlRatedFailure, and the numerator to isRated's denominator.
+func isRatedFailure(status int, err string) bool {
+	return isRated(status, err) && isErrorStatus(status, err)
 }
 
 // hasVerdict reports whether a call finished, so it belongs in a rate at all.

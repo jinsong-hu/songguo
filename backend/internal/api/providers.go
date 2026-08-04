@@ -84,11 +84,15 @@ func newProviderView(pvd store.Provider, stat store.VendorStat, hasStat bool, ro
 	sv := vendorStatsView{Healthy: true}
 	if hasStat {
 		sv.Requests = stat.Requests
+		sv.Rated = stat.Rated
+		sv.Denied = stat.Denied
 		sv.Errors = stat.Errors
 		sv.AvgLatencyMS = stat.AvgLatency
 		sv.LastStatus = stat.LastStatus
-		if stat.Requests > 0 {
-			sv.ErrorRate = float64(stat.Errors) / float64(stat.Requests)
+		// Over Rated: a refusal never reached this provider, and leaving those in
+		// the denominator quietly diluted its error rate toward zero.
+		if stat.Rated > 0 {
+			sv.ErrorRate = float64(stat.Errors) / float64(stat.Rated)
 		}
 		sv.Healthy = stat.Errors == 0
 	}

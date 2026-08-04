@@ -108,6 +108,46 @@ func TestBlameKeepsProviderRateHonest(t *testing.T) {
 	}
 }
 
+func TestPolicyDenialIsNarrowerThanGatewayBlame(t *testing.T) {
+	// The exemption from success rates covers limits the operator set and that
+	// clear on their own. It must not widen into "anything songguo did", because
+	// a routing miss and an unmatched wire are our bugs and have to stay visible
+	// as failures — and neither does BlameFor separate them.
+	for _, o := range []Outcome{OutcomeDeniedBudget, OutcomeDeniedRate} {
+		if !IsPolicyDenial(o) {
+			t.Errorf("%q is a configured limit and must be exempt from rates", o)
+		}
+		if BlameFor(o) != BlameGateway {
+			t.Errorf("%q should still be blamed on the gateway, got %q", o, BlameFor(o))
+		}
+	}
+	// Every other gateway-blamed outcome is a malfunction, not a policy. A scope
+	// denial in particular never resolves by itself: it fails identically on every
+	// retry until an operator edits the key, and no other panel reports it.
+	graded := []Outcome{
+		OutcomeDeniedScope, OutcomeNoRoute, OutcomeBuildFailed, OutcomeUnmatched,
+	}
+	for _, o := range graded {
+		if IsPolicyDenial(o) {
+			t.Errorf("%q is a malfunction and must stay a failure", o)
+		}
+		if BlameFor(o) != BlameGateway {
+			t.Errorf("%q should be blamed on the gateway, got %q", o, BlameFor(o))
+		}
+	}
+	// Nothing a provider or a caller did is ours to exempt.
+	notOurs := []Outcome{
+		OutcomeOK, OutcomeVendorError, OutcomeTruncated, OutcomeTransportError,
+		OutcomeClientGone, OutcomeInFlight, OutcomeAbandoned,
+		OutcomeUpstreamFailed, OutcomeUnknown,
+	}
+	for _, o := range notOurs {
+		if IsPolicyDenial(o) {
+			t.Errorf("%q is not a denial songguo issued", o)
+		}
+	}
+}
+
 func TestLegacyUpstreamErrorIsNotGuessedAt(t *testing.T) {
 	// It meant a transport failure OR a request-build failure and we cannot now
 	// tell which. Picking one would invent a fact.

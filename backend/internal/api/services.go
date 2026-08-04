@@ -29,8 +29,12 @@ type serviceProviderView struct {
 	WeightOverride   *int `json:"weight_override"`
 }
 
+// serviceStatsView is one model's usage summary. Requests is every finalized
+// call; Rated is the graded subset, so a success rate is Errors/Rated.
 type serviceStatsView struct {
 	Requests     int     `json:"requests"`
+	Rated        int     `json:"rated"`
+	Denied       int     `json:"denied"`
 	Errors       int     `json:"errors"`
 	AvgLatencyMS float64 `json:"avg_latency_ms"`
 }
@@ -149,6 +153,8 @@ func (a *api) servicesData(includeDisabled bool) ([]serviceView, error) {
 		stats := serviceStatsView{}
 		if stat, ok := modelStats[model]; ok {
 			stats.Requests = stat.Requests
+			stats.Rated = stat.Rated
+			stats.Denied = stat.Denied
 			stats.Errors = stat.Errors
 			stats.AvgLatencyMS = stat.AvgLatency
 		}

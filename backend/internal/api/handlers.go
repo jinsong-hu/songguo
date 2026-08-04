@@ -177,9 +177,11 @@ func (a *api) overviewData(sc store.Scope, since, until time.Time) (overviewView
 		return overviewView{}, err
 	}
 
+	// Over Rated, not Requests: a call songguo refused proves nothing about
+	// whether requests are being served, so it is in neither side of this.
 	errorRate := 0.0
-	if stats.Requests > 0 {
-		errorRate = float64(stats.Errors) / float64(stats.Requests)
+	if stats.Rated > 0 {
+		errorRate = float64(stats.Errors) / float64(stats.Rated)
 	}
 
 	var (
@@ -252,6 +254,8 @@ func (a *api) overviewData(sc store.Scope, since, until time.Time) (overviewView
 		SpendByModality: byMod,
 		Tokens:          tokenView{Input: tokens.Input, Output: tokens.Output, Cached: tokens.Cached, CacheCreation: tokens.CacheCreation, Thinking: tokens.Thinking},
 		Requests:        stats.Requests,
+		Rated:           stats.Rated,
+		Denied:          stats.Denied,
 		Errors:          stats.Errors,
 		ErrorRate:       errorRate,
 		LatencyMS:       latencyView{P50: stats.P50, P95: stats.P95, P99: stats.P99},
@@ -358,6 +362,8 @@ func (a *api) usageSeriesData(since, until time.Time, bucketRaw string) (usageSe
 			TS:                  p.Bucket.UTC().Format(time.RFC3339),
 			Cost:                p.Cost,
 			Requests:            p.Requests,
+			Rated:               p.Rated,
+			Denied:              p.Denied,
 			Errors:              p.Errors,
 			InputTokens:         p.InputTokens,
 			OutputTokens:        p.OutputTokens,
@@ -577,6 +583,8 @@ func (a *api) handleSuccessByModel(w http.ResponseWriter, r *http.Request) {
 		points = append(points, successByModelPoint{
 			TS:       b.Bucket.UTC().Format(time.RFC3339),
 			Requests: b.Requests,
+			Rated:    b.Rated,
+			Denied:   b.Denied,
 			Errors:   b.Errors,
 		})
 	}
@@ -663,6 +671,8 @@ func (a *api) handleBreakdown(w http.ResponseWriter, r *http.Request) {
 		views = append(views, breakdownRow{
 			Key:                 b.Key,
 			Requests:            b.Requests,
+			Rated:               b.Rated,
+			Denied:              b.Denied,
 			Errors:              b.Errors,
 			InputTokens:         b.InputTokens,
 			OutputTokens:        b.OutputTokens,

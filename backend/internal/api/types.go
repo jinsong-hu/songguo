@@ -244,13 +244,20 @@ type overviewView struct {
 	SpendByModality map[string]float64 `json:"spend_by_modality"`
 	Tokens          tokenView          `json:"tokens"`
 	Requests        int                `json:"requests"`
-	Errors          int                `json:"errors"`
-	ErrorRate       float64            `json:"error_rate"`
-	LatencyMS       latencyView        `json:"latency_ms"`
-	TTFTMS          latencyView        `json:"ttft_ms"`
-	OutputTPS       rateView           `json:"output_tokens_per_second"`
-	VendorsActive   int                `json:"vendors_active"`
-	UsersActive     int                `json:"users_active"`
+	// Rated is Requests minus the calls nothing can be concluded from: the ones
+	// songguo refused under a configured limit, and the ones the caller abandoned.
+	// ErrorRate is Errors/Rated, so a window of nothing but budget refusals has
+	// Requests > 0, Rated == 0, and an error rate of zero that means "no opinion"
+	// rather than "all good" — which is why Denied ships beside it.
+	Rated         int         `json:"rated"`
+	Denied        int         `json:"denied"`
+	Errors        int         `json:"errors"`
+	ErrorRate     float64     `json:"error_rate"`
+	LatencyMS     latencyView `json:"latency_ms"`
+	TTFTMS        latencyView `json:"ttft_ms"`
+	OutputTPS     rateView    `json:"output_tokens_per_second"`
+	VendorsActive int         `json:"vendors_active"`
+	UsersActive   int         `json:"users_active"`
 	// ActiveCallers is the count of distinct users with traffic in the window,
 	// as opposed to UsersActive (non-revoked users in config).
 	ActiveCallers int      `json:"active_callers"`
@@ -293,6 +300,8 @@ type seriesPoint struct {
 	TS                  string  `json:"ts"`
 	Cost                float64 `json:"cost"`
 	Requests            int     `json:"requests"`
+	Rated               int     `json:"rated"`
+	Denied              int     `json:"denied"`
 	Errors              int     `json:"errors"`
 	InputTokens         float64 `json:"input_tokens"`
 	OutputTokens        float64 `json:"output_tokens"`
@@ -341,9 +350,14 @@ type tokensByModelView struct {
 // successByModelPoint is one bucket in the GET /api/usage/success-by-model
 // response: request and error counts keyed by dimension key. Requests and Errors
 // carry the same key set; the client derives success % as (req-err)/req.
+// All four maps carry the same key set. The success rate is (rated-errors)/rated
+// — requests is the census that ranks the rows and labels the bars, and a key
+// with requests > 0 and rated == 0 was refused outright and has no rate at all.
 type successByModelPoint struct {
 	TS       string         `json:"ts"`
 	Requests map[string]int `json:"requests"`
+	Rated    map[string]int `json:"rated"`
+	Denied   map[string]int `json:"denied"`
 	Errors   map[string]int `json:"errors"`
 }
 
@@ -376,6 +390,8 @@ type cacheByModelView struct {
 type breakdownRow struct {
 	Key                 string  `json:"key"`
 	Requests            int     `json:"requests"`
+	Rated               int     `json:"rated"`
+	Denied              int     `json:"denied"`
 	Errors              int     `json:"errors"`
 	InputTokens         float64 `json:"input_tokens"`
 	OutputTokens        float64 `json:"output_tokens"`
@@ -586,9 +602,12 @@ type priceView struct {
 	Source string  `json:"source"`
 }
 
-// vendorStatsView is the per-vendor health/usage summary.
+// vendorStatsView is the per-vendor health/usage summary. Requests is every
+// finalized call; Rated is the graded subset and the denominator of ErrorRate.
 type vendorStatsView struct {
 	Requests     int     `json:"requests"`
+	Rated        int     `json:"rated"`
+	Denied       int     `json:"denied"`
 	Errors       int     `json:"errors"`
 	ErrorRate    float64 `json:"error_rate"`
 	AvgLatencyMS float64 `json:"avg_latency_ms"`
@@ -678,11 +697,15 @@ func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool, rs *rou
 	sv := vendorStatsView{Healthy: true} // no traffic => healthy.
 	if hasStat {
 		sv.Requests = stat.Requests
+		sv.Rated = stat.Rated
+		sv.Denied = stat.Denied
 		sv.Errors = stat.Errors
 		sv.AvgLatencyMS = stat.AvgLatency
 		sv.LastStatus = stat.LastStatus
-		if stat.Requests > 0 {
-			sv.ErrorRate = float64(stat.Errors) / float64(stat.Requests)
+		// Over Rated: a refusal never reached this vendor, and leaving those in
+		// the denominator quietly diluted its error rate toward zero.
+		if stat.Rated > 0 {
+			sv.ErrorRate = float64(stat.Errors) / float64(stat.Rated)
 		}
 		sv.Healthy = stat.Errors == 0
 	}

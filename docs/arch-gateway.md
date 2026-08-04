@@ -154,6 +154,13 @@ Gateway-originated denials (unmatched `404`, scope `403`, budget `402`, rate
 served or synthesized response exists and capture is on, the matching `raw` row
 is written too.
 
+Recorded is not the same as graded. Budget (`402`) and rate (`429`) denials are
+limits the operator configured, so they are counted in every census — the error
+list, the failure feed, a session's error count — and appear in **no** success
+rate, on either side of it (`calls.IsPolicyDenial`; `sqlNotServed` vs `sqlRated`
+in `internal/store/stats.go`). The other three are misconfigurations rather than
+policy and stay failures. See "Ledger transparency" in `CLAUDE.md`.
+
 ### Ordering guarantee
 
 The client is served **before** phase 2 touches the ledger, and phase 2 happens
