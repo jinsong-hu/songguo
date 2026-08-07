@@ -118,20 +118,14 @@ html,
 body,
 #root {
   height: 100%;
+  overflow: hidden;
 }
 
-/* The shell is exactly viewport-sized and the root never scrolls, so vertical
-   overscroll reaching it is pure rubber-band: a flick that bottoms out a page
-   scroller chains outward and drags the whole app — sidebar and toolbar with
-   it — off the top of the window. Most visible on Providers, whose body
-   overflows by only ~60px, so an ordinary flick exhausts it in a few frames and
-   spends the rest on the bounce.
-
-   On the root, `none` means no chaining and no local bounce. It goes here and
-   not on `body`: unlike overflow, overscroll-behavior only propagates to the
-   viewport from the root element. The y axis only — overscroll-behavior-x is
-   what the trackpad's back-swipe rides on, and the root scrolls neither way, so
-   there is nothing to gain by taking that too. */
+/* The shell is viewport-sized and route bodies own vertical scrolling. Keep
+   the document roots locked as a hard boundary: if momentum reaches them,
+   there must be neither a second scrollbar nor a rubber-band surface that can
+   pull the whole app away from the viewport. The y axis only preserves browser
+   back-swipe gestures on the horizontal axis. */
 html {
   overscroll-behavior-y: none;
 }
