@@ -297,8 +297,8 @@ func scanProvider(sc interface{ Scan(...any) error }) (Provider, error) {
 	return pvd, nil
 }
 
-// CreateProvider inserts a provider plus its models and wires in one transaction
-// and returns the assembled row.
+// CreateProvider inserts a provider plus its models and endpoints in one
+// transaction and returns the assembled row.
 func (s *Store) CreateProvider(np NewProvider) (Provider, error) {
 	id, err := randID()
 	if err != nil {
@@ -316,10 +316,9 @@ func (s *Store) CreateProvider(np NewProvider) (Provider, error) {
 	}
 	defer tx.Rollback()
 
-	// base_url and adapter are vestigial provider columns (NOT NULL); base_url
-	// and auth now live per-endpoint. Insert harmless placeholders.
-	_, err = tx.Exec(`INSERT INTO providers (id, name, vendor, base_url, priority, weight, enabled, catalog_id, api_key, proxy_id, allow_unmatched, max_concurrency, quirks, created_at, updated_at)
-		VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err = tx.Exec(`INSERT INTO providers
+		(id, name, vendor, priority, weight, enabled, catalog_id, api_key, proxy_id, allow_unmatched, max_concurrency, quirks, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, np.Name, np.Vendor, np.Priority, maxZeroInt(np.Weight), boolToInt(np.Enabled), np.CatalogID, np.APIKey,
 		nullableID(np.ProxyID), boolToInt(np.AllowUnmatched), maxZeroInt(np.MaxConcurrency), quirks, now.Unix(), now.Unix())
 	if err != nil {
@@ -340,8 +339,8 @@ func (s *Store) CreateProvider(np NewProvider) (Provider, error) {
 	return s.GetProvider(id)
 }
 
-// UpdateProvider applies the non-nil scalar fields and, when Models or Wires is
-// non-nil, replaces that set. It returns the updated provider.
+// UpdateProvider applies the non-nil scalar fields and, when Models or Endpoints
+// is non-nil, replaces that set. It returns the updated provider.
 func (s *Store) UpdateProvider(id string, upd ProviderUpdate) (Provider, error) {
 	tx, err := s.db.Begin()
 	if err != nil {

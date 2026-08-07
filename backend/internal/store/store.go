@@ -115,15 +115,7 @@ func (s *Store) Close() error {
 // migrate creates tables and indexes if they do not already exist. It is safe
 // to call repeatedly.
 func (s *Store) migrate() error {
-	// Detect pre-rename tables before creating the new ones.
-	hasOldWires, _ := s.tableExists("service_wires")
 	hadCredPool, _ := s.tableExists("service_credentials")
-	// Detect whether provider_wires already existed before this migrate run
-	// (either from a previous run with new names, or via rename from service_wires).
-	hadProviderWires, _ := s.tableExists("provider_wires")
-	// Detect whether provider_endpoints already existed, to decide whether to
-	// backfill it from the legacy per-provider base_url/adapter + provider_wires.
-	hadProviderEndpoints, _ := s.tableExists("provider_endpoints")
 
 	// Step 1: Rename legacy tables services → providers, tokens → users, etc.
 	// Must run before CREATE TABLE so old tables are gone when new ones are
@@ -277,16 +269,13 @@ func (s *Store) migrate() error {
 			updated_at INTEGER NOT NULL
 		)`,
 
-		// Provider config lives in SQLite (managed from the dashboard),
-		// the source of truth for routing. A provider
-		// is one configured upstream: an adapter + base_url + a single API key +
-		// the models it serves with their per-model prices.
+		// Provider config lives in SQLite (managed from the dashboard), the
+		// source of truth for routing. A provider is one configured upstream:
+		// one API key plus the endpoints and priced models it serves.
 		`CREATE TABLE IF NOT EXISTS providers (
 			id          TEXT PRIMARY KEY,
 			name        TEXT NOT NULL UNIQUE,
 			vendor      TEXT NOT NULL DEFAULT '',
-			adapter     TEXT NOT NULL DEFAULT 'openai-compatible',
-			base_url    TEXT NOT NULL,
 			priority    INTEGER NOT NULL DEFAULT 0,
 			weight      INTEGER NOT NULL DEFAULT 1,
 			enabled     INTEGER NOT NULL DEFAULT 1,
@@ -305,29 +294,7 @@ func (s *Store) migrate() error {
 			price_override INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (provider_id, model)
 		)`,
-		// Per-provider wire allowlist: which wire-protocol entries (path pattern +
-		// usage extractor, see internal/wire) the proxy may serve for a provider.
-		// Paths matching no enabled wire are denied unless allow_unmatched is set.
-		`CREATE TABLE IF NOT EXISTS provider_wires (
-			provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-			wire        TEXT NOT NULL,
-			PRIMARY KEY (provider_id, wire)
-		)`,
-		// An endpoint binds one wire to its full upstream URL + adapter (auth
-		// scheme). The base_url column is renamed to `endpoint` and its values
-		// rewritten to full per-wire URLs by migrateEndpointsToFull below; the
-		// config manager then groups a provider's endpoints by (origin, adapter)
-		// into routing vendors.
-		`CREATE TABLE IF NOT EXISTS provider_endpoints (
-			provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-			wire        TEXT NOT NULL,
-			base_url    TEXT NOT NULL DEFAULT '',
-			adapter     TEXT NOT NULL DEFAULT 'openai-compatible',
-			PRIMARY KEY (provider_id, wire)
-		)`,
 		`CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(provider_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_provider_wires_provider ON provider_wires(provider_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_provider_endpoints_provider ON provider_endpoints(provider_id)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -529,30 +496,10 @@ func (s *Store) migrate() error {
 		}
 	}
 
-	// Backfill wires only if neither provider_wires nor service_wires existed
-	// before this migrate call (fresh DB or pre-wire-era DB). If either table
-	// already existed — even if wire rows were manually deleted — we don't
-	// re-add them. INSERT OR IGNORE makes the actual inserts idempotent anyway,
-	// but skipping the work is cleaner.
-	if !hadProviderWires && !hasOldWires {
-		if err := s.backfillWires(); err != nil {
-			return err
-		}
-	}
-
-	// Backfill provider_endpoints from the legacy shape (per-provider base_url +
-	// adapter, one row per provider_wires entry) the first time this table
-	// appears. INSERT OR IGNORE keeps it idempotent if interrupted.
-	if !hadProviderEndpoints {
-		if err := s.backfillEndpoints(); err != nil {
-			return err
-		}
-	}
-
-	// Rename base_url → endpoint and convert legacy base URLs into full per-wire
-	// endpoints. Atomic and gated on the base_url column, so it runs once across
-	// fresh, legacy, and already-endpoint-backed databases.
-	if err := s.migrateEndpointsToFull(); err != nil {
+	// Canonicalize every supported provider-era schema in one transaction.
+	// provider_endpoints is the sole endpoint/wire store after this returns;
+	// provider-level adapter/base_url and provider_wires are retired.
+	if err := s.migrateProviderSchema(); err != nil {
 		return err
 	}
 
@@ -640,76 +587,222 @@ func (s *Store) backfillSessions() error {
 	return nil
 }
 
-// backfillEndpoints seeds provider_endpoints from each provider's legacy
-// base_url + adapter columns joined with its provider_wires rows, so existing
-// single-base-URL providers become endpoint-backed with unchanged routing.
-func (s *Store) backfillEndpoints() error {
-	hasWires, _ := s.tableExists("provider_wires")
-	if !hasWires {
-		return nil
-	}
-	hasBase, _ := s.hasColumn("providers", "base_url")
-	hasAdapter, _ := s.hasColumn("providers", "adapter")
-	if !hasBase || !hasAdapter {
-		return nil
-	}
-	if _, err := s.db.Exec(`INSERT OR IGNORE INTO provider_endpoints (provider_id, wire, base_url, adapter)
-		SELECT pw.provider_id, pw.wire, p.base_url, p.adapter
-		FROM provider_wires pw JOIN providers p ON p.id = pw.provider_id`); err != nil {
-		return fmt.Errorf("store: backfill endpoints: %w", err)
-	}
-	return nil
-}
-
-// migrateEndpointsToFull renames provider_endpoints.base_url → endpoint and
-// rewrites each legacy base URL into a full per-wire endpoint, used as-is by the
-// proxy. Model-routed wires (chat/embedding) get their canonical path suffix
-// appended; origin-only wires (model listings, speech) keep the base. The whole
-// step runs in one transaction and is gated on the base_url column, so it
-// executes exactly once and an interrupted run is retried (never half-applied).
-func (s *Store) migrateEndpointsToFull() error {
-	has, err := s.hasColumn("provider_endpoints", "base_url")
+// migrateProviderSchema moves every known provider-era schema to one canonical
+// shape:
+//
+//   - providers owns provider metadata and one credential
+//   - provider_endpoints owns each wire's full URL and adapter
+//   - provider_wires and provider-level base_url/adapter do not exist
+//
+// The migration recognizes the pre-wire, wire, old-endpoint (base_url column),
+// services-era, and already-canonical shapes. All provider schema writes happen
+// in one transaction, so an interrupted process cannot leave the endpoint copy
+// committed while the legacy source has already been removed.
+func (s *Store) migrateProviderSchema() error {
+	hasEndpoints, err := s.tableExists("provider_endpoints")
 	if err != nil {
-		return fmt.Errorf("store: check endpoint column: %w", err)
+		return err
 	}
-	if !has {
-		return nil // already migrated (column is now `endpoint`) or fresh
+	hasEndpointBase, err := s.hasColumn("provider_endpoints", "base_url")
+	if err != nil {
+		return err
+	}
+	hasEndpoint, err := s.hasColumn("provider_endpoints", "endpoint")
+	if err != nil {
+		return err
+	}
+	hasEndpointAdapter, err := s.hasColumn("provider_endpoints", "adapter")
+	if err != nil {
+		return err
+	}
+	if hasEndpoints && (hasEndpointBase == hasEndpoint) {
+		return fmt.Errorf("store: unsupported provider_endpoints schema: expected exactly one of base_url or endpoint")
+	}
+	if hasEndpoints && !hasEndpointAdapter {
+		return fmt.Errorf("store: unsupported provider_endpoints schema: adapter column is missing")
+	}
+
+	hasWires, err := s.tableExists("provider_wires")
+	if err != nil {
+		return err
+	}
+	hasProviderBase, err := s.hasColumn("providers", "base_url")
+	if err != nil {
+		return err
+	}
+	hasProviderAdapter, err := s.hasColumn("providers", "adapter")
+	if err != nil {
+		return err
 	}
 
 	tx, err := s.db.Begin()
 	if err != nil {
-		return fmt.Errorf("store: begin endpoint migration: %w", err)
+		return fmt.Errorf("store: begin provider schema migration: %w", err)
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`ALTER TABLE provider_endpoints RENAME COLUMN base_url TO endpoint`); err != nil {
-		return fmt.Errorf("store: rename base_url to endpoint: %w", err)
+	convertLegacyEndpoints := false
+	if !hasEndpoints {
+		if _, err := tx.Exec(`CREATE TABLE provider_endpoints (
+			provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+			wire        TEXT NOT NULL,
+			endpoint    TEXT NOT NULL DEFAULT '',
+			adapter     TEXT NOT NULL DEFAULT 'openai-compatible',
+			PRIMARY KEY (provider_id, wire)
+		)`); err != nil {
+			return fmt.Errorf("store: create provider_endpoints: %w", err)
+		}
+
+		var providers int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM providers`).Scan(&providers); err != nil {
+			return fmt.Errorf("store: count providers during endpoint migration: %w", err)
+		}
+		if providers > 0 && (!hasProviderBase || !hasProviderAdapter) {
+			return fmt.Errorf("store: cannot reconstruct missing provider_endpoints: providers.base_url and providers.adapter are not both present")
+		}
+		if hasProviderBase && hasProviderAdapter {
+			if hasWires {
+				if err := backfillProviderEndpointsFromWires(tx, "endpoint"); err != nil {
+					return err
+				}
+			} else if err := backfillDefaultProviderEndpoints(tx); err != nil {
+				return err
+			}
+		}
+		convertLegacyEndpoints = true
+	} else if hasEndpointBase {
+		if hasWires {
+			if hasProviderBase && hasProviderAdapter {
+				if err := backfillProviderEndpointsFromWires(tx, "base_url"); err != nil {
+					return err
+				}
+			} else {
+				var missing int
+				if err := tx.QueryRow(`SELECT COUNT(*)
+					FROM provider_wires pw
+					LEFT JOIN provider_endpoints pe
+					  ON pe.provider_id = pw.provider_id AND pe.wire = pw.wire
+					WHERE pe.provider_id IS NULL`).Scan(&missing); err != nil {
+					return fmt.Errorf("store: inspect legacy provider wires: %w", err)
+				}
+				if missing > 0 {
+					return fmt.Errorf("store: cannot backfill %d provider endpoints: provider-level base_url/adapter are missing", missing)
+				}
+			}
+		}
+		if _, err := tx.Exec(`ALTER TABLE provider_endpoints RENAME COLUMN base_url TO endpoint`); err != nil {
+			return fmt.Errorf("store: rename provider_endpoints.base_url: %w", err)
+		}
+		convertLegacyEndpoints = true
 	}
 
+	// A table that already had `endpoint` is canonical. In particular, do not
+	// repopulate it from provider_wires: those rows may be stale after an
+	// operator intentionally removed an endpoint.
+	if convertLegacyEndpoints {
+		if err := convertProviderEndpointsToFull(tx); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_provider_endpoints_provider ON provider_endpoints(provider_id)`); err != nil {
+		return fmt.Errorf("store: index provider_endpoints: %w", err)
+	}
+	if hasWires {
+		if _, err := tx.Exec(`DROP TABLE provider_wires`); err != nil {
+			return fmt.Errorf("store: drop provider_wires: %w", err)
+		}
+	}
+	if hasProviderBase {
+		if _, err := tx.Exec(`ALTER TABLE providers DROP COLUMN base_url`); err != nil {
+			return fmt.Errorf("store: drop providers.base_url: %w", err)
+		}
+	}
+	if hasProviderAdapter {
+		if _, err := tx.Exec(`ALTER TABLE providers DROP COLUMN adapter`); err != nil {
+			return fmt.Errorf("store: drop providers.adapter: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit provider schema migration: %w", err)
+	}
+	return nil
+}
+
+func backfillProviderEndpointsFromWires(tx *sql.Tx, endpointColumn string) error {
+	query := fmt.Sprintf(`INSERT OR IGNORE INTO provider_endpoints (provider_id, wire, %s, adapter)
+		SELECT pw.provider_id, pw.wire, p.base_url, p.adapter
+		FROM provider_wires pw JOIN providers p ON p.id = pw.provider_id`, endpointColumn)
+	if _, err := tx.Exec(query); err != nil {
+		return fmt.Errorf("store: backfill provider endpoints from wires: %w", err)
+	}
+	return nil
+}
+
+// backfillDefaultProviderEndpoints preserves the pre-wire-era behavior. Those
+// databases had no explicit allowlist, so adapter-specific historical defaults
+// are the only available routing intent.
+func backfillDefaultProviderEndpoints(tx *sql.Tx) error {
+	rows, err := tx.Query(`SELECT id, base_url, adapter FROM providers`)
+	if err != nil {
+		return fmt.Errorf("store: read pre-wire providers: %w", err)
+	}
+	type legacyProvider struct {
+		id, baseURL, adapter string
+	}
+	var providers []legacyProvider
+	for rows.Next() {
+		var p legacyProvider
+		if err := rows.Scan(&p.id, &p.baseURL, &p.adapter); err != nil {
+			rows.Close()
+			return fmt.Errorf("store: scan pre-wire provider: %w", err)
+		}
+		providers = append(providers, p)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("store: iterate pre-wire providers: %w", err)
+	}
+	rows.Close()
+
+	for _, p := range providers {
+		wires := []string{"openai/chat", "openai/completions", "openai/embeddings", "openai/models"}
+		if p.adapter == "anthropic-compatible" {
+			wires = []string{"anthropic/messages"}
+		}
+		for _, wireName := range wires {
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO provider_endpoints (provider_id, wire, endpoint, adapter)
+				VALUES (?, ?, ?, ?)`, p.id, wireName, p.baseURL, p.adapter); err != nil {
+				return fmt.Errorf("store: backfill default provider endpoint: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// convertProviderEndpointsToFull upgrades legacy base URLs in an endpoint table
+// that was just created or renamed. Canonical endpoint tables never call this,
+// which protects full URLs containing model placeholders or query strings from
+// repeated rewriting.
+func convertProviderEndpointsToFull(tx *sql.Tx) error {
 	rows, err := tx.Query(`SELECT provider_id, wire, endpoint FROM provider_endpoints`)
 	if err != nil {
 		return fmt.Errorf("store: read endpoints for migration: %w", err)
 	}
-	type epRow struct{ pid, wire, endpoint string }
-	var updates []epRow
+	type endpointRow struct {
+		providerID, wire, endpoint string
+	}
+	var updates []endpointRow
 	for rows.Next() {
-		var r epRow
-		if err := rows.Scan(&r.pid, &r.wire, &r.endpoint); err != nil {
+		var row endpointRow
+		if err := rows.Scan(&row.providerID, &row.wire, &row.endpoint); err != nil {
 			rows.Close()
 			return fmt.Errorf("store: scan endpoint for migration: %w", err)
 		}
-		w, ok := wire.Get(r.wire)
-		if !ok || len(w.Suffixes) == 0 {
-			continue
+		full := legacyFullEndpoint(row.wire, row.endpoint)
+		if full != row.endpoint {
+			row.endpoint = full
+			updates = append(updates, row)
 		}
-		if w.Modality != calls.ModalityChat && w.Modality != calls.ModalityEmbedding {
-			continue // origin-only wire: base is already the right value
-		}
-		trimmed := strings.TrimRight(r.endpoint, "/")
-		if trimmed == "" || strings.HasSuffix(trimmed, w.Suffixes[0]) {
-			continue // empty or already a full endpoint
-		}
-		updates = append(updates, epRow{r.pid, r.wire, trimmed + w.Suffixes[0]})
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -717,13 +810,34 @@ func (s *Store) migrateEndpointsToFull() error {
 	}
 	rows.Close()
 
-	for _, u := range updates {
+	for _, row := range updates {
 		if _, err := tx.Exec(`UPDATE provider_endpoints SET endpoint = ? WHERE provider_id = ? AND wire = ?`,
-			u.endpoint, u.pid, u.wire); err != nil {
+			row.endpoint, row.providerID, row.wire); err != nil {
 			return fmt.Errorf("store: convert endpoint to full: %w", err)
 		}
 	}
-	return tx.Commit()
+	return nil
+}
+
+func legacyFullEndpoint(wireName, endpoint string) string {
+	w, ok := wire.Get(wireName)
+	if !ok || len(w.Suffixes) == 0 {
+		return endpoint
+	}
+	if w.Modality != calls.ModalityChat && w.Modality != calls.ModalityEmbedding {
+		return endpoint
+	}
+
+	base, query := endpoint, ""
+	if i := strings.IndexByte(base, '?'); i >= 0 {
+		base, query = base[:i], base[i:]
+	}
+	base = strings.TrimRight(base, "/")
+	suffix := w.Suffixes[0]
+	if base == "" || strings.HasSuffix(strings.ToLower(base), strings.ToLower(suffix)) {
+		return endpoint
+	}
+	return base + suffix + query
 }
 
 // renameServicesToProviders migrates the services-era schema to the providers
@@ -1185,45 +1299,6 @@ func (s *Store) tableExists(name string) (bool, error) {
 		return false, fmt.Errorf("store: table exists %s: %w", name, err)
 	}
 	return n > 0, nil
-}
-
-// backfillWires grants pre-wire-era providers the default allowlist for their
-// adapter (names must stay in sync with internal/wire registrations). Runs
-// only on the migration that introduces provider_wires.
-func (s *Store) backfillWires() error {
-	defaults := map[string][]string{
-		"anthropic-compatible": {"anthropic/messages"},
-		"":                     {"openai/chat", "openai/completions", "openai/embeddings", "openai/models"},
-	}
-	rows, err := s.db.Query(`SELECT id, adapter FROM providers`)
-	if err != nil {
-		return fmt.Errorf("store: backfill wires: %w", err)
-	}
-	defer rows.Close()
-	type svc struct{ id, adapter string }
-	var svcs []svc
-	for rows.Next() {
-		var v svc
-		if err := rows.Scan(&v.id, &v.adapter); err != nil {
-			return fmt.Errorf("store: backfill wires: %w", err)
-		}
-		svcs = append(svcs, v)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("store: backfill wires: %w", err)
-	}
-	for _, v := range svcs {
-		wires, ok := defaults[v.adapter]
-		if !ok {
-			wires = defaults[""]
-		}
-		for _, w := range wires {
-			if _, err := s.db.Exec(`INSERT OR IGNORE INTO provider_wires (provider_id, wire) VALUES (?, ?)`, v.id, w); err != nil {
-				return fmt.Errorf("store: backfill wires: %w", err)
-			}
-		}
-	}
-	return nil
 }
 
 // hasColumn reports whether a table has a column of the given name. A missing

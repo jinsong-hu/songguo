@@ -50,24 +50,24 @@ WIRES=$(curl -fsS http://127.0.0.1:18080/api/wires)
 check "GET /api/wires lists openai/chat" "$(echo "$WIRES" | grep -c 'openai/chat')" "1"
 check "GET /api/wires lists anthropic/messages" "$(echo "$WIRES" | grep -c 'anthropic/messages')" "1"
 
-# 4. Create a deepseek-style service: only openai/chat wired, cache quirk, cached price.
-SVC=$(curl -fsS -X POST http://127.0.0.1:18080/api/services -H 'Content-Type: application/json' -d '{
-  "name":"ds","adapter":"openai-compatible","base_url":"http://127.0.0.1:18081/v1",
-  "api_key":"sk-upstream-SECRET","wires":["openai/chat"],"quirks":{"cache_tokens":"deepseek"},
+# 4. Create a deepseek-style provider: one openai/chat endpoint, cache quirk, cached price.
+PROVIDER=$(curl -fsS -X POST http://127.0.0.1:18080/api/providers -H 'Content-Type: application/json' -d '{
+  "name":"ds","api_key":"sk-upstream-SECRET","quirks":{"cache_tokens":"deepseek"},
+  "endpoints":[{"wire":"openai/chat","endpoint":"http://127.0.0.1:18081/v1/chat/completions","adapter":"openai-compatible"}],
   "models":[{"model":"m1","input":0.14,"output":0.28,"cached_input":0.0028,"unit":"per_1m_tokens"}]}')
-check "service created with wires" "$(echo "$SVC" | grep -c '"wires":\["openai/chat"\]')" "1"
-check "service response masks the key" "$(echo "$SVC" | grep -c 'masked_key')" "1"
-check "service response never leaks the raw key" "$(echo "$SVC" | grep -c 'sk-upstream-SECRET')" "0"
-SVC_ID=$(echo "$SVC" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+check "provider created with endpoint" "$(echo "$PROVIDER" | grep -c '"wire":"openai/chat"')" "1"
+check "provider response masks the key" "$(echo "$PROVIDER" | grep -c 'masked_key')" "1"
+check "provider response never leaks the raw key" "$(echo "$PROVIDER" | grep -c 'sk-upstream-SECRET')" "0"
+PROVIDER_ID=$(echo "$PROVIDER" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
 
-# 4b. Replace the key via PATCH (one key per service; no pool endpoints).
-PATCHED=$(curl -fsS -X PATCH "http://127.0.0.1:18080/api/services/$SVC_ID" -H 'Content-Type: application/json' -d '{"api_key":"sk-upstream-ROTATED"}')
+# 4b. Replace the key via PATCH (one key per provider; no pool endpoints).
+PATCHED=$(curl -fsS -X PATCH "http://127.0.0.1:18080/api/providers/$PROVIDER_ID" -H 'Content-Type: application/json' -d '{"api_key":"sk-upstream-ROTATED"}')
 check "PATCH api_key returns masked preview" "$(echo "$PATCHED" | grep -c 'sk-')" "1"
 check "PATCH api_key never echoes raw key" "$(echo "$PATCHED" | grep -c 'sk-upstream-ROTATED')" "0"
 
-# 4c. Dashboard SPA serves the /services/new route (embedded dist fallback).
-CODE=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/services/new)
-check "GET /services/new serves the SPA" "$CODE" "200"
+# 4c. Dashboard SPA serves the provider editor route (embedded dist fallback).
+CODE=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/providers/add/custom)
+check "GET /providers/add/custom serves the SPA" "$CODE" "200"
 
 # 5. Consumer user key.
 TOKEN=$(curl -fsS -X POST http://127.0.0.1:18080/api/users -H 'Content-Type: application/json' -d '{"name":"t"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["key"])')

@@ -109,6 +109,76 @@ func TestProviderCRUDRoundTrip(t *testing.T) {
 	}
 }
 
+func TestFreshProviderSchemaIsCanonical(t *testing.T) {
+	s := openTestStore(t)
+	assertCanonicalProviderSchema(t, s)
+
+	pvd, err := s.CreateProvider(NewProvider{
+		Name:    "cun-ai",
+		Enabled: true,
+		Weight:  1,
+		APIKey:  "sk-test",
+		Models: []ProviderModel{{
+			Model: "claude-opus-5", Input: 5, Output: 25, CachedInput: 0.5,
+			Unit: "per_1m_tokens",
+		}},
+		Endpoints: []ProviderEndpoint{{
+			Wire: "anthropic/messages", Endpoint: "https://www.cun.ai/v1/messages",
+			Adapter: "anthropic-compatible",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider on canonical schema: %v", err)
+	}
+	if pvd.Name != "cun-ai" || len(pvd.Models) != 1 || len(pvd.Endpoints) != 1 {
+		t.Fatalf("created provider = %+v", pvd)
+	}
+	if pvd.Endpoints[0].Wire != "anthropic/messages" ||
+		pvd.Endpoints[0].Endpoint != "https://www.cun.ai/v1/messages" ||
+		pvd.Endpoints[0].Adapter != "anthropic-compatible" {
+		t.Fatalf("created endpoints = %+v", pvd.Endpoints)
+	}
+}
+
+func assertCanonicalProviderSchema(t *testing.T, s *Store) {
+	t.Helper()
+	for _, column := range []string{"base_url", "adapter"} {
+		if has, err := s.hasColumn("providers", column); err != nil || has {
+			t.Fatalf("providers.%s present = %v, err = %v; want retired", column, has, err)
+		}
+	}
+	if has, err := s.tableExists("provider_wires"); err != nil || has {
+		t.Fatalf("provider_wires present = %v, err = %v; want retired", has, err)
+	}
+	if has, err := s.hasColumn("provider_endpoints", "endpoint"); err != nil || !has {
+		t.Fatalf("provider_endpoints.endpoint present = %v, err = %v; want canonical column", has, err)
+	}
+	if has, err := s.hasColumn("provider_endpoints", "base_url"); err != nil || has {
+		t.Fatalf("provider_endpoints.base_url present = %v, err = %v; want retired", has, err)
+	}
+}
+
+func rewindProviderSchema(t *testing.T, s *Store, withWires bool) {
+	t.Helper()
+	stmts := []string{
+		`ALTER TABLE providers ADD COLUMN adapter TEXT NOT NULL DEFAULT 'openai-compatible'`,
+		`ALTER TABLE providers ADD COLUMN base_url TEXT NOT NULL DEFAULT ''`,
+		`DROP TABLE provider_endpoints`,
+	}
+	if withWires {
+		stmts = append(stmts, `CREATE TABLE provider_wires (
+			provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+			wire        TEXT NOT NULL,
+			PRIMARY KEY (provider_id, wire)
+		)`)
+	}
+	for _, stmt := range stmts {
+		if _, err := s.db.Exec(stmt); err != nil {
+			t.Fatalf("rewind provider schema with %q: %v", stmt, err)
+		}
+	}
+}
+
 // Weight 0 is a value the store must keep, not a missing one to fill in: it
 // parks the provider (see Provider.Weight). Only a negative weight is corrected,
 // and to 0 rather than to an invented share.
@@ -200,12 +270,13 @@ func TestProviderModelRoutingRoundTripAndPreserve(t *testing.T) {
 
 // TestEndpointBackfillOnMigration simulates a database that predates the
 // provider_endpoints table: a provider with the legacy per-provider base_url +
-// adapter columns and provider_wires rows. When migrate() creates
-// provider_endpoints it backfills each wire from the provider's base_url, then
-// migrateEndpointsToFull rewrites model-routed wires into full endpoints (so the
-// chat wire's URL gains /chat/completions; the model-listing wire keeps the base).
+// adapter columns and provider_wires rows. When migrate() creates canonical
+// provider_endpoints it backfills each wire from the provider's base_url and
+// rewrites model-routed wires into full endpoints (so the chat wire's URL gains
+// /chat/completions; the model-listing wire keeps the base).
 func TestEndpointBackfillOnMigration(t *testing.T) {
 	s := openTestStore(t)
+	rewindProviderSchema(t, s, true)
 
 	// Build a legacy provider directly: base_url/adapter on the row + wires in
 	// provider_wires, and no endpoints yet.
@@ -214,7 +285,6 @@ func TestEndpointBackfillOnMigration(t *testing.T) {
 			VALUES ('p1', 'legacy', 'OpenAI', 'openai-compatible', 'https://api.openai.com/v1', 0, 1, 1, '', 'sk-x', 0, '{}', 100, 100)`,
 		`INSERT INTO provider_wires (provider_id, wire) VALUES ('p1', 'openai/chat')`,
 		`INSERT INTO provider_wires (provider_id, wire) VALUES ('p1', 'openai/models')`,
-		`DROP TABLE provider_endpoints`,
 	}
 	for _, q := range stmts {
 		if _, err := s.db.Exec(q); err != nil {
@@ -245,6 +315,7 @@ func TestEndpointBackfillOnMigration(t *testing.T) {
 			t.Errorf("endpoint %q = %q, want %q", ep.Wire, ep.Endpoint, want[ep.Wire])
 		}
 	}
+	assertCanonicalProviderSchema(t, s)
 
 	// Re-running migrate must be idempotent: no duplicate or double-appended suffix.
 	if err := s.migrate(); err != nil {
@@ -258,6 +329,158 @@ func TestEndpointBackfillOnMigration(t *testing.T) {
 		if ep.Endpoint != want[ep.Wire] {
 			t.Errorf("endpoint %q after second migrate = %q, want %q (not double-converted)", ep.Wire, ep.Endpoint, want[ep.Wire])
 		}
+	}
+}
+
+// A pre-wire database had only provider-level base_url/adapter. Preserve its
+// historical adapter defaults when creating canonical endpoint rows.
+func TestPreWireProviderBackfillOnMigration(t *testing.T) {
+	s := openTestStore(t)
+	rewindProviderSchema(t, s, false)
+
+	if _, err := s.db.Exec(`INSERT INTO providers
+		(id, name, vendor, adapter, base_url, priority, weight, enabled, catalog_id, api_key, allow_unmatched, quirks, created_at, updated_at)
+		VALUES ('p1', 'legacy-anthropic', 'Anthropic', 'anthropic-compatible', 'https://api.anthropic.com/v1', 0, 1, 1, '', 'sk-x', 0, '{}', 100, 100)`); err != nil {
+		t.Fatalf("insert pre-wire provider: %v", err)
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	got, err := s.GetProvider("p1")
+	if err != nil {
+		t.Fatalf("GetProvider: %v", err)
+	}
+	if len(got.Endpoints) != 1 ||
+		got.Endpoints[0].Wire != "anthropic/messages" ||
+		got.Endpoints[0].Endpoint != "https://api.anthropic.com/v1/messages" ||
+		got.Endpoints[0].Adapter != "anthropic-compatible" {
+		t.Fatalf("pre-wire endpoints = %+v", got.Endpoints)
+	}
+	assertCanonicalProviderSchema(t, s)
+}
+
+// The first endpoint-backed schema still named the URL column base_url. Missing
+// endpoint rows are recovered from provider_wires before that column is renamed.
+func TestOldEndpointSchemaBackfillOnMigration(t *testing.T) {
+	s := openTestStore(t)
+	rewindProviderSchema(t, s, true)
+
+	stmts := []string{
+		`CREATE TABLE provider_endpoints (
+			provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+			wire        TEXT NOT NULL,
+			base_url    TEXT NOT NULL DEFAULT '',
+			adapter     TEXT NOT NULL DEFAULT 'openai-compatible',
+			PRIMARY KEY (provider_id, wire)
+		)`,
+		`INSERT INTO providers (id, name, vendor, adapter, base_url, priority, weight, enabled, catalog_id, api_key, allow_unmatched, quirks, created_at, updated_at)
+			VALUES ('p1', 'legacy-endpoints', 'OpenAI', 'openai-compatible', 'https://api.openai.com/v1', 0, 1, 1, '', 'sk-x', 0, '{}', 100, 100)`,
+		`INSERT INTO provider_wires (provider_id, wire) VALUES ('p1', 'openai/chat')`,
+		`INSERT INTO provider_wires (provider_id, wire) VALUES ('p1', 'openai/models')`,
+		`INSERT INTO provider_endpoints (provider_id, wire, base_url, adapter)
+			VALUES ('p1', 'openai/chat', 'https://azure.example/openai/deployments/{model}?api-version=2026-01-01', 'openai-compatible')`,
+	}
+	for _, stmt := range stmts {
+		if _, err := s.db.Exec(stmt); err != nil {
+			t.Fatalf("setup %s: %v", stmt, err)
+		}
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	got, err := s.GetProvider("p1")
+	if err != nil {
+		t.Fatalf("GetProvider: %v", err)
+	}
+	want := map[string]string{
+		"openai/chat":   "https://azure.example/openai/deployments/{model}/chat/completions?api-version=2026-01-01",
+		"openai/models": "https://api.openai.com/v1",
+	}
+	if len(got.Endpoints) != len(want) {
+		t.Fatalf("endpoints = %+v, want %d", got.Endpoints, len(want))
+	}
+	for _, endpoint := range got.Endpoints {
+		if endpoint.Endpoint != want[endpoint.Wire] {
+			t.Errorf("endpoint %q = %q, want %q", endpoint.Wire, endpoint.Endpoint, want[endpoint.Wire])
+		}
+	}
+	assertCanonicalProviderSchema(t, s)
+}
+
+// Canonical endpoint rows are authoritative. Retired wire rows must never
+// recreate endpoints an operator removed, and full URLs must not be rewritten.
+func TestCanonicalEndpointSchemaDoesNotRestoreLegacyWires(t *testing.T) {
+	s := openTestStore(t)
+	pvd, err := s.CreateProvider(NewProvider{
+		Name: "azure", Enabled: true, Weight: 1,
+		Endpoints: []ProviderEndpoint{{
+			Wire:     "openai/chat",
+			Endpoint: "https://azure.example/openai/deployments/{model}/chat/completions?api-version=2026-01-01",
+			Adapter:  "openai-compatible",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+
+	stmts := []string{
+		`ALTER TABLE providers ADD COLUMN adapter TEXT NOT NULL DEFAULT 'openai-compatible'`,
+		`ALTER TABLE providers ADD COLUMN base_url TEXT NOT NULL DEFAULT ''`,
+		`CREATE TABLE provider_wires (
+			provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+			wire        TEXT NOT NULL,
+			PRIMARY KEY (provider_id, wire)
+		)`,
+		`INSERT INTO provider_wires (provider_id, wire) VALUES ('` + pvd.ID + `', 'openai/chat')`,
+		`INSERT INTO provider_wires (provider_id, wire) VALUES ('` + pvd.ID + `', 'openai/models')`,
+	}
+	for _, stmt := range stmts {
+		if _, err := s.db.Exec(stmt); err != nil {
+			t.Fatalf("setup %s: %v", stmt, err)
+		}
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	got, err := s.GetProvider(pvd.ID)
+	if err != nil {
+		t.Fatalf("GetProvider: %v", err)
+	}
+	if len(got.Endpoints) != 1 || got.Endpoints[0].Wire != "openai/chat" ||
+		got.Endpoints[0].Endpoint != "https://azure.example/openai/deployments/{model}/chat/completions?api-version=2026-01-01" {
+		t.Fatalf("canonical endpoints changed = %+v", got.Endpoints)
+	}
+	assertCanonicalProviderSchema(t, s)
+}
+
+// A populated database with neither canonical endpoints nor enough legacy
+// fields to reconstruct them is not a recognized migration path. Fail without
+// committing the newly created table so an operator can inspect the database.
+func TestProviderSchemaMigrationRejectsUnrecoverableShapeAtomically(t *testing.T) {
+	s := openTestStore(t)
+	pvd, err := s.CreateProvider(NewProvider{Name: "unrecoverable", Enabled: true, Weight: 1})
+	if err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+	if _, err := s.db.Exec(`DROP TABLE provider_endpoints`); err != nil {
+		t.Fatalf("drop provider_endpoints: %v", err)
+	}
+
+	if err := s.migrate(); err == nil {
+		t.Fatal("migrate succeeded on an unrecoverable provider schema")
+	}
+	if has, err := s.tableExists("provider_endpoints"); err != nil || has {
+		t.Fatalf("provider_endpoints present after rollback = %v, err = %v", has, err)
+	}
+	var providers int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM providers WHERE id = ?`, pvd.ID).Scan(&providers); err != nil {
+		t.Fatalf("count preserved provider: %v", err)
+	}
+	if providers != 1 {
+		t.Fatalf("preserved providers = %d, want 1", providers)
 	}
 }
 
@@ -311,13 +534,13 @@ func TestCredentialPoolFoldOnMigration(t *testing.T) {
 // with data intact.
 func TestServicesRenameOnMigration(t *testing.T) {
 	s := openTestStore(t)
+	rewindProviderSchema(t, s, true)
 
 	stmts := []string{
 		`INSERT INTO providers (id, name, vendor, adapter, base_url, priority, weight, enabled, catalog_id, api_key, allow_unmatched, quirks, created_at, updated_at)
 			VALUES ('p1', 'legacy', '', 'openai-compatible', 'https://x.example.com', 0, 1, 1, '', 'sk-x', 0, '{}', 100, 100)`,
 		`INSERT INTO provider_models (provider_id, model, input, output, cached_input, unit) VALUES ('p1', 'm1', 1, 2, 0, 'per_1m_tokens')`,
 		`INSERT INTO provider_wires (provider_id, wire) VALUES ('p1', 'openai/chat')`,
-		`DROP TABLE provider_endpoints`,
 		// Rewind to the services era: old table and column names.
 		`PRAGMA legacy_alter_table=ON`,
 		`ALTER TABLE providers RENAME TO services`,
@@ -352,4 +575,53 @@ func TestServicesRenameOnMigration(t *testing.T) {
 			t.Errorf("table %s should be gone after rename", old)
 		}
 	}
+	assertCanonicalProviderSchema(t, s)
+}
+
+// An interrupted services rename can leave both old and new wire tables. Fold
+// both sets into endpoints before retiring either table.
+func TestServiceWireRenameMergesCoexistingTables(t *testing.T) {
+	s := openTestStore(t)
+	rewindProviderSchema(t, s, true)
+
+	stmts := []string{
+		`INSERT INTO providers (id, name, vendor, adapter, base_url, priority, weight, enabled, catalog_id, api_key, allow_unmatched, quirks, created_at, updated_at)
+			VALUES ('p1', 'interrupted', '', 'openai-compatible', 'https://x.example.com/v1', 0, 1, 1, '', 'sk-x', 0, '{}', 100, 100)`,
+		`INSERT INTO provider_wires (provider_id, wire) VALUES ('p1', 'openai/chat')`,
+		`CREATE TABLE service_wires (
+			service_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+			wire       TEXT NOT NULL,
+			PRIMARY KEY (service_id, wire)
+		)`,
+		`INSERT INTO service_wires (service_id, wire) VALUES ('p1', 'openai/models')`,
+	}
+	for _, stmt := range stmts {
+		if _, err := s.db.Exec(stmt); err != nil {
+			t.Fatalf("setup %s: %v", stmt, err)
+		}
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	got, err := s.GetProvider("p1")
+	if err != nil {
+		t.Fatalf("GetProvider: %v", err)
+	}
+	want := map[string]string{
+		"openai/chat":   "https://x.example.com/v1/chat/completions",
+		"openai/models": "https://x.example.com/v1",
+	}
+	if len(got.Endpoints) != len(want) {
+		t.Fatalf("endpoints = %+v, want %d", got.Endpoints, len(want))
+	}
+	for _, endpoint := range got.Endpoints {
+		if endpoint.Endpoint != want[endpoint.Wire] {
+			t.Errorf("endpoint %q = %q, want %q", endpoint.Wire, endpoint.Endpoint, want[endpoint.Wire])
+		}
+	}
+	if has, err := s.tableExists("service_wires"); err != nil || has {
+		t.Fatalf("service_wires present = %v, err = %v; want retired", has, err)
+	}
+	assertCanonicalProviderSchema(t, s)
 }
