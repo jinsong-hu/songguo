@@ -1,11 +1,40 @@
 import { Suspense, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { Activity, BookOpen, Boxes, Braces, Layers, LogOut, Plug, Settings, Users } from 'lucide-react';
+import {
+  Activity,
+  BarChart3,
+  BookOpen,
+  Boxes,
+  Braces,
+  Layers,
+  LogOut,
+  MonitorSmartphone,
+  Plug,
+  Settings,
+  Users,
+} from 'lucide-react';
 import { useSession } from '../lib/sessionContext';
 import styles from './Layout.module.css';
 
 const NAV_TOP = [
   { to: '/', label: 'Overview', icon: Activity, end: true },
+] as const;
+
+// The same dashboard, pointed at one thing at a time. Overview answers "how is
+// the gateway doing"; these answer "how are the providers / models / users /
+// clients doing", which wants a different default breakdown and a different
+// selection of panels rather than a different kind of page.
+const INSIGHTS_SUB = [
+  { to: '/insights/providers', label: 'Providers', icon: Plug },
+  { to: '/insights/models', label: 'Models', icon: Boxes },
+  { to: '/insights/users', label: 'Users', icon: Users },
+  { to: '/insights/clients', label: 'Clients', icon: MonitorSmartphone },
+] as const;
+
+// Configuration surfaces, below the analytics ones. `Providers` and `Users`
+// appear in both groups on purpose: the same nouns, once as "what is it doing"
+// and once as "how is it set up".
+const NAV_CONFIG = [
   { to: '/services', label: 'Services', icon: Layers, end: false },
   { to: '/providers', label: 'Providers', icon: Plug, end: false },
   { to: '/users', label: 'Users', icon: Users, end: false },
@@ -25,10 +54,11 @@ const subNavItemClass = ({ isActive }: { isActive: boolean }) =>
     : `${styles.navItem} ${styles.subNavItem}`;
 
 export function Layout() {
-  // The Docs item is collapsed until any /docs route is active, then it expands
-  // to reveal its second-level pages.
+  // Docs and Insights are collapsed until one of their routes is active, then
+  // they expand to reveal their second-level pages.
   const { pathname } = useLocation();
   const docsActive = pathname === '/docs' || pathname.startsWith('/docs/');
+  const insightsActive = pathname === '/insights' || pathname.startsWith('/insights/');
   const { me, signOut } = useSession();
   const isUser = me.role === 'user';
 
@@ -56,6 +86,28 @@ export function Layout() {
           ) : (
             <>
               {NAV_TOP.map(({ to, label, icon: Icon, end }) => (
+                <NavLink key={to} to={to} end={end} className={navItemClass}>
+                  <Icon size={16} />
+                  <span>{label}</span>
+                </NavLink>
+              ))}
+
+              <NavLink to="/insights" className={navItemClass}>
+                <BarChart3 size={16} />
+                <span>Insights</span>
+              </NavLink>
+              {insightsActive ? (
+                <div className={styles.subNav}>
+                  {INSIGHTS_SUB.map(({ to, label, icon: Icon }) => (
+                    <NavLink key={to} to={to} className={subNavItemClass}>
+                      <Icon size={16} />
+                      <span>{label}</span>
+                    </NavLink>
+                  ))}
+                </div>
+              ) : null}
+
+              {NAV_CONFIG.map(({ to, label, icon: Icon, end }) => (
                 <NavLink key={to} to={to} end={end} className={navItemClass}>
                   <Icon size={16} />
                   <span>{label}</span>
