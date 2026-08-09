@@ -195,3 +195,47 @@ func TestErrorClassCountsEmpty(t *testing.T) {
 		t.Errorf("empty = %+v, want zero", c)
 	}
 }
+
+// The client dimension groups by client_name. Unlike Facets, which drops rows
+// with no recognized client, a breakdown keeps them under the empty key: curl,
+// raw SDKs and health checks are real traffic, and a total that silently omitted
+// them would not sum to the window it claims to cover.
+func TestBreakdownByClient(t *testing.T) {
+	s := openTestStore(t)
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	entries := []calls.Entry{
+		{TS: base, UserID: "u1", Model: "gpt-4o", Vendor: "openai", ClientName: "claude-code", Status: 200, InputTokens: 100, Cost: 1},
+		{TS: base.Add(time.Minute), UserID: "u1", Model: "gpt-4o", Vendor: "openai", ClientName: "claude-code", Status: 200, InputTokens: 50, Cost: 1},
+		{TS: base.Add(2 * time.Minute), UserID: "u2", Model: "gpt-4o", Vendor: "openai", ClientName: "codex-openai", Status: 200, InputTokens: 20, Cost: 1},
+		// No client: curl, a raw SDK, a health check.
+		{TS: base.Add(3 * time.Minute), UserID: "u2", Model: "gpt-4o", Vendor: "openai", Status: 200, InputTokens: 10, Cost: 1},
+	}
+	for i, e := range entries {
+		if _, err := s.AppendCall(e); err != nil {
+			t.Fatalf("AppendCall[%d]: %v", i, err)
+		}
+	}
+
+	rows, err := s.Breakdown(BreakdownByClient, nil, nil)
+	if err != nil {
+		t.Fatalf("Breakdown(client): %v", err)
+	}
+	total := 0
+	byKey := map[string]int{}
+	for _, r := range rows {
+		byKey[r.Key] = r.Requests
+		total += r.Requests
+	}
+	if byKey["claude-code"] != 2 {
+		t.Errorf("claude-code = %d, want 2 (rows %+v)", byKey["claude-code"], rows)
+	}
+	if byKey["codex-openai"] != 1 {
+		t.Errorf("codex-openai = %d, want 1 (rows %+v)", byKey["codex-openai"], rows)
+	}
+	if total != len(entries) {
+		t.Errorf("rows cover %d requests, want all %d", total, len(entries))
+	}
+	if rows[0].Key != "claude-code" {
+		t.Errorf("rows[0] = %q, want the busiest client first", rows[0].Key)
+	}
+}

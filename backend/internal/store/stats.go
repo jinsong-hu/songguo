@@ -508,6 +508,7 @@ const (
 	BreakdownByVendor   BreakdownDimension = "vendor"
 	BreakdownByUser     BreakdownDimension = "user"
 	BreakdownByModality BreakdownDimension = "modality"
+	BreakdownByClient   BreakdownDimension = "client"
 )
 
 // ErrBadDimension is returned by Breakdown for an unrecognized dimension.
@@ -526,6 +527,17 @@ func breakdownColumn(d BreakdownDimension) (string, bool) {
 		return "user_id", true
 	case BreakdownByModality:
 		return "modality", true
+	case BreakdownByClient:
+		// The caller's coding agent, as ParseClientInfo recognized it.
+		//
+		// Note the asymmetry with Facets, which deliberately drops rows with no
+		// recognized client rather than offer a filter option that would assert
+		// a peer client that does not exist. A breakdown keeps them, because it
+		// is a total: curl, raw SDKs and health checks are real traffic, and a
+		// chart claiming to cover the window must not quietly omit them. They
+		// land in whatever the caller does with an empty key — the raw empty
+		// string from Breakdown, "unknown" from the *Series functions.
+		return "client_name", true
 	default:
 		return "", false
 	}

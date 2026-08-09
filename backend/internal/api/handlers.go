@@ -518,7 +518,7 @@ func (a *api) handleTokensByModel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, store.ErrBadDimension) {
-			a.writeDataErr(w, "tokens by model", badRequestErr("dimension must be model, vendor, or user"))
+			a.writeDataErr(w, "tokens by model", badRequestErr("dimension must be model, vendor, user, or client"))
 			return
 		}
 		a.writeDataErr(w, "tokens by model", err)
@@ -540,7 +540,7 @@ func (a *api) handleTokensByModel(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSuccessByModel returns per-bucket request/error counts broken down by a
-// dimension (model, vendor, or user; top N by requests + "Other"), for the
+// dimension (model, vendor, user, or client; top N by requests + "Other"), for the
 // Success % over-time chart. Dimension defaults to model; window defaults to the
 // last 7 days; bucket auto-selects like handleUsageSeries.
 func (a *api) handleSuccessByModel(w http.ResponseWriter, r *http.Request) {
@@ -571,7 +571,7 @@ func (a *api) handleSuccessByModel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, store.ErrBadDimension) {
-			a.writeDataErr(w, "success by model", badRequestErr("dimension must be model, vendor, or user"))
+			a.writeDataErr(w, "success by model", badRequestErr("dimension must be model, vendor, user, or client"))
 			return
 		}
 		a.writeDataErr(w, "success by model", err)
@@ -592,7 +592,7 @@ func (a *api) handleSuccessByModel(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCacheByModel returns per-bucket cache-read and total-input token sums broken
-// down by a dimension (model, vendor, or user; top N by total input + "Other"), for
+// down by a dimension (model, vendor, user, or client; top N by total input + "Other"), for
 // the cache-hit % over-time chart. Dimension defaults to model; window defaults to
 // the last 7 days; bucket auto-selects like handleUsageSeries.
 func (a *api) handleCacheByModel(w http.ResponseWriter, r *http.Request) {
@@ -623,7 +623,7 @@ func (a *api) handleCacheByModel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, store.ErrBadDimension) {
-			a.writeDataErr(w, "cache by model", badRequestErr("dimension must be model, vendor, or user"))
+			a.writeDataErr(w, "cache by model", badRequestErr("dimension must be model, vendor, user, or client"))
 			return
 		}
 		a.writeDataErr(w, "cache by model", err)
@@ -659,7 +659,7 @@ func (a *api) handleBreakdown(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.store.Breakdown(dim, &since, &until)
 	if err != nil {
 		if errors.Is(err, store.ErrBadDimension) {
-			a.writeDataErr(w, "usage breakdown", badRequestErr("dimension must be model, vendor, user, or modality"))
+			a.writeDataErr(w, "usage breakdown", badRequestErr("dimension must be model, vendor, user, client, or modality"))
 			return
 		}
 		a.writeDataErr(w, "usage breakdown", err)
@@ -743,7 +743,7 @@ func (a *api) handleTopErrorCodes(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.store.TopErrorCodes(statsScope(r), dim, key, &since, &until, 8)
 	if err != nil {
 		if errors.Is(err, store.ErrBadDimension) {
-			a.writeDataErr(w, "usage error codes", badRequestErr("dimension must be model, vendor, or user"))
+			a.writeDataErr(w, "usage error codes", badRequestErr("dimension must be model, vendor, user, or client"))
 			return
 		}
 		a.writeDataErr(w, "usage error codes", err)

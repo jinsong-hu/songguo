@@ -129,7 +129,7 @@ export interface TokensByModelPoint {
 
 // Dimension the Usage stacked charts group their series by. "vendor" is
 // surfaced as "provider" in the UI; the underlying calls column is `vendor`.
-export type UsageDimension = 'model' | 'vendor' | 'user';
+export type UsageDimension = 'model' | 'vendor' | 'user' | 'client';
 
 export interface TokensByModelSeries {
   bucket: Bucket;
@@ -182,7 +182,7 @@ export interface CacheByModelSeries {
   points: CacheByModelPoint[];
 }
 
-export type BreakdownDimension = 'model' | 'vendor' | 'user' | 'modality';
+export type BreakdownDimension = 'model' | 'vendor' | 'user' | 'client' | 'modality';
 
 export interface BreakdownRow {
   key: string;
