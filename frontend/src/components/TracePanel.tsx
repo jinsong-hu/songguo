@@ -4,7 +4,7 @@ import { CopyButton } from './CopyButton';
 import { ErrorBanner } from './ErrorBanner';
 import { Skeleton } from './Skeleton';
 import { useFetch } from '../lib/useFetch';
-import styles from '../pages/Overview.module.css';
+import styles from '../pages/ActivityFeed.module.css';
 
 /**
  * TracePanel renders the captured request/response payload for a call, lazily

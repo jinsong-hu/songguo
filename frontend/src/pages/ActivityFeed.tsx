@@ -8,7 +8,8 @@ import { ErrorBanner } from '../components/ErrorBanner';
 import { Skeleton } from '../components/Skeleton';
 import { useFetch, LIVE_REFRESH_MS } from '../lib/useFetch';
 import { dateTime, duration, int, money } from '../lib/format';
-import styles from './Overview.module.css';
+import shared from '../components/dashboard/dashboard.module.css';
+import styles from './ActivityFeed.module.css';
 
 const PAGE_SIZE = 25;
 const REFRESH_MS = LIVE_REFRESH_MS;
@@ -101,8 +102,8 @@ export function ActivityFeed({ since, until, filter, interactive = true }: Activ
 
   return (
     <>
-      <div className={styles.sectionTitle}>
-        <span className={styles.sectionName}>Recent activity</span>
+      <div className={shared.sectionTitle}>
+        <span className={shared.sectionName}>Recent activity</span>
         <FeedTabs sort={sort} onChange={changeSort} />
       </div>
       <div className={`card ${styles.callsPanel}`}>
@@ -199,21 +200,21 @@ function FeedTabs({ sort, onChange }: { sort: FeedSort; onChange: (s: FeedSort) 
   const topValue: FeedSort = topActive ? sort : 'tokens';
 
   return (
-    <div className={styles.seg} role="tablist" aria-label="Activity sort">
+    <div className={shared.seg} role="tablist" aria-label="Activity sort">
       <button
         role="tab"
         aria-selected={sort === 'recent'}
-        className={`${styles.segBtn} ${sort === 'recent' ? styles.segActive : ''}`}
+        className={`${shared.segBtn} ${sort === 'recent' ? shared.segActive : ''}`}
         onClick={() => onChange('recent')}
       >
         Recent
       </button>
 
-      <div className={`${styles.segBtn} ${styles.segSelect} ${topActive ? styles.segActive : ''}`}>
+      <div className={`${shared.segBtn} ${shared.segSelect} ${topActive ? shared.segActive : ''}`}>
         <span>Top · {topLabel}</span>
         <ChevronDown size={13} aria-hidden="true" />
         <select
-          className={styles.segSelectInput}
+          className={shared.segSelectInput}
           aria-label="Top ranking metric"
           value={topValue}
           onChange={(e) => onChange(e.target.value as FeedSort)}
@@ -229,7 +230,7 @@ function FeedTabs({ sort, onChange }: { sort: FeedSort; onChange: (s: FeedSort) 
       <button
         role="tab"
         aria-selected={sort === 'slow'}
-        className={`${styles.segBtn} ${sort === 'slow' ? styles.segActive : ''}`}
+        className={`${shared.segBtn} ${sort === 'slow' ? shared.segActive : ''}`}
         onClick={() => onChange('slow')}
       >
         Slow
@@ -237,7 +238,7 @@ function FeedTabs({ sort, onChange }: { sort: FeedSort; onChange: (s: FeedSort) 
       <button
         role="tab"
         aria-selected={sort === 'failures'}
-        className={`${styles.segBtn} ${sort === 'failures' ? styles.segActive : ''}`}
+        className={`${shared.segBtn} ${sort === 'failures' ? shared.segActive : ''}`}
         onClick={() => onChange('failures')}
       >
         Failures
