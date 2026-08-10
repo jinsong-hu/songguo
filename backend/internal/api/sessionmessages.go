@@ -10,6 +10,10 @@ import (
 // Messages panel. Values stay in their native wire shape so the frontend can
 // render protocol-specific tool, image, and reasoning blocks without receiving
 // full request/response traces.
+//
+// System and Tools collect the request's top-level fields plus the instruction
+// material some clients carry inside the message array instead — see
+// hoistInlinePrompt.
 type sessionMessagesView struct {
 	SessionID string            `json:"session_id"`
 	Model     string            `json:"model"`
@@ -53,9 +57,12 @@ func (a *api) sessionMessagesData(id string) (sessionMessagesView, error) {
 		return view, err
 	}
 
-	seenSystem := map[string]struct{}{}
-	seenTools := map[string]struct{}{}
-	var messages []promptItem
+	// adoptInlineSystem is decided once for the whole session rather than per
+	// request: a session that hoisted an inline preamble out of some requests but
+	// not others would hand mergePromptItems two different message shapes for the
+	// same conversation, and the overlap merge would append instead of merge.
+	prompts := make([]capturedPromptBody, 0, len(requests))
+	adoptInlineSystem := true
 	for _, request := range requests {
 		if request.Wire == "anthropic/count_tokens" {
 			continue
@@ -71,15 +78,21 @@ func (a *api) sessionMessagesData(id string) (sessionMessagesView, error) {
 			// request must not hide the rest of a session's conversation.
 			continue
 		}
+		if hasJSONValue(topLevelSystem(prompt)) {
+			adoptInlineSystem = false
+		}
+		prompts = append(prompts, prompt)
+	}
+
+	seenSystem := map[string]struct{}{}
+	seenTools := map[string]struct{}{}
+	var messages []promptItem
+	for _, prompt := range prompts {
 		if view.Model == "" && prompt.Model != "" {
 			view.Model = prompt.Model
 		}
 
-		system := prompt.System
-		if !hasJSONValue(system) {
-			system = prompt.Instructions
-		}
-		view.System = appendUniquePromptValue(view.System, seenSystem, system)
+		view.System = appendUniquePromptValue(view.System, seenSystem, topLevelSystem(prompt))
 
 		if tools, ok := rawJSONArray(prompt.Tools); ok {
 			for _, tool := range tools {
@@ -87,7 +100,14 @@ func (a *api) sessionMessagesData(id string) (sessionMessagesView, error) {
 			}
 		}
 
-		next := requestMessageItems(prompt.Messages, prompt.Input)
+		items := requestMessageItems(prompt.Messages, prompt.Input)
+		inlineSystem, inlineTools, next := hoistInlinePrompt(items, adoptInlineSystem)
+		for _, tool := range inlineTools {
+			view.Tools = appendUniquePromptValue(view.Tools, seenTools, tool)
+		}
+		for _, block := range inlineSystem {
+			view.System = appendUniquePromptValue(view.System, seenSystem, block)
+		}
 		messages = mergePromptItems(messages, next)
 	}
 
@@ -95,6 +115,71 @@ func (a *api) sessionMessagesData(id string) (sessionMessagesView, error) {
 		view.Messages = append(view.Messages, item.raw)
 	}
 	return view, nil
+}
+
+// topLevelSystem is the request's out-of-band instruction field: Anthropic's
+// system, or the Responses API's instructions.
+func topLevelSystem(prompt capturedPromptBody) json.RawMessage {
+	if hasJSONValue(prompt.System) {
+		return prompt.System
+	}
+	return prompt.Instructions
+}
+
+// inlinePromptItem is the sliver of a message item that decides whether it is
+// conversation or instruction material the client folded into the array.
+type inlinePromptItem struct {
+	Type    string          `json:"type"`
+	Role    string          `json:"role"`
+	Tools   json.RawMessage `json:"tools"`
+	Content json.RawMessage `json:"content"`
+}
+
+// hoistInlinePrompt splits a request's message items into the instruction
+// preamble some clients carry inline and the conversation proper, mirroring how
+// internal/compose already weighs the same items (additional_tools as
+// tool_schemas, system/developer roles as system). Without it a client that
+// declares neither field at the top level — Codex's responses-lite shape, where
+// the schemas ride in an additional_tools item and the prompt in a run of
+// developer messages — renders an empty System and Tools panel while its
+// Context tab reads correctly.
+//
+// Tool schemas are lifted wherever they appear: an additional_tools item is
+// never conversation. The system run is lifted only when adoptSystem says the
+// session declares no top-level system, and only from the head of the array.
+// Both restrictions exist because a developer item is not always instructions —
+// clients that do declare instructions out of band still send developer items
+// for per-turn context and compaction summaries, and those are conversation.
+func hoistInlinePrompt(items []promptItem, adoptSystem bool) (system, tools []json.RawMessage, rest []promptItem) {
+	rest = make([]promptItem, 0, len(items))
+	head := adoptSystem
+	for _, item := range items {
+		var decoded inlinePromptItem
+		if err := json.Unmarshal(item.raw, &decoded); err != nil {
+			// A bare string item, or anything else that is not an object: ordinary
+			// conversation, and the end of any preamble.
+			head = false
+			rest = append(rest, item)
+			continue
+		}
+		if decoded.Type == "additional_tools" {
+			if inline, ok := rawJSONArray(decoded.Tools); ok {
+				tools = append(tools, inline...)
+			}
+			continue
+		}
+		if head && (decoded.Role == "system" || decoded.Role == "developer") {
+			value := decoded.Content
+			if !hasJSONValue(value) {
+				value = item.raw
+			}
+			system = append(system, value)
+			continue
+		}
+		head = false
+		rest = append(rest, item)
+	}
+	return system, tools, rest
 }
 
 func requestMessageItems(messages, input json.RawMessage) []promptItem {

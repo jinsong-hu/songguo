@@ -1725,15 +1725,19 @@ function systemBlocks(system: unknown): string[] {
   if (typeof system === 'string') return [system];
   if (system == null) return [];
   if (Array.isArray(system)) {
-    return system
-      .map((block) =>
-        isRecord(block) && block.type === 'text' && typeof block.text === 'string' && block.text !== ''
-          ? block.text
-          : compactJson(block),
-      )
-      .filter((s) => s !== '');
+    return system.map(systemBlockText).filter((s) => s !== '');
   }
   return [compactJson(system)];
+}
+
+// systemBlockText reads a block's text through the same field probe the message
+// renderer uses, so a preamble the backend lifted out of a Responses `input`
+// array — whose blocks are typed `input_text`, not `text` — reads as prose
+// rather than as a JSON dump.
+function systemBlockText(block: unknown): string {
+  if (typeof block === 'string') return block;
+  if (!isRecord(block)) return compactJson(block);
+  return textField(block) || compactJson(block);
 }
 
 function toolInfos(tools: unknown): ToolInfo[] {

@@ -424,11 +424,21 @@ export interface SessionDetail {
 export interface SessionMessages {
   session_id: string;
   model: string;
-  /** Unique request-level system/instructions values in first-seen order. */
+  /**
+   * Unique system/instructions values in first-seen order: the request's
+   * top-level field, or the leading system/developer run the backend lifted out
+   * of `input` for clients that declare no top-level field.
+   */
   system: unknown[];
-  /** Unique raw tool definitions in first-seen order. */
+  /**
+   * Unique raw tool definitions in first-seen order, from the top-level `tools`
+   * array and from any `additional_tools` item carried inside `input`.
+   */
   tools: unknown[];
-  /** Raw message/input items after cumulative-history overlap removal. */
+  /**
+   * Raw message/input items after cumulative-history overlap removal, minus
+   * whatever was lifted into `system` and `tools`.
+   */
   messages: unknown[];
 }
 
