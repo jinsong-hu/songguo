@@ -1,7 +1,7 @@
 /* Shared dashboard chrome: KPI cards, section headers, panels, the breakdown
    segmented control, and the two composite widgets (the Success bar-table and
    the error-code list). Moved out of Overview.module.css so the Overview and
-   the per-purpose Insights pages render from one set of rules — the alternative
+   the per-purpose sibling pages render from one set of rules — the alternative
    was copies that drift. */
 
 .kpiGrid {

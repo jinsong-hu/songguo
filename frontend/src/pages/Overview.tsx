@@ -19,7 +19,8 @@ import { ActivityFeed } from './ActivityFeed';
 /**
  * The general dashboard: "how is the gateway doing right now", across
  * everything. Every section defaults to the by-model breakdown and can be
- * switched to any other — the per-purpose Insights pages are these same
+ * switched to any other — the per-purpose Overview pages (providers, models,
+ * users, clients) are these same
  * sections with different defaults and a different selection.
  */
 export function OverviewPage() {

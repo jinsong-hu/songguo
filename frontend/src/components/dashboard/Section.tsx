@@ -1,5 +1,5 @@
-// Dashboard building blocks, shared by the Overview and the per-purpose
-// Insights pages.
+// Dashboard building blocks, shared by the Overview and its per-purpose
+// siblings (providers, models, users, clients).
 //
 // The pages differ only in which sections they mount and what each one breaks
 // down by; the sections themselves are identical everywhere. Keeping them here

@@ -24,7 +24,7 @@ import { compact } from '../lib/seriesColors';
  * Note the traffic here is not exhaustive: calls whose User-Agent named no
  * recognized client group under "unknown" (curl, raw SDKs, health checks).
  */
-export function InsightsClientsPage() {
+export function OverviewClientsPage() {
   const { scope, toolbar, overview, sessions, facets, filtered, windowLabel } = useDashboard({
     dimensions: ['client', 'model', 'vendor', 'user'],
     isUser: false,

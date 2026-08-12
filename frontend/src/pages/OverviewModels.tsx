@@ -23,7 +23,7 @@ import { compact } from '../lib/seriesColors';
  * property of the model and the prompt, not of the provider relaying it — so it
  * sits near the top rather than buried mid-page.
  */
-export function InsightsModelsPage() {
+export function OverviewModelsPage() {
   const { scope, toolbar, overview, sessions, facets } = useDashboard({
     dimensions: ['model', 'vendor', 'client', 'user'],
     isUser: false,

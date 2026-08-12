@@ -21,7 +21,7 @@ import { int, money, percent } from '../lib/format';
  * addition is the routing-state KPI, which is the only number here that is live
  * rather than ledger history.
  */
-export function InsightsProvidersPage() {
+export function OverviewProvidersPage() {
   const { scope, toolbar, overview } = useDashboard({
     dimensions: ['vendor', 'model', 'client', 'user'],
     isUser: false,

@@ -24,17 +24,17 @@ const RequestDetailPage = lazy(() =>
   import('./pages/RequestDetail').then((m) => ({ default: m.RequestDetailPage })),
 );
 const ProvidersPage = lazy(() => import('./pages/Providers').then((m) => ({ default: m.ProvidersPage })));
-const InsightsProvidersPage = lazy(() =>
-  import('./pages/InsightsProviders').then((m) => ({ default: m.InsightsProvidersPage })),
+const OverviewProvidersPage = lazy(() =>
+  import('./pages/OverviewProviders').then((m) => ({ default: m.OverviewProvidersPage })),
 );
-const InsightsModelsPage = lazy(() =>
-  import('./pages/InsightsModels').then((m) => ({ default: m.InsightsModelsPage })),
+const OverviewModelsPage = lazy(() =>
+  import('./pages/OverviewModels').then((m) => ({ default: m.OverviewModelsPage })),
 );
-const InsightsUsersPage = lazy(() =>
-  import('./pages/InsightsUsers').then((m) => ({ default: m.InsightsUsersPage })),
+const OverviewUsersPage = lazy(() =>
+  import('./pages/OverviewUsers').then((m) => ({ default: m.OverviewUsersPage })),
 );
-const InsightsClientsPage = lazy(() =>
-  import('./pages/InsightsClients').then((m) => ({ default: m.InsightsClientsPage })),
+const OverviewClientsPage = lazy(() =>
+  import('./pages/OverviewClients').then((m) => ({ default: m.OverviewClientsPage })),
 );
 const VendorAddPage = lazy(() => import('./pages/VendorAdd').then((m) => ({ default: m.VendorAddPage })));
 const ProviderEditPage = lazy(() =>
@@ -192,13 +192,20 @@ export function App() {
                 <Route path="services" element={<ServicesPage />} />
                 <Route path="services/add" element={<Navigate to="/providers" replace />} />
                 <Route path="services/:model" element={<ServiceDetailPage />} />
-                {/* Per-purpose dashboards. Bare /insights lands on providers,
-                    the one most often opened cold. */}
-                <Route path="insights" element={<Navigate to="/insights/providers" replace />} />
-                <Route path="insights/providers" element={<InsightsProvidersPage />} />
-                <Route path="insights/models" element={<InsightsModelsPage />} />
-                <Route path="insights/users" element={<InsightsUsersPage />} />
-                <Route path="insights/clients" element={<InsightsClientsPage />} />
+                {/* Per-purpose dashboards: the Overview pointed at one thing.
+                    Bare /overview is the general one, at the index route. */}
+                <Route path="overview" element={<Navigate to="/" replace />} />
+                <Route path="overview/providers" element={<OverviewProvidersPage />} />
+                <Route path="overview/models" element={<OverviewModelsPage />} />
+                <Route path="overview/users" element={<OverviewUsersPage />} />
+                <Route path="overview/clients" element={<OverviewClientsPage />} />
+                {/* These lived under /insights until the tab was folded into
+                    Overview; keep old links working. */}
+                <Route path="insights" element={<Navigate to="/" replace />} />
+                <Route path="insights/providers" element={<Navigate to="/overview/providers" replace />} />
+                <Route path="insights/models" element={<Navigate to="/overview/models" replace />} />
+                <Route path="insights/users" element={<Navigate to="/overview/users" replace />} />
+                <Route path="insights/clients" element={<Navigate to="/overview/clients" replace />} />
                 <Route path="providers" element={<ProvidersPage />} />
                 <Route path="providers/add" element={<Navigate to="/providers" replace />} />
                 <Route path="providers/add/:vendorId" element={<VendorAddPage />} />

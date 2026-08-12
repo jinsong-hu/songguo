@@ -2,7 +2,6 @@ import { Suspense, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   Activity,
-  BarChart3,
   BookOpen,
   Boxes,
   Braces,
@@ -16,19 +15,16 @@ import {
 import { useSession } from '../lib/sessionContext';
 import styles from './Layout.module.css';
 
-const NAV_TOP = [
-  { to: '/', label: 'Overview', icon: Activity, end: true },
-] as const;
-
-// The same dashboard, pointed at one thing at a time. Overview answers "how is
-// the gateway doing"; these answer "how are the providers / models / users /
-// clients doing", which wants a different default breakdown and a different
-// selection of panels rather than a different kind of page.
-const INSIGHTS_SUB = [
-  { to: '/insights/providers', label: 'Providers', icon: Plug },
-  { to: '/insights/models', label: 'Models', icon: Boxes },
-  { to: '/insights/users', label: 'Users', icon: Users },
-  { to: '/insights/clients', label: 'Clients', icon: MonitorSmartphone },
+// The same dashboard, pointed at one thing at a time. Overview itself answers
+// "how is the gateway doing"; these answer "how are the providers / models /
+// users / clients doing", which wants a different default breakdown and a
+// different selection of panels rather than a different kind of page. That is
+// why they hang off Overview instead of standing as a section of their own.
+const OVERVIEW_SUB = [
+  { to: '/overview/providers', label: 'Providers', icon: Plug },
+  { to: '/overview/models', label: 'Models', icon: Boxes },
+  { to: '/overview/users', label: 'Users', icon: Users },
+  { to: '/overview/clients', label: 'Clients', icon: MonitorSmartphone },
 ] as const;
 
 // Configuration surfaces, below the analytics ones. `Providers` and `Users`
@@ -45,8 +41,10 @@ const DOCS_SUB = [
   { to: '/docs/mcp', label: 'MCP', icon: Boxes },
 ] as const;
 
+const activeNavItem = `${styles.navItem} ${styles.navItemActive}`;
+
 const navItemClass = ({ isActive }: { isActive: boolean }) =>
-  isActive ? `${styles.navItem} ${styles.navItemActive}` : styles.navItem;
+  isActive ? activeNavItem : styles.navItem;
 
 const subNavItemClass = ({ isActive }: { isActive: boolean }) =>
   isActive
@@ -54,11 +52,11 @@ const subNavItemClass = ({ isActive }: { isActive: boolean }) =>
     : `${styles.navItem} ${styles.subNavItem}`;
 
 export function Layout() {
-  // Docs and Insights are collapsed until one of their routes is active, then
+  // Docs and Overview are collapsed until one of their routes is active, then
   // they expand to reveal their second-level pages.
   const { pathname } = useLocation();
   const docsActive = pathname === '/docs' || pathname.startsWith('/docs/');
-  const insightsActive = pathname === '/insights' || pathname.startsWith('/insights/');
+  const overviewActive = pathname === '/' || pathname.startsWith('/overview/');
   const { me, signOut } = useSession();
   const isUser = me.role === 'user';
 
@@ -85,20 +83,18 @@ export function Layout() {
             </>
           ) : (
             <>
-              {NAV_TOP.map(({ to, label, icon: Icon, end }) => (
-                <NavLink key={to} to={to} end={end} className={navItemClass}>
-                  <Icon size={16} />
-                  <span>{label}</span>
-                </NavLink>
-              ))}
-
-              <NavLink to="/insights" className={navItemClass}>
-                <BarChart3 size={16} />
-                <span>Insights</span>
+              {/* `to="/"` matches every path, so `end` is required to keep the
+                  link from lighting up everywhere — which also means it goes
+                  dark on the sub-pages. Drive the class off `overviewActive`
+                  instead, so the parent stays lit while a child is open, the
+                  way Docs does. */}
+              <NavLink to="/" end className={overviewActive ? activeNavItem : styles.navItem}>
+                <Activity size={16} />
+                <span>Overview</span>
               </NavLink>
-              {insightsActive ? (
+              {overviewActive ? (
                 <div className={styles.subNav}>
-                  {INSIGHTS_SUB.map(({ to, label, icon: Icon }) => (
+                  {OVERVIEW_SUB.map(({ to, label, icon: Icon }) => (
                     <NavLink key={to} to={to} className={subNavItemClass}>
                       <Icon size={16} />
                       <span>{label}</span>

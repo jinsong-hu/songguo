@@ -18,7 +18,7 @@ import { int, money, percent } from '../lib/format';
  * cost lever there is: two keys running the same model can differ several-fold
  * on spend purely by how well their prompts cache.
  */
-export function InsightsUsersPage() {
+export function OverviewUsersPage() {
   const { scope, toolbar, overview, sessions, filtered, windowLabel } = useDashboard({
     dimensions: ['user', 'model', 'vendor', 'client'],
     isUser: false,
