@@ -61,7 +61,8 @@ function servingProviders(service: Service | undefined, providers: Provider[]): 
   return providers.filter((p) => ids.has(p.id));
 }
 
-/** Wires that, per the catalog, actually serve a model (across all vendors). */
+/** Wires that, per the catalog, are the usual home of a model (across all
+ *  vendors). A hint for ordering only — never a filter; see wiresOf. */
 function wiresForModel(catalog: Catalog | null, model: string): Set<string> {
   const wires = new Set<string>();
   if (!catalog) return wires;
@@ -74,18 +75,21 @@ function wiresForModel(catalog: Catalog | null, model: string): Set<string> {
 }
 
 /**
- * Wires enabled on the providers serving a model, narrowed to those the catalog
- * says actually serve it — a provider key may carry sibling wires (image, video,
- * ASR…) for other models, which this model's test must not offer. When the
- * catalog has nothing for the model (custom/off-catalog), fall back to the
- * provider's full wire set so there is still a request shape.
+ * Every wire enabled on the providers serving a model.
+ *
+ * Deliberately unfiltered: the catalog is add-a-provider reference data about
+ * the real vendors, and a configured provider is a relay that may serve any
+ * model over any wire the operator mapped. Hiding a wire the operator enabled
+ * because a preset for a *different* vendor doesn't list the model there would
+ * be the panel overruling the config — and songguo forwards what it is told to
+ * forward; whether the upstream honors it is the upstream's answer to give.
+ * So the catalog only ranks (see wireTests' preferred set), it never excludes —
+ * the same rule the router follows for health.
  */
-function wiresOf(providers: Provider[], serving: Set<string>): string[] {
+function wiresOf(providers: Provider[]): string[] {
   const wires = new Set<string>();
   for (const p of providers) {
-    for (const ep of p.endpoints) {
-      if (serving.size === 0 || serving.has(ep.wire)) wires.add(ep.wire);
-    }
+    for (const ep of p.endpoints) wires.add(ep.wire);
   }
   return [...wires];
 }
@@ -133,7 +137,7 @@ export function Playground({ services, providers, catalog, defaultModel }: Playg
     const map = new Map<string, ModelInfo>();
     for (const s of services) {
       const serving = servingProviders(s, providers);
-      const wires = wireTests(wiresOf(serving, wiresForModel(catalog, s.model))).map((t) => t.wire);
+      const wires = wireTests(wiresOf(serving), wiresForModel(catalog, s.model)).map((t) => t.wire);
       const providersByWire = new Map<string, Provider[]>();
       for (const w of wires) {
         providersByWire.set(

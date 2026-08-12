@@ -80,8 +80,14 @@ const UNTESTED_WIRES = new Set<string>(['volc/voice-clone']);
  * management wires (model listings) are dropped — they serve no model, so
  * there is nothing to test. Everything else gets a panel; wires without a
  * dedicated one render the honest "unsupported" fallback.
+ *
+ * `preferred` is the catalog's opinion of where this model usually lives. It
+ * only sorts — a wire the operator enabled is never dropped for being absent
+ * from it, since a relay may serve any model over any wire that was mapped to
+ * it, and the request shape the panel offers must follow the config rather than
+ * a preset describing some other vendor.
  */
-export function wireTests(wires: string[]): WireTest[] {
+export function wireTests(wires: string[], preferred?: Set<string>): WireTest[] {
   const tests: WireTest[] = [];
   for (const wire of wires) {
     if (wireKind(wire) === '') continue; // model-listing / management wire
@@ -93,11 +99,17 @@ export function wireTests(wires: string[]): WireTest[] {
       endpoint: TEST_ENDPOINT[wire] ?? '',
     });
   }
-  // Group by modality so every wire family stays together (text first, then
-  // the media families, with speech — TTS then ASR — last and adjacent). Within
-  // a family, interactively-testable wires lead, then by id for stability. The
-  // Endpoint and Wire selectors both render this list, so they share one order.
+  // Catalog-preferred wires lead — ahead of modality, so an image model whose
+  // provider also enables chat still defaults to its image panel. Then group by
+  // modality so every wire family stays together (text first, then the media
+  // families, with speech — TTS then ASR — last and adjacent). Within a family,
+  // interactively-testable wires lead, then by id for stability. The Endpoint
+  // and Wire selectors both render this list, so they share one order.
+  const pref = (w: string) => (preferred?.size && !preferred.has(w) ? 1 : 0);
   return tests.sort((a, b) => {
+    const pa = pref(a.wire);
+    const pb = pref(b.wire);
+    if (pa !== pb) return pa - pb;
     const ra = MODALITY_RANK[wireKind(a.wire)] ?? 99;
     const rb = MODALITY_RANK[wireKind(b.wire)] ?? 99;
     if (ra !== rb) return ra - rb;
