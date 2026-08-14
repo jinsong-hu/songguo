@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -167,6 +168,66 @@ func TestPruneStopsOnCancel(t *testing.T) {
 	}
 	if left != 10 {
 		t.Errorf("calls remaining = %d, want 10 (cancel should stop before any batch)", left)
+	}
+}
+
+// Every prune must find its expired rows through an index. pruneOlderThan
+// evaluates the cutoff subquery inside the DELETE's write transaction, so a plan
+// that falls back to a full table scan holds SQLite's single write lock for the
+// length of that scan — which on the production raw table (tens of GB of captured
+// bodies) meant ~9 minutes per hourly sweep, and every concurrent ledger, spend
+// and admin write failing SQLITE_BUSY. Batching does not bound it; only the index
+// does.
+//
+// This asserts the query PLAN rather than the existence of a named index, so a
+// prune added later without an index fails here too — which is exactly how
+// raw.created_at was missed. Add a case when adding a prune tier.
+func TestPruneQueriesAreIndexBacked(t *testing.T) {
+	s := openTestStore(t)
+
+	// One case per Prune* method, mirroring the (table, cutoff column) pairs they
+	// pass to pruneOlderThan.
+	for _, tc := range []struct{ method, table, tsCol string }{
+		{"PruneRaw", "raw", "created_at"},
+		{"PruneCalls", "calls", "ts"},
+		{"PruneSessions", "sessions", "last_ts"},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			// EXPLAIN QUERY PLAN over the statement the package really runs.
+			rows, err := s.db.Query(`EXPLAIN QUERY PLAN `+pruneStmt(tc.table, tc.tsCol), 0, pruneBatch)
+			if err != nil {
+				t.Fatalf("explain: %v", err)
+			}
+			defer rows.Close()
+
+			var plan []string
+			for rows.Next() {
+				var id, parent, notUsed int
+				var detail string
+				if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+					t.Fatalf("scan plan row: %v", err)
+				}
+				plan = append(plan, detail)
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatalf("iterate plan: %v", err)
+			}
+			if len(plan) == 0 {
+				t.Fatal("EXPLAIN QUERY PLAN returned no rows")
+			}
+
+			// SQLite says "SCAN <table>" for a full scan and "SEARCH <table> USING
+			// ... INDEX ..." when it can seek. A bare SCAN of the pruned table is
+			// the failure; the "SEARCH ... USING INTEGER PRIMARY KEY (rowid=?)"
+			// outer step is expected and fine.
+			for _, detail := range plan {
+				if strings.HasPrefix(detail, "SCAN "+tc.table) {
+					t.Errorf("%s does a full table scan under the write lock.\nplan:\n  %s\n"+
+						"want a SEARCH using an index on %s.%s",
+						tc.method, strings.Join(plan, "\n  "), tc.table, tc.tsCol)
+				}
+			}
+		})
 	}
 }
 

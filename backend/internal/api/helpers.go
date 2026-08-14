@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/songguo/songguo/internal/store"
 )
 
 // apiError is a client-facing (4xx) error returned by the transport-free *Data
@@ -62,7 +64,25 @@ func decodeJSON(r *http.Request, v any) error {
 
 // serverError logs the underlying error (which may reference internals) and
 // returns a generic 500 to the client so details never leak.
+//
+// Lock contention is carved out of that default. The generic message is right for
+// a genuine internal fault — the operator can do nothing with it and the detail
+// belongs in the log — but a SQLITE_BUSY is transient, the write did not happen,
+// and retrying fixes it. Flattening that into "internal error" discards the one
+// fact worth telling the caller, so it answers 503 with a retry hint instead. The
+// carve-out is deliberately narrow: anything not IsBusy still gets the opaque 500.
 func (a *api) serverError(w http.ResponseWriter, op string, err error) {
+	if store.IsBusy(err) {
+		// Warn, not Error: expected under contention and self-correcting. Still
+		// logged with the op, because a burst of these is the signal that
+		// something is holding the write lock too long.
+		a.logger.Warn("admin api write lost the database lock", "op", op, "err", err)
+		// Set before writeError — writeJSON commits the header.
+		w.Header().Set("Retry-After", "5")
+		writeError(w, http.StatusServiceUnavailable, "db_busy",
+			"the database was busy, so this change was not saved — retry in a few seconds")
+		return
+	}
 	a.logger.Error("admin api error", "op", op, "err", err)
 	writeError(w, http.StatusInternalServerError, "internal", "internal error")
 }

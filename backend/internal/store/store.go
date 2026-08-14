@@ -194,6 +194,14 @@ func (s *Store) migrate() error {
 			resp_content_type TEXT NOT NULL DEFAULT '',
 			created_at       INTEGER NOT NULL
 		)`,
+		// Every prune cutoff column MUST be index-backed. pruneOlderThan evaluates
+		// its `WHERE created_at < ?` subquery INSIDE the DELETE's implicit write
+		// transaction, so an unindexed cutoff holds SQLite's single write lock for
+		// the length of a full table scan — and raw is the blob table, where a scan
+		// must also step past every captured body to reach created_at (the last
+		// declared column). Batching the DELETE cannot bound that; only this index
+		// can. See the History note in retention.go.
+		`CREATE INDEX IF NOT EXISTS idx_raw_created_at ON raw(created_at)`,
 		// parsed_calls holds the structured, protocol-neutral view produced by
 		// the async parse pipeline (internal/parse), 1:1 with calls.id. `data`
 		// is the JSON-encoded parse.Call; `format` names the parser used.

@@ -21,23 +21,52 @@ import (
 // hold to one chunk and lets live traffic interleave. The cost is that a prune
 // is no longer atomic; a cancelled sweep leaves some rows behind and the next
 // sweep finishes the job, which for retention is a non-issue.
+//
+// Batching alone is NOT sufficient, and reading it as sufficient is the trap. It
+// bounds how many rows one statement DELETES; it does nothing about how long that
+// statement takes to FIND them. The LIMIT subquery is evaluated inside the same
+// write transaction, so an unindexed cutoff column means a full table scan under
+// the write lock — and the LIMIT does not even cap that, because a sweep with
+// fewer expired rows than pruneBatch never fills its limit and therefore scans to
+// the end of the table. Every prune below is index-backed on its cutoff column,
+// and that is a correctness requirement rather than an optimization:
+// idx_raw_created_at, idx_calls_ts, idx_sessions_last_ts. A prune added later
+// without one reintroduces the outage described next.
+//
+// > History: raw.created_at had no index until 2026-08-14, while calls.ts and
+// > sessions.last_ts did. raw is the captured-bodies table — on the production
+// > gateway, 16.5k rows averaging 1.8 MB each, ~30 GB — so every hourly sweep
+// > full-scanned tens of GB while holding the write lock, ~9 minutes at a time,
+// > stepping past each blob to reach created_at (the last declared column). Every
+// > other writer in that window exhausted its 5s busy_timeout and failed
+// > SQLITE_BUSY: 1737 failures in 23h, mostly swallowed ledger and spend writes.
+// > The visible symptom was an operator getting "internal error" when adding a
+// > provider. TestPruneQueriesAreIndexBacked is the regression guard.
 
 // pruneBatch is how many rows one DELETE removes before releasing the write
 // lock. Large enough that pruning stays cheap per statement, small enough that
 // a proxied request never waits long behind it.
 const pruneBatch = 2000
 
-// pruneOlderThan deletes rows of table whose tsCol predates the cutoff, a batch
-// at a time, and returns the total removed. It stops early — returning what it
-// has already deleted, plus ctx.Err() — when the caller cancels.
+// pruneStmt builds the batched delete for one prune tier. It exists as its own
+// function so TestPruneQueriesAreIndexBacked can run EXPLAIN QUERY PLAN over the
+// statement this package actually executes, rather than over a copy of it in the
+// test that could drift.
 //
 // The LIMIT rides on a rowid subquery rather than `DELETE ... LIMIT`, which is
 // only available when SQLite is built with SQLITE_ENABLE_UPDATE_DELETE_LIMIT
 // and is therefore not portable across drivers.
-func (s *Store) pruneOlderThan(ctx context.Context, table, tsCol string, before time.Time) (int64, error) {
-	stmt := fmt.Sprintf(
+func pruneStmt(table, tsCol string) string {
+	return fmt.Sprintf(
 		`DELETE FROM %s WHERE rowid IN (SELECT rowid FROM %s WHERE %s < ? LIMIT ?)`,
 		table, table, tsCol)
+}
+
+// pruneOlderThan deletes rows of table whose tsCol predates the cutoff, a batch
+// at a time, and returns the total removed. It stops early — returning what it
+// has already deleted, plus ctx.Err() — when the caller cancels.
+func (s *Store) pruneOlderThan(ctx context.Context, table, tsCol string, before time.Time) (int64, error) {
+	stmt := pruneStmt(table, tsCol)
 
 	var total int64
 	for {
