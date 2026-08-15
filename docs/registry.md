@@ -286,9 +286,50 @@ carried. models.dev also publishes `-cn` variants; `alibaba-cn` prices
 `qwen-max` at 0.345/1.377 against the international 1.6/6.4, so the choice is a
 4.6x difference and deliberately explicit in `modelsdev.providerFor`.
 
-**Prices are not refreshed by this generator.** It seeds a fresh checkout and an
-air-gapped install; a generator that only runs when someone remembers is how the
-catalog rotted in the first place.
+**The generator is a seed, not the update mechanism.** It makes a fresh checkout
+and an air-gapped install correct on first boot; `internal/pricefeed` keeps a
+running gateway correct.
+
+### Prices refresh themselves
+
+`internal/pricefeed` re-reads models.dev **on startup and every
+`SONGGUO_PRICE_REFRESH`** (default 24h; `0` disables it). It stores the result,
+reloads the config, and new calls meter at the new rate. A generator that only
+runs when a human runs it is how the catalog rotted 5x on a frontier model
+without anyone noticing.
+
+Resolution order — the ordering is the whole design:
+
+| | source | beats |
+|---|---|---|
+| 1 | operator `price_override` | everything; never consults the feed |
+| 2 | a pin in `catalog.json` | someone typed it deliberately |
+| 3 | the price feed (`feed`) | the seed, which is why a stale rate self-corrects |
+| 4 | the embedded catalog (`catalog`) | the offline floor and first-boot seed |
+| 5 | the stored row, else unpriced | |
+
+An automatic rate change is safe here for one specific reason: **cost is
+computed at call time and persisted to `calls.cost`**. A refresh can only affect
+future calls; it can never rewrite a ledger row. That is what separates it from
+an automatic retry — there is no past state to revise.
+
+It is still not allowed to go quiet. Every rate that moves is logged, a move
+beyond 2x is escalated to WARN, and the resolved price reports `source: feed` so
+`GET /api/pricing` never presents a refreshed number as a published one. The 2x
+threshold is a *reporting* rule and deliberately not a limit: the 5x correction
+this exists to catch would have been suppressed by any rule that refused large
+moves.
+
+What a refresh will not do:
+
+- overwrite a pin or an override (rows 1–2 above);
+- quote a model or provider the catalog does not declare — it reuses
+  `modelsdev.Generate`, so Volcengine and every per-character/second/call model
+  are structurally out of reach;
+- accept an implausibly scaled rate, so an upstream basis slip cannot land;
+- zero anything on failure. An unreachable feed, or one that quotes nothing,
+  keeps the last stored refresh — persisted precisely so a restart during an
+  upstream outage does not silently revert to a months-old seed.
 
 ## Auth adapters
 

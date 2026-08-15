@@ -305,6 +305,18 @@ func (s *Store) migrate() error {
 			PRIMARY KEY (provider_id, model)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(provider_id)`,
+		// Last successful price refresh (internal/pricefeed). Current values
+		// only, replaced wholesale per refresh — NOT a history; calls.cost
+		// already records the rate applied to every call. It is persisted so a
+		// restart during an upstream outage keeps the last known good rate
+		// instead of reverting to the embedded seed.
+		`CREATE TABLE IF NOT EXISTS feed_prices (
+			provider_id TEXT NOT NULL,
+			model       TEXT NOT NULL,
+			cost        TEXT NOT NULL DEFAULT '{}',
+			fetched_at  TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (provider_id, model)
+		)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.Exec(stmt); err != nil {

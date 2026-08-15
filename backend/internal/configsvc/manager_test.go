@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/songguo/songguo/internal/catalog"
 	"github.com/songguo/songguo/internal/config"
@@ -639,4 +640,95 @@ func catalogCost(t *testing.T, providerID, model string) catalog.Cost {
 		t.Fatalf("catalog provider %q has no model %q", providerID, model)
 	}
 	return m.Cost
+}
+
+// The price feed sits between a hand-pinned rate and the embedded catalog. That
+// order is the contract: a refresh must correct a stale seed without ever
+// overwriting a rate someone deliberately set.
+func TestFeedPriceOutranksCatalogButNotPinsOrOverrides(t *testing.T) {
+	st := openTestStore(t)
+
+	// gpt-5.6-luna is generated (models.json), so the feed may re-price it.
+	// text-embedding-3-small is generated too; glm-5-turbo is pinned in
+	// catalog.json and must be immune.
+	if err := st.ReplaceFeedPrices([]store.FeedPrice{
+		{ProviderID: "openai", Model: "gpt-5.6-luna", Cost: catalog.Cost{Input: 7, Output: 8}},
+		{ProviderID: "zhipu", Model: "glm-5-turbo", Cost: catalog.Cost{Input: 123, Output: 456}},
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "openai", Vendor: "OpenAI", CatalogID: "openai", Enabled: true, APIKey: "sk-a",
+		Models: []store.ProviderModel{
+			{Model: "gpt-5.6-luna", Cost: catalog.Cost{Input: 99, Output: 99}},
+			{Model: "gpt-5.6-sol", Cost: catalog.Cost{Input: 5, Output: 6}, PriceOverride: true},
+		},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://api.openai.com/v1/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "zhipu", Vendor: "Zhipu", CatalogID: "zhipu", Enabled: true, APIKey: "sk-z",
+		Models:    []store.ProviderModel{{Model: "glm-5-turbo", Cost: catalog.Cost{}}},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// Feed beats the embedded catalog and the stale stored row.
+	luna, _ := m.Current().PriceFor("openai", "gpt-5.6-luna")
+	if luna.Cost.Input != 7 || luna.Cost.Output != 8 {
+		t.Errorf("gpt-5.6-luna = %+v, want the feed's 7/8", luna.Cost)
+	}
+	if luna.Source != config.PriceSourceFeed {
+		t.Errorf("gpt-5.6-luna source = %q, want %q so the UI can say where it came from",
+			luna.Source, config.PriceSourceFeed)
+	}
+
+	// An operator's override is never overtaken by a refresh.
+	sol, _ := m.Current().PriceFor("openai", "gpt-5.6-sol")
+	if sol.Cost.Input != 5 || sol.Source != config.PriceSourceOverride {
+		t.Errorf("gpt-5.6-sol = %+v (%s), want the operator's 5 and an override source", sol.Cost, sol.Source)
+	}
+
+	// A rate pinned in catalog.json outranks the feed entirely.
+	turbo, _ := m.Current().PriceFor("zhipu", "glm-5-turbo")
+	want := catalogCost(t, "zhipu", "glm-5-turbo")
+	if turbo.Cost != want {
+		t.Errorf("glm-5-turbo = %+v, want the pinned %+v (the feed must not overwrite a pin)", turbo.Cost, want)
+	}
+	if turbo.Source != config.PriceSourceCatalog {
+		t.Errorf("glm-5-turbo source = %q, want %q", turbo.Source, config.PriceSourceCatalog)
+	}
+}
+
+// With no refresh ever having landed, everything resolves from the embedded
+// catalog exactly as before — a fresh or air-gapped install is unaffected.
+func TestNoFeedFallsBackToCatalog(t *testing.T) {
+	st := openTestStore(t)
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "openai", Vendor: "OpenAI", CatalogID: "openai", Enabled: true, APIKey: "sk-a",
+		Models:    []store.ProviderModel{{Model: "gpt-5.6-luna", Cost: catalog.Cost{}}},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://api.openai.com/v1/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	got, _ := m.Current().PriceFor("openai", "gpt-5.6-luna")
+	if want := catalogCost(t, "openai", "gpt-5.6-luna"); got.Cost != want {
+		t.Errorf("gpt-5.6-luna = %+v, want the embedded %+v", got.Cost, want)
+	}
+	if got.Source != config.PriceSourceCatalog {
+		t.Errorf("source = %q, want %q", got.Source, config.PriceSourceCatalog)
+	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/songguo/songguo/internal/configsvc"
 	"github.com/songguo/songguo/internal/janitor"
 	"github.com/songguo/songguo/internal/outbound"
+	"github.com/songguo/songguo/internal/pricefeed"
 	"github.com/songguo/songguo/internal/proxy"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/server"
@@ -39,6 +40,18 @@ func getdays(key string, def int) time.Duration {
 		}
 	}
 	return time.Duration(def) * 24 * time.Hour
+}
+
+// getduration reads a Go duration ("6h", "90m") from an env var, falling back to
+// def when unset or unparseable. An explicit 0 is honoured and disables the
+// feature, which is how an air-gapped install turns the price refresh off.
+func getduration(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d >= 0 {
+			return d
+		}
+	}
+	return def
 }
 
 func main() {
@@ -174,6 +187,21 @@ func main() {
 		Sessions: getdays("SONGGUO_RETAIN_SESSIONS_DAYS", 90),
 	}, time.Hour)
 
+	// Price feed: refresh model rates from models.dev on start and on a fixed
+	// clock, so a long-running gateway does not meter at whatever the embedded
+	// catalog said on the day it was built. 0 disables it (air-gapped installs
+	// keep the embedded seed). See internal/pricefeed for why an automatic rate
+	// change is safe: cost is computed and persisted per call, so a refresh can
+	// only affect future calls and never rewrites a ledger row.
+	feedCtx, stopFeed := context.WithCancel(context.Background())
+	feedEvery := getduration("SONGGUO_PRICE_REFRESH", pricefeed.DefaultInterval)
+	var feed *pricefeed.Feed
+	if feedEvery > 0 {
+		feed = pricefeed.New(st, logger, feedEvery, manager.Reload)
+	} else {
+		logger.Info("price refresh disabled (SONGGUO_PRICE_REFRESH=0); using the embedded catalog")
+	}
+
 	// Deferred calls run LIFO, so these are registered in reverse of the order
 	// they must happen in. On the way out: cancel the janitor and the spend
 	// flusher, wait for both to return, drain the proxy's background forks, and
@@ -187,9 +215,16 @@ func main() {
 	defer proxyHandler.Close()
 	defer spendTracker.Wait()
 	defer jan.Wait()
+	if feed != nil {
+		defer feed.Wait()
+	}
 	defer stopSpend()
 	defer stopJanitor()
+	defer stopFeed()
 	go jan.Run(janitorCtx)
+	if feed != nil {
+		go feed.Run(feedCtx)
+	}
 	go spendTracker.Run(spendCtx, 0)
 
 	errCh := make(chan error, 1)

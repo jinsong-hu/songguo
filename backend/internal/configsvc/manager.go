@@ -87,6 +87,20 @@ func (m *Manager) build() (*config.Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configsvc: load catalog: %w", err)
 	}
+	// The hand-written half is read separately so a pinned rate can outrank the
+	// price feed, exactly as it outranks the generated models.json.
+	pinned, err := catalog.Manual()
+	if err != nil {
+		return nil, fmt.Errorf("configsvc: load pinned catalog: %w", err)
+	}
+	// A missing or unreadable feed is not fatal: the embedded catalog is the
+	// floor, and metering must never depend on a refresh having happened.
+	feed, err := m.store.ListFeedPrices()
+	if err != nil {
+		m.logger.Warn("cannot read refreshed prices; falling back to the embedded catalog", "err", err)
+		feed = nil
+	}
+	prices := priceSources{pinned: pinned, feed: feed, catalog: cat}
 	cfg := config.Config{}
 	for _, pvd := range providers {
 		if !pvd.Enabled {
@@ -105,7 +119,7 @@ func (m *Manager) build() (*config.Snapshot, error) {
 			}
 			outboundProxy = &p
 		}
-		cfg.Vendors = append(cfg.Vendors, vendorsFromProvider(pvd, outboundProxy, cat, m.logger)...)
+		cfg.Vendors = append(cfg.Vendors, vendorsFromProvider(pvd, outboundProxy, prices, m.logger)...)
 	}
 
 	return config.Build(cfg)
@@ -120,14 +134,14 @@ func (m *Manager) build() (*config.Snapshot, error) {
 // stable for single-host providers); additional groups get an "-<adapter>"
 // suffix. Every group carries the provider id as its credential id, so an
 // X-Songguo-Provider pin resolves across the split.
-func vendorsFromProvider(pvd store.Provider, outboundProxy *config.Proxy, cat catalog.Catalog, logger *slog.Logger) []config.Vendor {
+func vendorsFromProvider(pvd store.Provider, outboundProxy *config.Proxy, prices priceSources, logger *slog.Logger) []config.Vendor {
 	// Pass 1: resolve each model's published price (catalog, or the stored row).
 	models := make([]string, 0, len(pvd.Models))
-	prices := make(map[string]config.Price, len(pvd.Models))
+	priceTable := make(map[string]config.Price, len(pvd.Models))
 	modelRoutes := make(map[string]config.ModelRoute, len(pvd.Models))
 	for _, m := range pvd.Models {
 		models = append(models, m.Model)
-		prices[m.Model] = effectivePrice(pvd.CatalogID, m, cat)
+		priceTable[m.Model] = effectivePrice(pvd.CatalogID, m, prices)
 		priority := pvd.Priority
 		if m.PriorityOverride != nil {
 			priority = *m.PriorityOverride
@@ -161,22 +175,22 @@ func vendorsFromProvider(pvd store.Provider, outboundProxy *config.Proxy, cat ca
 	// With axes that distinction is only visible in the provenance: an empty
 	// catalog.Cost and a published all-zero cost are the same value.
 	for _, m := range pvd.Models {
-		p := prices[m.Model]
+		p := priceTable[m.Model]
 		if p.Source != config.PriceSourceUnpriced {
 			continue
 		}
-		fb, from, ok := fallbackPrice(prices, m.Model)
+		fb, from, ok := fallbackPrice(priceTable, m.Model)
 		if !ok {
 			continue
 		}
 		fb.Source = config.PriceSourceFallbackPrefix + from
-		prices[m.Model] = fb
+		priceTable[m.Model] = fb
 	}
 
 	// Price-completeness warnings (non-fatal): a provider must still route when
 	// part of its price table is missing or suspect. Warn, don't block.
 	for _, m := range pvd.Models {
-		p := prices[m.Model]
+		p := priceTable[m.Model]
 		switch {
 		case config.PriceMetersZero(p) && p.Source == config.PriceSourceOverride:
 			logger.Warn("price is explicitly overridden to zero; calls for this model will meter as $0",
@@ -262,7 +276,7 @@ func vendorsFromProvider(pvd store.Provider, outboundProxy *config.Proxy, cat ca
 			ModelRoutes:    modelRoutes,
 			Credential:     config.Credential{ID: pvd.ID, APIKey: pvd.APIKey},
 			Proxy:          outboundProxy,
-			Prices:         prices,
+			Prices:         priceTable,
 			Wires:          wires,
 			Endpoints:      endpoints,
 			AllowUnmatched: pvd.AllowUnmatched,
@@ -275,12 +289,43 @@ func vendorsFromProvider(pvd store.Provider, outboundProxy *config.Proxy, cat ca
 	return vendors
 }
 
-func effectivePrice(catalogID string, m store.ProviderModel, cat catalog.Catalog) config.Price {
+// priceSources is the ordered set of places a published rate can come from.
+// They are separate fields rather than one merged catalog because the ORDER
+// between them is the whole design: a hand-pinned rate must outrank a refreshed
+// one, and both must outrank the generated seed.
+type priceSources struct {
+	// pinned is catalog.json alone — the hand-maintained half. A model here was
+	// deliberately typed by someone and is never overwritten by a refresh.
+	pinned catalog.Catalog
+	// feed is the last successful price refresh, keyed [provider][model]. Empty
+	// until one lands, which is the normal state on a fresh or offline install.
+	feed map[string]map[string]store.FeedPrice
+	// catalog is the merged embedded catalog: the floor, always present.
+	catalog catalog.Catalog
+}
+
+// effectivePrice resolves one model's rate. The order is the contract:
+//
+//  1. an operator's price_override — always wins, never consults anything else;
+//  2. a hand-pinned catalog.json entry — someone typed it on purpose;
+//  3. the price feed — current, and the reason a stale rate self-corrects;
+//  4. the embedded catalog — the offline floor and first-boot seed;
+//  5. the stored row as-is, else unpriced (pass 2 may lend it a fallback).
+//
+// Steps 3 and 4 both report PriceSourceFeed/PriceSourceCatalog rather than a
+// single "catalog", so GET /api/pricing can say which one a number came from.
+func effectivePrice(catalogID string, m store.ProviderModel, src priceSources) config.Price {
 	if !m.PriceOverride {
-		if p, ok := catalogModelPrice(cat, catalogID, m.Model); ok {
+		if p, ok := pinnedPrice(src.pinned, catalogID, m.Model); ok {
 			return p
 		}
-		if p, ok := catalogAnyModelPrice(cat, m.Model); ok {
+		if p, ok := feedPrice(src.feed, catalogID, m.Model); ok {
+			return p
+		}
+		if p, ok := catalogModelPrice(src.catalog, catalogID, m.Model); ok {
+			return p
+		}
+		if p, ok := catalogAnyModelPrice(src.catalog, m.Model); ok {
 			return p
 		}
 	}
@@ -350,6 +395,37 @@ func fallbackPrice(prices map[string]config.Price, forModel string) (config.Pric
 		return config.Price{}, "", false
 	}
 	return best, bestModel, true
+}
+
+// pinnedPrice reads the hand-maintained catalog only. It is what keeps a rate an
+// operator pinned in catalog.json from being replaced on the next refresh.
+func pinnedPrice(pinned catalog.Catalog, catalogID, model string) (config.Price, bool) {
+	if catalogID == "" {
+		return config.Price{}, false
+	}
+	p, ok := pinned[catalogID]
+	if !ok {
+		return config.Price{}, false
+	}
+	mdl, ok := p.Models[model]
+	if !ok {
+		return config.Price{}, false
+	}
+	return config.Price{Cost: mdl.Cost, Source: config.PriceSourceCatalog}, true
+}
+
+// feedPrice reads the last successful refresh. A provider row with no catalog_id
+// is not matched: the feed is keyed by catalog provider, and guessing which
+// upstream an unlabelled provider corresponds to would be inventing a rate.
+func feedPrice(feed map[string]map[string]store.FeedPrice, catalogID, model string) (config.Price, bool) {
+	if catalogID == "" || feed == nil {
+		return config.Price{}, false
+	}
+	fp, ok := feed[catalogID][model]
+	if !ok {
+		return config.Price{}, false
+	}
+	return config.Price{Cost: fp.Cost, Source: config.PriceSourceFeed}, true
 }
 
 func catalogModelPrice(cat catalog.Catalog, catalogID, model string) (config.Price, bool) {
