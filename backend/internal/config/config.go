@@ -339,14 +339,54 @@ func validateServedModels(who string, models []string) []error {
 	return problems
 }
 
+// validatePrices rejects a cost that could never be right. A cost declaring no
+// axis at all is NOT an error: an unpriced model is a normal state that config
+// assembly handles by borrowing a fallback rate or metering $0 with a warning,
+// and failing the whole snapshot over one would take a working gateway down for
+// a model nobody has published a rate for yet.
+//
+// A negative rate is different. It would credit money on every call, and nothing
+// downstream would catch it because pricing.Cost simply sums what it is given.
+// There is no reading of a negative rate that is merely unusual.
 func validatePrices(who string, prices map[string]Price) []error {
 	var problems []error
-	for model, p := range prices {
-		if p.Unit == "" {
-			problems = append(problems, fmt.Errorf("%s: price for model %q has an empty unit", who, model))
+	for _, model := range SortedKeys(prices) {
+		for _, a := range AxesOf(prices[model].Cost) {
+			if a.Rate < 0 {
+				problems = append(problems, fmt.Errorf("%s: price for model %q has a negative %s rate (%g)", who, model, a.Name, a.Rate))
+			}
 		}
 	}
 	return problems
+}
+
+// Axis pairs a cost field with its name, for reporting and iteration.
+type Axis struct {
+	Name string
+	Rate float64
+}
+
+// AxesOf lists every rate a cost declares, in a stable order. It is the single
+// place that enumerates the axes: adding a metered quantity means a field on
+// catalog.Cost, a term in pricing.Cost, and a line here.
+func AxesOf(c catalog.Cost) []Axis {
+	return []Axis{
+		{"input", c.Input}, {"output", c.Output},
+		{"cache_read", c.CacheRead}, {"cache_write", c.CacheWrite},
+		{"character", c.Character}, {"second", c.Second},
+		{"image", c.Image}, {"call", c.Call},
+	}
+}
+
+// SortedKeys returns a map's keys in a stable order, so warnings and validation
+// problems do not shuffle between reloads.
+func SortedKeys[V any](m map[string]V) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
 }
 
 func vendorLabel(name string, idx int) string {

@@ -2,6 +2,7 @@ import { useMemo, useState, type FormEvent } from 'react';
 import { Check, Minus, Plus, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
 import type {
+  Cost,
   CatalogEndpoint,
   CatalogVendor,
   PatchProviderBody,
@@ -22,16 +23,6 @@ import {
 } from '../pages/VendorAdd';
 import cards from '../pages/VendorAdd.module.css';
 import styles from './ProviderForm.module.css';
-
-const UNITS = [
-  'per_1m_tokens',
-  'per_1k_tokens',
-  'per_token',
-  'per_call',
-  'per_image',
-  'per_second',
-  'per_char',
-];
 
 interface ProviderFormProps {
   editing: Provider;
@@ -58,11 +49,11 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
   // catalog mode (checkboxes over its presets). Otherwise → custom mode, driven by
   // the `custom` template's wire list.
   const catalogVendor = useMemo(
-    () => catalog.data?.vendors.find((v) => v.id === editing.catalog_id && !v.custom),
+    () => Object.values(catalog.data ?? {}).find((v) => v.id === editing.catalog_id && !v.custom),
     [catalog.data, editing.catalog_id],
   );
   const customVendor = useMemo(
-    () => catalog.data?.vendors.find((v) => v.custom),
+    () => Object.values(catalog.data ?? {}).find((v) => v.custom),
     [catalog.data],
   );
   const isCustom = !catalogVendor;
@@ -167,13 +158,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
     const m: Record<string, CatalogPrice> = {};
     for (const pm of editing.models) {
       if (pm.price_override) {
-        m[pm.model] = {
-          input: pm.input,
-          output: pm.output,
-          cached_input: pm.cached_input,
-          unit: pm.unit,
-          price_override: true,
-        };
+        m[pm.model] = { cost: pm.cost, price_override: true };
       }
     }
     return m;
@@ -181,33 +166,28 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
   const savedPriceMap = useMemo(() => {
     const m: Record<string, CatalogPrice> = {};
     for (const pm of editing.models) {
-      m[pm.model] = {
-        input: pm.input,
-        output: pm.output,
-        cached_input: pm.cached_input,
-        unit: pm.unit,
-        price_override: pm.price_override,
-      };
+      m[pm.model] = { cost: pm.cost, price_override: pm.price_override };
     }
     return m;
   }, [editing.models]);
-  const setPrice = (id: string, patch: Partial<CatalogPrice>) =>
-    setPriceMap((p) => ({ ...p, [id]: { ...priceFor(id), ...patch, price_override: true } }));
+  // Patches one axis, merging into the existing cost. Merging rather than
+  // replacing is load-bearing: the form renders only the token axes, so a
+  // speech model's character/second rate would otherwise be dropped the moment
+  // someone edited its input rate.
+  const setCost = (id: string, patch: Cost) =>
+    setPriceMap((p) => ({
+      ...p,
+      [id]: { cost: { ...priceFor(id).cost, ...patch }, price_override: true },
+    }));
 
   // Price used for a model: an explicit override wins, else the catalog/borrowed
   // price, else zero.
   const priceFor = (id: string): CatalogPrice => {
     if (priceMap[id]) return priceMap[id];
     const fromVendor = catalogVendor?.models[id];
-    if (fromVendor)
-      return {
-        input: fromVendor.input,
-        output: fromVendor.output,
-        cached_input: fromVendor.cached_input ?? 0,
-        unit: fromVendor.unit,
-      };
+    if (fromVendor) return { cost: fromVendor.cost };
     const borrowed = priceIndex[id];
-    return borrowed ?? savedPriceMap[id] ?? { input: 0, output: 0, cached_input: 0, unit: 'per_1m_tokens' };
+    return borrowed ?? savedPriceMap[id] ?? { cost: {} };
   };
 
   // --- Routing / behaviour knobs ---
@@ -316,7 +296,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
       wireModels,
       (id) => {
         const price = priceFor(id);
-        return { model: id, ...price, price_override: price.price_override };
+        return { model: id, cost: price.cost, price_override: price.price_override };
       },
       base,
       enabledUtility(),
@@ -570,8 +550,11 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
       <div className={cards.field}>
         <span className={styles.advTitle}>Model prices</span>
         <span className={cards.hint}>
-          Per-unit rates used for metering. &quot;Cached in&quot; is the rate for cache-hit input
-          tokens; 0 = full input rate. Add or remove models from the API cards above.
+          Rates used for metering, in USD per 1M tokens. &quot;Cache read&quot; and &quot;cache
+          write&quot; are the rates for cache-hit and cache-write input tokens; leave either at
+          0 to charge the full input rate. Models billed per character, second or call keep
+          those rates from the catalog and are not editable here. Add or remove models from
+          the API cards above.
         </span>
         {activeModels.length === 0 ? (
           <span className="muted" style={{ fontSize: 12.5 }}>
@@ -583,8 +566,8 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
               <span>Model</span>
               <span>Input</span>
               <span>Output</span>
-              <span>Cached in</span>
-              <span>Unit</span>
+              <span>Cache read</span>
+              <span>Cache write</span>
               <span />
             </div>
             {activeModels.map((id) => {
@@ -597,32 +580,27 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
                   <input
                     className="input"
                     inputMode="decimal"
-                    value={String(p.input)}
-                    onChange={(e) => setPrice(id, { input: Number(e.target.value || '0') })}
+                    value={String(p.cost.input ?? 0)}
+                    onChange={(e) => setCost(id, { input: Number(e.target.value || '0') })}
                   />
                   <input
                     className="input"
                     inputMode="decimal"
-                    value={String(p.output)}
-                    onChange={(e) => setPrice(id, { output: Number(e.target.value || '0') })}
+                    value={String(p.cost.output ?? 0)}
+                    onChange={(e) => setCost(id, { output: Number(e.target.value || '0') })}
                   />
                   <input
                     className="input"
                     inputMode="decimal"
-                    value={String(p.cached_input)}
-                    onChange={(e) => setPrice(id, { cached_input: Number(e.target.value || '0') })}
+                    value={String(p.cost.cache_read ?? 0)}
+                    onChange={(e) => setCost(id, { cache_read: Number(e.target.value || '0') })}
                   />
-                  <select
-                    className="select"
-                    value={p.unit}
-                    onChange={(e) => setPrice(id, { unit: e.target.value })}
-                  >
-                    {UNITS.map((u) => (
-                      <option key={u} value={u}>
-                        {u}
-                      </option>
-                    ))}
-                  </select>
+                  <input
+                    className="input"
+                    inputMode="decimal"
+                    value={String(p.cost.cache_write ?? 0)}
+                    onChange={(e) => setCost(id, { cache_write: Number(e.target.value || '0') })}
+                  />
                   <span />
                 </div>
               );
@@ -745,7 +723,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
                   onChange={(e) => setModelRow(ep.wire, i, e.target.value)}
                 />
                 <span className={cards.modelPrice}>
-                  {m.trim() ? (price ? `in ${price.input} · out ${price.output}` : 'unpriced') : ''}
+                  {m.trim() ? (price ? `in ${price.cost.input ?? 0} · out ${price.cost.output ?? 0}` : 'unpriced') : ''}
                 </span>
                 <button
                   type="button"

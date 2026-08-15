@@ -149,21 +149,23 @@ func vendorsFromProvider(pvd store.Provider, outboundProxy *config.Proxy, cat ca
 
 	// Pass 2: a model with no published rate would meter every call as $0, which
 	// is indistinguishable from "free" in the ledger and under-bills real usage.
-	// Give it the most expensive rate this same provider charges in the same unit
-	// family instead, so an unpriced model errs toward over-billing and surfaces
-	// as an outlier rather than vanishing. See fallbackPrice for the rules.
+	// Give it the most expensive rate this same provider charges instead, so an
+	// unpriced model errs toward over-billing and surfaces as an outlier rather
+	// than vanishing. See fallbackPrice for the rules.
 	//
 	// The gate is provenance, NOT the number: only PriceSourceUnpriced — nobody
 	// ever stated a rate — is eligible. A zero that someone published is a real
 	// price meaning free (the catalog lists genuinely free tiers, and an operator
 	// override of zero is a deliberate "don't bill this"), and re-pricing it at
 	// the provider's ceiling would invent a charge for a model that costs nothing.
+	// With axes that distinction is only visible in the provenance: an empty
+	// catalog.Cost and a published all-zero cost are the same value.
 	for _, m := range pvd.Models {
 		p := prices[m.Model]
 		if p.Source != config.PriceSourceUnpriced {
 			continue
 		}
-		fb, from, ok := fallbackPrice(prices, m.Model, p.Unit)
+		fb, from, ok := fallbackPrice(prices, m.Model)
 		if !ok {
 			continue
 		}
@@ -176,30 +178,27 @@ func vendorsFromProvider(pvd store.Provider, outboundProxy *config.Proxy, cat ca
 	for _, m := range pvd.Models {
 		p := prices[m.Model]
 		switch {
-		case !config.KnownPriceUnits[p.Unit]:
-			logger.Warn("price unit not recognized; calls for this model will meter as $0",
-				"provider", pvd.Name, "model", m.Model, "unit", p.Unit)
 		case config.PriceMetersZero(p) && p.Source == config.PriceSourceOverride:
 			logger.Warn("price is explicitly overridden to zero; calls for this model will meter as $0",
-				"provider", pvd.Name, "model", m.Model, "unit", p.Unit)
+				"provider", pvd.Name, "model", m.Model)
 		case config.PriceMetersZero(p) && p.Source == config.PriceSourceCatalog:
 			logger.Warn("catalog publishes this model as free; calls for this model will meter as $0",
-				"provider", pvd.Name, "model", m.Model, "unit", p.Unit)
+				"provider", pvd.Name, "model", m.Model)
 		case config.PriceMetersZero(p) && p.Source == config.PriceSourceUnpriced:
-			logger.Warn("price is zero and no same-unit price exists to fall back to; calls for this model will meter as $0",
-				"provider", pvd.Name, "model", m.Model, "unit", p.Unit)
+			logger.Warn("model has no published price and this provider has no rate to fall back to; calls for this model will meter as $0",
+				"provider", pvd.Name, "model", m.Model)
 		case config.PriceMetersZero(p):
-			logger.Warn("price meters as $0 for its unit; calls for this model will meter as $0",
-				"provider", pvd.Name, "model", m.Model, "unit", p.Unit)
+			logger.Warn("price declares no rate on any axis; calls for this model will meter as $0",
+				"provider", pvd.Name, "model", m.Model)
 		case config.IsFallbackPrice(p):
-			logger.Warn("model has no published price; metering it at this provider's most expensive same-unit rate",
-				"provider", pvd.Name, "model", m.Model, "unit", p.Unit,
+			logger.Warn("model has no published price; metering it at this provider's most expensive rate",
+				"provider", pvd.Name, "model", m.Model,
 				"borrowed_from", strings.TrimPrefix(p.Source, config.PriceSourceFallbackPrefix),
-				"input", p.Input, "output", p.Output)
+				"input", p.Cost.Input, "output", p.Cost.Output)
 		case config.PriceRateImplausible(p):
-			logger.Warn("price rate is implausibly high for its unit; check the unit — it meters as written but cannot be borrowed as a fallback",
-				"provider", pvd.Name, "model", m.Model, "unit", p.Unit,
-				"input", p.Input, "output", p.Output)
+			logger.Warn("token rate is implausibly high; check the basis — it meters as written but cannot be borrowed as a fallback",
+				"provider", pvd.Name, "model", m.Model,
+				"input", p.Cost.Input, "output", p.Cost.Output)
 		}
 	}
 
@@ -285,56 +284,58 @@ func effectivePrice(catalogID string, m store.ProviderModel, cat catalog.Catalog
 			return p
 		}
 	}
-	unit := m.Unit
-	if unit == "" {
-		unit = "per_1m_tokens"
-	}
 	source := config.PriceSourceStored
 	switch {
 	case m.PriceOverride:
 		source = config.PriceSourceOverride
-	case m.Input <= 0 && m.Output <= 0:
+	case m.Cost.Zero():
 		// No catalog entry and no operator-entered rate: nothing priced this
 		// model. Pass 2 in vendorsFromProvider may replace it with a fallback.
 		source = config.PriceSourceUnpriced
 	}
-	return config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: unit, Source: source}
+	return config.Price{Cost: m.Cost, Source: source}
 }
 
 // fallbackPrice picks the price an unpriced model should borrow: the most
-// expensive rate the same provider charges in the same unit family. It returns
-// the winning price and the model it came from.
+// expensive rate the same provider charges. It returns the winning price and the
+// model it came from.
 //
 // Three rules make the substitution safe:
 //
-//   - Same unit family only (config.PriceUnitFamily). Units across families
-//     price disjoint quantities — wire.Normalized keeps Seconds/Chars/Images
-//     apart from token counts and pricing.Cost dispatches on Unit — so lending
-//     a token rate to a per_second model would not over-bill, it would compute
-//     $0 while claiming a rate. A speech model borrows a speech rate or none.
-//   - A whole real price is copied, never a per-field maximum. A synthetic max
-//     inverts the cache axis: CachedInput == 0 means "charge full Input"
-//     (pricing.tokenCost), so max(CachedInput) picks the largest discount and
-//     can bill cache-heavy traffic cheaper than any real model.
+//   - A whole real cost is copied, never a per-axis maximum. A synthetic max
+//     inverts the cache axis: CacheRead == 0 means "charge full Input"
+//     (pricing.tokenCost), so max(CacheRead) picks the largest discount and can
+//     bill cache-heavy traffic cheaper than any real model.
 //   - Same provider only. Borrowing across providers would make one provider's
 //     bill a function of unrelated config — adding an Anthropic provider would
 //     silently re-price unknown DeepSeek models at ~57x — so a provider with no
-//     usable same-family rate keeps its $0 and is warned about instead.
+//     usable rate keeps its $0 and is warned about instead.
+//   - Candidates must be plausibly scaled (config.PriceRateImplausible), so a
+//     single mistyped rate cannot become the ceiling for every unpriced model.
 //
-// Candidates must be plausibly scaled (config.PriceRateImplausible) so a single
-// mistyped unit cannot become the ceiling for every unpriced model. Ties break
-// on model name, keeping the choice stable across reloads.
-func fallbackPrice(prices map[string]config.Price, forModel, unit string) (config.Price, string, bool) {
-	family := config.PriceUnitFamily(unit)
-	if family == "" {
-		return config.Price{}, "", false
-	}
+// Candidates are restricted to TOKEN-priced models, and that restriction
+// replaces the old "same unit family" rule. The reason is that the axis an
+// unpriced model should be priced on is no longer knowable: a row with no rate
+// declares no axes, and the retired `unit` column was the only thing that ever
+// said "this one bills per second". Lending a media rate on a guess would state
+// a rate for a quantity we have no evidence about.
+//
+// Token-only is the right guess because unpriced implies absent from the
+// catalog (effectivePrice consults it first), and a model that is new enough to
+// be missing is a chat model in practice — media wires have small, fixed model
+// sets that are hand-maintained in catalog.json. The capability traded away is
+// real but narrow: an unpriced speech model no longer borrows its provider's
+// priciest per-second rate, and instead keeps $0 and is warned about, which is
+// the branch the old rule already took whenever no same-family sibling existed.
+//
+// Ties break on model name, keeping the choice stable across reloads.
+func fallbackPrice(prices map[string]config.Price, forModel string) (config.Price, string, bool) {
 	var best config.Price
 	var bestModel string
 	var bestRank float64
 	for model, p := range prices {
 		if model == forModel ||
-			config.PriceUnitFamily(p.Unit) != family ||
+			!p.Cost.Tokens() ||
 			config.PriceMetersZero(p) ||
 			config.IsFallbackPrice(p) ||
 			config.PriceRateImplausible(p) {
@@ -355,26 +356,28 @@ func catalogModelPrice(cat catalog.Catalog, catalogID, model string) (config.Pri
 	if catalogID == "" {
 		return config.Price{}, false
 	}
-	for _, v := range cat.Vendors {
-		if v.ID != catalogID {
-			continue
-		}
-		m, ok := v.Models[model]
-		if !ok {
-			return config.Price{}, false
-		}
-		return config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: m.Unit, Source: config.PriceSourceCatalog}, true
+	p, ok := cat[catalogID]
+	if !ok {
+		return config.Price{}, false
 	}
-	return config.Price{}, false
+	m, ok := p.Models[model]
+	if !ok {
+		return config.Price{}, false
+	}
+	return config.Price{Cost: m.Cost, Source: config.PriceSourceCatalog}, true
 }
 
+// catalogAnyModelPrice matches a model id under any provider, for a provider row
+// that carries no catalog_id. Iteration order over a map is random, so the
+// providers are visited in a stable order to keep the resolved price the same
+// across reloads when two presets happen to serve the same model id.
 func catalogAnyModelPrice(cat catalog.Catalog, model string) (config.Price, bool) {
-	for _, v := range cat.Vendors {
-		m, ok := v.Models[model]
+	for _, id := range config.SortedKeys(cat) {
+		m, ok := cat[id].Models[model]
 		if !ok {
 			continue
 		}
-		return config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: m.Unit, Source: config.PriceSourceCatalog}, true
+		return config.Price{Cost: m.Cost, Source: config.PriceSourceCatalog}, true
 	}
 	return config.Price{}, false
 }

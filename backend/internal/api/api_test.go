@@ -35,15 +35,15 @@ vendors:
     weight: 2
     credential: {id: openai-key-1, api_key: ` + rawAPIKey + `}
     prices:
-      gpt-4o:                  { input: 2.50, output: 10.00, unit: per_1m_tokens }
-      text-embedding-3-small: { input: 0.02, output: 0,     unit: per_1m_tokens }
+      gpt-4o:                  { cost: { input: 2.5, output: 10 } }
+      text-embedding-3-small: { cost: { input: 0.02 } }
   - name: deepseek
     origin: https://api.deepseek.com
     served_models: [deepseek-chat]
     priority: 2
     credential: {id: deepseek-key-1, api_key: sk-another-secret}
     prices:
-      deepseek-chat: { input: 0.27, output: 1.10, unit: per_1m_tokens }
+      deepseek-chat: { cost: { input: 0.27, output: 1.1 } }
 `
 
 func mustSnapshot(t *testing.T, yaml string) *config.Snapshot {
@@ -942,7 +942,7 @@ vendors:
     served_models: [m1]
     credential: {id: k1, api_key: sk-mock-secret}
     prices:
-      m1: { input: 1, output: 1, unit: per_1m_tokens }
+      m1: { cost: { input: 1, output: 1 } }
 `
 	snap := mustSnapshot(t, yaml)
 	h := testHandler(t, Deps{
@@ -980,7 +980,7 @@ vendors:
     served_models: [m1]
     credential: {id: k1, api_key: sk-mock-secret}
     prices:
-      m1: { input: 1, output: 1, unit: per_1m_tokens }
+      m1: { cost: { input: 1, output: 1 } }
 `
 	snap := mustSnapshot(t, yaml)
 	h := testHandler(t, Deps{
@@ -1066,7 +1066,7 @@ func TestPricing(t *testing.T) {
 	for _, r := range rows {
 		if r.Vendor == "openai" && r.Model == "gpt-4o" {
 			found = true
-			if r.Input != 2.50 || r.Output != 10.00 || r.Unit != "per_1m_tokens" {
+			if r.Cost.Input != 2.50 || r.Cost.Output != 10.00 {
 				t.Errorf("gpt-4o row = %+v", r)
 			}
 		}

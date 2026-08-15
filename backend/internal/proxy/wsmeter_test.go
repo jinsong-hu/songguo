@@ -185,7 +185,7 @@ vendors:
     endpoints:
       volc/asr-stream-async: ` + baseURL + `/sauc/bigmodel_async
     prices:
-      seed-asr: { input: 0.001, unit: per_second }
+      seed-asr: { cost: { second: 0.001 } }
 `
 }
 

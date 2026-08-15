@@ -9,11 +9,13 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/songguo/songguo/internal/calls"
+	"github.com/songguo/songguo/internal/catalog"
 	"github.com/songguo/songguo/internal/wire"
 
 	// Pure-Go SQLite driver, registered under the name "sqlite".
@@ -399,6 +401,12 @@ func (s *Store) migrate() error {
 		{"providers", "proxy_id", "TEXT REFERENCES proxies(id) ON DELETE RESTRICT"},
 		{"provider_models", "cached_input", "REAL NOT NULL DEFAULT 0"},
 		{"provider_models", "price_override", "INTEGER NOT NULL DEFAULT 0"},
+		// cost supersedes the input/output/cached_input/unit columns above: rates
+		// are additive per metered quantity now, not one rate plus a unit
+		// discriminator (see catalog.Cost). JSON rather than a column per axis so
+		// a new axis needs no migration. Backfilled from the legacy columns below;
+		// they are left in place so a downgrade still reads its own data.
+		{"provider_models", "cost", `TEXT NOT NULL DEFAULT ''`},
 		// Per-service routing. Enabled defaults on; NULL priority/weight inherit
 		// the provider-level defaults.
 		{"provider_models", "routing_enabled", "INTEGER NOT NULL DEFAULT 1"},
@@ -415,6 +423,9 @@ func (s *Store) migrate() error {
 		}
 	}
 	if err := s.addColumn("context_composition", "blocks", `TEXT NOT NULL DEFAULT '[]'`); err != nil {
+		return err
+	}
+	if err := s.backfillModelCosts(); err != nil {
 		return err
 	}
 	// Index sessions.user_id for the per-user Behavioral view. Created here, after
@@ -1365,4 +1376,102 @@ func (s *Store) dropColumn(table, col string) error {
 		return fmt.Errorf("store: drop column %s.%s: %w", table, col, err)
 	}
 	return nil
+}
+
+// backfillModelCosts converts pre-cost provider_models rows into the cost JSON
+// column, once. It runs on every open and is a no-op after the first pass,
+// because it only touches rows whose cost is still empty.
+//
+// The old shape was one rate plus a `unit` discriminator; the new one is a rate
+// per metered quantity. The mapping is lossless in both directions, and the
+// per_1k/per_token scales fold into the per-1M basis the token axes use:
+//
+//	per_1m_tokens          -> input, output, cache_read as written
+//	per_1k_tokens          -> the same, x1e3
+//	per_token              -> the same, x1e6
+//	per_char/second/image/call -> the single rate onto its own axis
+//
+// An operator's explicit override survives this untouched — that is the point.
+// Rows carrying an unrecognized unit are left with an empty cost, which reads as
+// unpriced: the old code metered them $0 anyway (pricing.Cost had no case for
+// them), so this preserves the behaviour rather than inventing a rate.
+func (s *Store) backfillModelCosts() error {
+	rows, err := s.db.Query(`SELECT provider_id, model, input, output, cached_input, unit
+		FROM provider_models WHERE cost = ''`)
+	if err != nil {
+		return fmt.Errorf("store: backfill costs: %w", err)
+	}
+	type row struct {
+		providerID, model string
+		cost              catalog.Cost
+	}
+	var pending []row
+	for rows.Next() {
+		var (
+			pid, model, unit  string
+			in, out, cachedIn float64
+		)
+		if err := rows.Scan(&pid, &model, &in, &out, &cachedIn, &unit); err != nil {
+			rows.Close()
+			return fmt.Errorf("store: backfill scan: %w", err)
+		}
+		c, ok := costFromLegacy(in, out, cachedIn, unit)
+		if !ok {
+			continue
+		}
+		pending = append(pending, row{pid, model, c})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store: backfill costs: %w", err)
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: backfill costs: %w", err)
+	}
+	defer tx.Rollback()
+	for _, r := range pending {
+		blob, err := json.Marshal(r.cost)
+		if err != nil {
+			return fmt.Errorf("store: backfill encode %q: %w", r.model, err)
+		}
+		if _, err := tx.Exec(`UPDATE provider_models SET cost = ? WHERE provider_id = ? AND model = ?`,
+			string(blob), r.providerID, r.model); err != nil {
+			return fmt.Errorf("store: backfill update %q: %w", r.model, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// costFromLegacy maps the retired (input, output, cached_input, unit) shape onto
+// cost axes. It reports false for a unit the old cost engine did not price, so
+// such a row stays unpriced rather than acquiring a rate it never had.
+func costFromLegacy(in, out, cachedIn float64, unit string) (catalog.Cost, bool) {
+	scale := 1.0
+	switch unit {
+	case "per_1m_tokens", "":
+	case "per_1k_tokens":
+		scale = 1e3
+	case "per_token":
+		scale = 1e6
+	case "per_char":
+		return catalog.Cost{Character: in}, true
+	case "per_second":
+		return catalog.Cost{Second: in}, true
+	case "per_image":
+		return catalog.Cost{Image: in}, true
+	case "per_call":
+		return catalog.Cost{Call: in}, true
+	default:
+		return catalog.Cost{}, false
+	}
+	return catalog.Cost{
+		Input:     in * scale,
+		Output:    out * scale,
+		CacheRead: cachedIn * scale,
+	}, true
 }

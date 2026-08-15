@@ -7,6 +7,7 @@ import (
 
 	"github.com/songguo/songguo/internal/bodycodec"
 	"github.com/songguo/songguo/internal/calls"
+	"github.com/songguo/songguo/internal/catalog"
 	"github.com/songguo/songguo/internal/compose"
 	"github.com/songguo/songguo/internal/concurrency"
 	"github.com/songguo/songguo/internal/config"
@@ -596,10 +597,8 @@ type credentialView struct {
 // priceView is a single model price. Source carries the rate's provenance so a
 // borrowed ("fallback:<model>") rate is never read as a published one.
 type priceView struct {
-	Input  float64 `json:"input"`
-	Output float64 `json:"output"`
-	Unit   string  `json:"unit"`
-	Source string  `json:"source"`
+	Cost   catalog.Cost `json:"cost"`
+	Source string       `json:"source"`
 }
 
 // vendorStatsView is the per-vendor health/usage summary. Requests is every
@@ -686,7 +685,7 @@ func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool, rs *rou
 
 	prices := make(map[string]priceView, len(v.Prices))
 	for model, p := range v.Prices {
-		prices[model] = priceView{Input: p.Input, Output: p.Output, Unit: p.Unit, Source: p.Source}
+		prices[model] = priceView{Cost: p.Cost, Source: p.Source}
 	}
 
 	endpoints := v.Endpoints
@@ -811,12 +810,10 @@ type traceView struct {
 
 // pricingRow is one flattened pricing entry for GET /api/pricing.
 type pricingRow struct {
-	Vendor string  `json:"vendor"`
-	Model  string  `json:"model"`
-	Input  float64 `json:"input"`
-	Output float64 `json:"output"`
-	Unit   string  `json:"unit"`
-	Source string  `json:"source"`
+	Vendor string       `json:"vendor"`
+	Model  string       `json:"model"`
+	Cost   catalog.Cost `json:"cost"`
+	Source string       `json:"source"`
 }
 
 // newTraceView converts a stored payload into its JSON trace view, encoding

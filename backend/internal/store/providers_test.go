@@ -2,6 +2,8 @@ package store
 
 import (
 	"testing"
+
+	"github.com/songguo/songguo/internal/catalog"
 )
 
 func TestProviderCRUDRoundTrip(t *testing.T) {
@@ -15,8 +17,8 @@ func TestProviderCRUDRoundTrip(t *testing.T) {
 		Enabled:  true,
 		APIKey:   "sk-aaa",
 		Models: []ProviderModel{
-			{Model: "gpt-4o", Input: 2.5, Output: 10, Unit: "per_1m_tokens", PriceOverride: true},
-			{Model: "gpt-4o-mini", Input: 0.15, Output: 0.6, Unit: "per_1m_tokens"},
+			{Model: "gpt-4o", PriceOverride: true, Cost: catalog.Cost{Input: 2.5, Output: 10}},
+			{Model: "gpt-4o-mini", Cost: catalog.Cost{Input: 0.15, Output: 0.6}},
 		},
 		Endpoints: []ProviderEndpoint{
 			{Wire: "openai/chat", Endpoint: "https://api.openai.com/v1/chat/completions", Adapter: "openai-compatible"},
@@ -56,7 +58,7 @@ func TestProviderCRUDRoundTrip(t *testing.T) {
 	updated, err := s.UpdateProvider(pvd.ID, ProviderUpdate{
 		Name:      &newName,
 		Enabled:   &disabled,
-		Models:    []ProviderModel{{Model: "gpt-4o", Input: 3, Output: 12, Unit: "per_1m_tokens", PriceOverride: true}},
+		Models:    []ProviderModel{{Model: "gpt-4o", PriceOverride: true, Cost: catalog.Cost{Input: 3, Output: 12}}},
 		Endpoints: []ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://api.openai.com/v1/chat/completions", Adapter: "openai-compatible"}},
 	})
 	if err != nil {
@@ -68,7 +70,7 @@ func TestProviderCRUDRoundTrip(t *testing.T) {
 	if updated.Enabled {
 		t.Error("expected disabled")
 	}
-	if len(updated.Models) != 1 || updated.Models[0].Input != 3 || !updated.Models[0].PriceOverride {
+	if len(updated.Models) != 1 || updated.Models[0].Cost.Input != 3 || !updated.Models[0].PriceOverride {
 		t.Errorf("models not replaced: %+v", updated.Models)
 	}
 	if len(updated.Endpoints) != 1 || updated.Endpoints[0].Wire != "openai/chat" {
@@ -118,10 +120,7 @@ func TestFreshProviderSchemaIsCanonical(t *testing.T) {
 		Enabled: true,
 		Weight:  1,
 		APIKey:  "sk-test",
-		Models: []ProviderModel{{
-			Model: "claude-opus-5", Input: 5, Output: 25, CachedInput: 0.5,
-			Unit: "per_1m_tokens",
-		}},
+		Models:  []ProviderModel{{Model: "claude-opus-5", Cost: catalog.Cost{Input: 5, Output: 25, CacheRead: 0.5}}},
 		Endpoints: []ProviderEndpoint{{
 			Wire: "anthropic/messages", Endpoint: "https://www.cun.ai/v1/messages",
 			Adapter: "anthropic-compatible",
@@ -219,7 +218,7 @@ func TestProviderModelRoutingRoundTripAndPreserve(t *testing.T) {
 	s := openTestStore(t)
 	pvd, err := s.CreateProvider(NewProvider{
 		Name: "pool", Enabled: true, Priority: 1, Weight: 2, APIKey: "sk-a",
-		Models: []ProviderModel{{Model: "m", Input: 1, Output: 2}},
+		Models: []ProviderModel{{Model: "m", Cost: catalog.Cost{Input: 1, Output: 2}}},
 		Endpoints: []ProviderEndpoint{{
 			Wire: "openai/chat", Endpoint: "https://example.com/v1/chat/completions",
 			Adapter: "openai-compatible",
@@ -248,7 +247,7 @@ func TestProviderModelRoutingRoundTripAndPreserve(t *testing.T) {
 
 	// Replacing model pricing through the provider editor preserves the route.
 	got, err = s.UpdateProvider(pvd.ID, ProviderUpdate{
-		Models: []ProviderModel{{Model: "m", Input: 3, Output: 6}},
+		Models: []ProviderModel{{Model: "m", Cost: catalog.Cost{Input: 3, Output: 6}}},
 	})
 	if err != nil {
 		t.Fatalf("UpdateProvider: %v", err)

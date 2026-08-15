@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/songguo/songguo/internal/catalog"
 )
 
 // Provider is one configured vendor: a single API key plus the set of endpoints
@@ -54,17 +56,18 @@ type ProviderEndpoint struct {
 }
 
 // ProviderModel is a model a provider serves, with its true per-model price.
-// CachedInput is the rate for cache-hit input tokens; 0 means "charge the full
-// Input rate" (no cache discount).
+//
+// Cost carries the rates, one field per metered quantity (see catalog.Cost).
+// They are additive rather than alternatives, which is why there is no unit
+// column any more; it is persisted as JSON in one column so adding an axis
+// needs no schema migration.
 type ProviderModel struct {
-	Model       string
-	Input       float64
-	Output      float64
-	CachedInput float64
-	Unit        string
-	// PriceOverride means Input/Output/CachedInput/Unit are an explicit admin
-	// override. When false, catalog-backed providers can resolve pricing from
-	// the current catalog while this row only declares the served model.
+	Model string
+	Cost  catalog.Cost
+	// PriceOverride means Cost is an explicit admin override. When false,
+	// catalog-backed providers resolve pricing from the current catalog while
+	// this row only declares the served model — which is what lets a catalog
+	// resync re-price an already-configured provider without touching the store.
 	PriceOverride bool
 	// RoutingEnabled controls whether this provider participates in routing for
 	// this model. RoutingConfigured distinguishes loaded rows from older callers
@@ -150,7 +153,7 @@ func (s *Store) ListProviders() ([]Provider, error) {
 		return nil, nil
 	}
 
-	modelRows, err := s.db.Query(`SELECT provider_id, model, input, output, cached_input, unit, price_override,
+	modelRows, err := s.db.Query(`SELECT provider_id, model, cost, price_override,
 		routing_enabled, priority_override, weight_override
 		FROM provider_models ORDER BY model`)
 	if err != nil {
@@ -164,11 +167,15 @@ func (s *Store) ListProviders() ([]Provider, error) {
 		)
 		var priceOverride, routingEnabled int64
 		var priorityOverride, weightOverride sql.NullInt64
+		var costJSON string
 		if err := modelRows.Scan(
-			&pid, &m.Model, &m.Input, &m.Output, &m.CachedInput, &m.Unit, &priceOverride,
+			&pid, &m.Model, &costJSON, &priceOverride,
 			&routingEnabled, &priorityOverride, &weightOverride,
 		); err != nil {
 			return nil, fmt.Errorf("store: scan model: %w", err)
+		}
+		if m.Cost, err = decodeCost(costJSON); err != nil {
+			return nil, fmt.Errorf("store: model %q: %w", m.Model, err)
 		}
 		m.PriceOverride = priceOverride != 0
 		m.RoutingEnabled = routingEnabled != 0
@@ -219,7 +226,7 @@ func (s *Store) GetProvider(id string) (Provider, error) {
 		return Provider{}, fmt.Errorf("store: get provider: %w", err)
 	}
 
-	modelRows, err := s.db.Query(`SELECT model, input, output, cached_input, unit, price_override,
+	modelRows, err := s.db.Query(`SELECT model, cost, price_override,
 		routing_enabled, priority_override, weight_override
 		FROM provider_models WHERE provider_id = ? ORDER BY model`, id)
 	if err != nil {
@@ -230,11 +237,15 @@ func (s *Store) GetProvider(id string) (Provider, error) {
 		var m ProviderModel
 		var priceOverride, routingEnabled int64
 		var priorityOverride, weightOverride sql.NullInt64
+		var costJSON string
 		if err := modelRows.Scan(
-			&m.Model, &m.Input, &m.Output, &m.CachedInput, &m.Unit, &priceOverride,
+			&m.Model, &costJSON, &priceOverride,
 			&routingEnabled, &priorityOverride, &weightOverride,
 		); err != nil {
 			return Provider{}, fmt.Errorf("store: scan model: %w", err)
+		}
+		if m.Cost, err = decodeCost(costJSON); err != nil {
+			return Provider{}, fmt.Errorf("store: model %q: %w", m.Model, err)
 		}
 		m.PriceOverride = priceOverride != 0
 		m.RoutingEnabled = routingEnabled != 0
@@ -510,19 +521,19 @@ func insertModelsWithRouting(tx *sql.Tx, providerID string, models []ProviderMod
 		if m.Model == "" {
 			continue
 		}
-		unit := m.Unit
-		if unit == "" {
-			unit = "per_1m_tokens"
-		}
 		route := modelRouting{enabled: true}
 		if saved, ok := routes[m.Model]; ok {
 			route = saved
 		}
+		cost, err := json.Marshal(m.Cost)
+		if err != nil {
+			return fmt.Errorf("store: encode cost for model %q: %w", m.Model, err)
+		}
 		if _, err := tx.Exec(`INSERT INTO provider_models
-			(provider_id, model, input, output, cached_input, unit, price_override,
+			(provider_id, model, cost, price_override,
 			 routing_enabled, priority_override, weight_override)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			providerID, m.Model, m.Input, m.Output, m.CachedInput, unit, boolToInt(m.PriceOverride),
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			providerID, m.Model, string(cost), boolToInt(m.PriceOverride),
 			boolToInt(route.enabled), route.priorityOverride, route.weightOverride); err != nil {
 			return fmt.Errorf("store: insert model: %w", err)
 		}
@@ -635,4 +646,18 @@ func nullInt(v sql.NullInt64) *int {
 	}
 	n := int(v.Int64)
 	return &n
+}
+
+// decodeCost parses a provider_models.cost column. An empty column is an
+// unpriced model, not a malformed one: rows predating the cost column are
+// backfilled at migration, and a row inserted with no rate stores "{}".
+func decodeCost(raw string) (catalog.Cost, error) {
+	if raw == "" {
+		return catalog.Cost{}, nil
+	}
+	var c catalog.Cost
+	if err := json.Unmarshal([]byte(raw), &c); err != nil {
+		return catalog.Cost{}, fmt.Errorf("decode cost %q: %w", raw, err)
+	}
+	return c, nil
 }

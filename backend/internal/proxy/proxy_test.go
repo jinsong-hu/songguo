@@ -306,7 +306,7 @@ vendors:
     wires: [openai/chat, openai/completions, openai/embeddings, openai/models]
     credential: {id: credA, api_key: vendor-secret-key}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
 `, mock.URL)
 
 	st := openStore(t)
@@ -376,7 +376,7 @@ vendors:
     wires: [openai/responses]
     credential: {id: credA, api_key: vendor-secret-key}
     prices:
-      gpt-5.5: { input: 1.00, output: 2.00, cached_input: 0.50, unit: per_1m_tokens }
+      gpt-5.5: { cost: { input: 1, output: 2, cache_read: 0.5 } }
 `, up.URL)
 
 	st := openStore(t)
@@ -443,7 +443,7 @@ vendors:
     wires: [openai/chat, openai/completions, openai/embeddings, openai/models]
     credential: {id: credA, api_key: vendor-secret-key}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
 `, mock.URL)
 
 	st := openStore(t)
@@ -493,7 +493,7 @@ vendors:
     wires: [openai/embeddings, openai/models]
     credential: {id: credE, api_key: emb-key}
     prices:
-      text-embedding-3-small: { input: 0.02, unit: per_1m_tokens }
+      text-embedding-3-small: { cost: { input: 0.02 } }
 `, mock.URL)
 
 	st := openStore(t)
@@ -587,7 +587,7 @@ vendors:
     wires: [openai/chat]
     credential: {id: credA, api_key: k}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
 `, mock.URL)
 	st := openStore(t)
 	// Budget tiny enough that one call's cost crosses it.
@@ -631,7 +631,7 @@ vendors:
     wires: [openai/chat]
     credential: {id: credA, api_key: k}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
 `, mock.URL)
 	st := openStore(t)
 	budget := 1000.0 // generous: this test is about timing, not denial
@@ -703,7 +703,7 @@ vendors:
     wires: [openai/chat]
     credential: {id: credA, api_key: keyA}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
   - name: vendorB
     origin: %s/v1
     served_models: [gpt-4o]
@@ -711,7 +711,7 @@ vendors:
     wires: [openai/chat]
     credential: {id: credB, api_key: keyB}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
 `, mockA.URL, mockB.URL)
 
 	st := openStore(t)
@@ -758,7 +758,7 @@ vendors:
     wires: [openai/chat]
     credential: {id: credA, api_key: keyA}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
   - name: vendorB
     origin: %s/v1
     served_models: [gpt-4o]
@@ -766,7 +766,7 @@ vendors:
     wires: [openai/chat]
     credential: {id: credB, api_key: keyB}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
 `, mockA.URL, mockB.URL)
 
 	st := openStore(t)
@@ -874,7 +874,7 @@ vendors:
     wires: [openai/chat]
     credential: {id: credA, api_key: k}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
 `, mock.URL)
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
@@ -945,7 +945,7 @@ vendors:
     wires: [openai/chat, openai/completions, openai/embeddings, openai/models]
     credential: {id: %s, api_key: %s}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
 `, vendor, baseURL, credID, apiKey)
 }
 
@@ -1064,7 +1064,7 @@ vendors:
       openai/chat: %s/api/v3/chat/completions
     credential: {id: arkKey, api_key: ark-secret}
     prices:
-      doubao-pro-32k: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      doubao-pro-32k: { cost: { input: 2.5, output: 10 } }
 `, mock.URL, mock.URL)
 
 	st := openStore(t)
@@ -1126,7 +1126,7 @@ vendors:
     allow_unmatched: true
     credential: {id: %s-key, api_key: %s-secret}
     prices:
-      qwen-plus: { input: 0.40, output: 1.20, unit: per_1m_tokens }
+      qwen-plus: { cost: { input: 0.4, output: 1.2 } }
 `, vendor, baseURL, vendor, vendor)
 }
 
@@ -1435,7 +1435,7 @@ vendors:
     allow_unmatched: true
     credential: {id: c1, api_key: key1}
     prices:
-      qwen-plus: { input: 0.40, output: 1.20, unit: per_1m_tokens }
+      qwen-plus: { cost: { input: 0.4, output: 1.2 } }
 `, mock.URL)
 
 	st := openStore(t)
@@ -1473,7 +1473,7 @@ vendors:
     wires: [openai/embeddings]
     credential: {id: credA, api_key: k}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
 `, mock.URL)
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
@@ -1519,7 +1519,7 @@ vendors:
     wires: [openai/chat]
     credential: {id: c1, api_key: key1}
     prices:
-      qwen-plus: { input: 0.40, output: 1.20, unit: per_1m_tokens }
+      qwen-plus: { cost: { input: 0.4, output: 1.2 } }
 `, mock.URL)
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
@@ -1596,7 +1596,7 @@ vendors:
     wires: [anthropic/messages]
     credential: {id: credAn, api_key: anthro-key}
     prices:
-      claude-x: { input: 3.0, output: 15.0, cached_input: 0.3, unit: per_1m_tokens }
+      claude-x: { cost: { input: 3, output: 15, cache_read: 0.3 } }
 `, baseURL)
 }
 
@@ -1658,7 +1658,7 @@ vendors:
     quirks: { cache_tokens: deepseek }
     credential: {id: credD, api_key: ds-key}
     prices:
-      deepseek-v4-flash: { input: 0.14, output: 0.28, cached_input: 0.0028, unit: per_1m_tokens }
+      deepseek-v4-flash: { cost: { input: 0.14, output: 0.28, cache_read: 0.0028 } }
 `, mock.URL)
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
@@ -1697,7 +1697,7 @@ vendors:
     wires: [openai/chat]
     credential: {id: credA, api_key: k}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
 `, mock.URL)
 	st := openStore(t)
 	_, key := mustUser(t, st, store.NewUser{Name: "t"})
@@ -1747,7 +1747,7 @@ vendors:
     priority: 1
     credential: {id: c, api_key: k}
     prices:
-      gpt-4o: { input: 1, output: 1, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 1, output: 1 } }
 `, mock.URL, mock.URL)
 
 	st := openStore(t)
@@ -1783,7 +1783,7 @@ vendors:
     wires: [openai/chat]
     credential: {id: credA, api_key: vendor-secret-key}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
 `, mock.URL)
 
 	st := openStore(t)
@@ -1845,7 +1845,7 @@ vendors:
     wires: [openai/chat]
     credential: {id: credA, api_key: vendor-secret-key}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
 `, mock.URL)
 
 	st := openStore(t)
@@ -2044,7 +2044,7 @@ vendors:
     wires: [anthropic/messages, anthropic/count_tokens]
     credential: {id: credAn, api_key: anthro-key}
     prices:
-      claude-x: { input: 3.0, output: 15.0, cached_input: 0.3, unit: per_1m_tokens }
+      claude-x: { cost: { input: 3, output: 15, cache_read: 0.3 } }
 `, mock.URL)
 
 	st := openStore(t)

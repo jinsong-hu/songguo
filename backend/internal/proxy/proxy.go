@@ -954,7 +954,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	if rw.matched && !rw.wire.ZeroCost {
 		if snap := h.snapshot(); snap != nil {
 			if price, ok := snap.PriceFor(t.Vendor.Name, model); ok {
-				cost = pricing.Cost(price, ext.Norm)
+				cost = pricing.Cost(price.Cost, ext.Norm)
 			} else {
 				h.logger.Warn("no price entry for model under this vendor; metering $0",
 					"vendor", t.Vendor.Name, "model", model, "call_id", callID)

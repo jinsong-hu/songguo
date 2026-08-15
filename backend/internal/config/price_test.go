@@ -1,43 +1,62 @@
 package config
 
-import "testing"
+import (
+	"testing"
 
-// Units that price the same physical quantity share a family; everything else
-// stands alone, because substituting across families computes $0 rather than a
-// wrong-but-nonzero number.
-func TestPriceUnitFamily(t *testing.T) {
-	tests := map[string]string{
-		"per_1m_tokens": "tokens",
-		"per_1k_tokens": "tokens",
-		"per_token":     "tokens",
-		"per_call":      "per_call",
-		"per_image":     "per_image",
-		"per_second":    "per_second",
-		"per_char":      "per_char",
-		"per_1m_token":  "", // typo: no family, never a fallback candidate
-		"":              "",
+	"github.com/songguo/songguo/internal/catalog"
+)
+
+// Tokens() is what took over the old unit-family question: it decides which
+// costs may lend a fallback rate (configsvc.fallbackPrice) and which are
+// range-checked for a mistyped basis. A media-only cost is neither.
+func TestCostTokens(t *testing.T) {
+	tests := []struct {
+		name string
+		cost catalog.Cost
+		want bool
+	}{
+		{"input only", catalog.Cost{Input: 1}, true},
+		{"output only", catalog.Cost{Output: 1}, true},
+		{"cache read only", catalog.Cost{CacheRead: 1}, true},
+		{"cache write only", catalog.Cost{CacheWrite: 1}, true},
+		{"per second", catalog.Cost{Second: 0.01}, false},
+		{"per character", catalog.Cost{Character: 0.01}, false},
+		{"per call", catalog.Cost{Call: 1}, false},
+		{"empty", catalog.Cost{}, false},
+		{"mixed counts as token", catalog.Cost{Input: 1, Second: 0.01}, true},
 	}
-	for unit, want := range tests {
-		if got := PriceUnitFamily(unit); got != want {
-			t.Errorf("PriceUnitFamily(%q) = %q, want %q", unit, got, want)
+	for _, tc := range tests {
+		if got := tc.cost.Tokens(); got != tc.want {
+			t.Errorf("%s: Tokens() = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
 
-// Token rates normalize onto a per-1M basis so the three token units are
-// directly comparable; single-rate units score on their only rate.
+// Zero is the "declares no rate at all" test, and it is deliberately NOT the
+// same question as "is free": a published all-zero cost is indistinguishable
+// from an absent one by value, which is why provenance, not the number, gates
+// the fallback (see configsvc.vendorsFromProvider).
+func TestCostZero(t *testing.T) {
+	if !(catalog.Cost{}).Zero() {
+		t.Error("an empty cost must report Zero")
+	}
+	if (catalog.Cost{Second: 0.01}).Zero() {
+		t.Error("a media-only cost declares a rate and must not report Zero")
+	}
+}
+
+// PriceRank scores the dominant token side, so two costs can be ordered by
+// expensiveness; a media-only cost scores on its largest axis.
 func TestPriceRank(t *testing.T) {
 	tests := []struct {
 		name string
 		p    Price
 		want float64
 	}{
-		{"per 1m takes the dominant side", Price{Input: 5, Output: 25, Unit: "per_1m_tokens"}, 25},
-		{"input can dominate", Price{Input: 30, Output: 2, Unit: "per_1m_tokens"}, 30},
-		{"per 1k scales up", Price{Input: 0.001, Output: 0.005, Unit: "per_1k_tokens"}, 5},
-		{"per token scales up", Price{Input: 0.000001, Output: 0.000025, Unit: "per_token"}, 25},
-		{"single rate scores input", Price{Input: 1, Unit: "per_call"}, 1},
-		{"unknown unit cannot win", Price{Input: 999, Output: 999, Unit: "per_1m_token"}, 0},
+		{"takes the dominant side", Price{Cost: catalog.Cost{Input: 5, Output: 25}}, 25},
+		{"input can dominate", Price{Cost: catalog.Cost{Input: 30, Output: 2}}, 30},
+		{"media cost scores its axis", Price{Cost: catalog.Cost{Call: 1}}, 1},
+		{"a cost with no rate cannot win", Price{Cost: catalog.Cost{}}, 0},
 	}
 	for _, tc := range tests {
 		if got := PriceRank(tc.p); got != tc.want {
@@ -46,18 +65,19 @@ func TestPriceRank(t *testing.T) {
 	}
 }
 
-// A rate typed against the wrong unit normalizes to an absurd number; it is
-// flagged so it can be excluded from fallback candidacy.
+// A rate typed against the wrong basis is an absurd number per 1M; it is flagged
+// so it can be excluded from fallback candidacy.
 func TestPriceRateImplausible(t *testing.T) {
-	if PriceRateImplausible(Price{Input: 10, Output: 50, Unit: "per_1m_tokens"}) {
+	if PriceRateImplausible(Price{Cost: catalog.Cost{Input: 10, Output: 50}}) {
 		t.Error("a normal frontier rate must not be flagged implausible")
 	}
-	if !PriceRateImplausible(Price{Input: 3, Output: 3, Unit: "per_token"}) {
-		t.Error("3.0 per_token is $3M/1M and must be flagged")
+	if !PriceRateImplausible(Price{Cost: catalog.Cost{Input: 3000000, Output: 3000000}}) {
+		t.Error("3.0 meant per-token is $3M/1M and must be flagged")
 	}
-	// Non-token families have no normalization hazard and are never flagged.
-	if PriceRateImplausible(Price{Input: 5000, Unit: "per_call"}) {
-		t.Error("single-rate units must not be range-checked as token rates")
+	// Media axes have no second basis to confuse them with, so they are never
+	// range-checked: $50 per call is unusual, not absurd.
+	if PriceRateImplausible(Price{Cost: catalog.Cost{Call: 5000}}) {
+		t.Error("media axes must not be range-checked as token rates")
 	}
 }
 

@@ -58,7 +58,7 @@ vendors:
     wires: [openai/chat]
     credential: {id: credA, api_key: keyA}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
   - name: vendorB
     origin: %s/v1
     served_models: [gpt-4o]
@@ -66,7 +66,7 @@ vendors:
     wires: [openai/chat]
     credential: {id: credB, api_key: keyB}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
 `, originA, originB)
 }
 

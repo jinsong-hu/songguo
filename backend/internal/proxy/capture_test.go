@@ -24,7 +24,7 @@ vendors:
     wires: [openai/chat]
     credential: {id: credA, api_key: vendor-secret-key}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
 `, baseURL)
 }
 
@@ -210,7 +210,7 @@ vendors:
     wires: [openai/chat]
     credential: {id: credA, api_key: keyA}
     prices:
-      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o: { cost: { input: 2.5, output: 10 } }
 `, deadURL)
 
 	st := openStore(t)

@@ -1,7 +1,7 @@
 // Index the preset catalog by model ID so pages can enrich the auto-derived
 // service list with specs (context window, modalities, pricing, kind).
 
-import type { Catalog, CatalogModel } from '../api/types';
+import type { Catalog, CatalogModel, Cost } from '../api/types';
 import { wireKind } from './wires';
 
 export interface CatalogInfo extends CatalogModel {
@@ -14,7 +14,7 @@ export interface CatalogInfo extends CatalogModel {
 export function indexCatalog(catalog: Catalog | null): Map<string, CatalogInfo> {
   const map = new Map<string, CatalogInfo>();
   if (!catalog) return map;
-  for (const vendor of catalog.vendors) {
+  for (const vendor of Object.values(catalog)) {
     for (const ep of vendor.endpoints) {
       const kind = wireKind(ep.wire);
       for (const id of ep.models ?? []) {
@@ -42,3 +42,21 @@ export const MODALITY_LABEL: Record<string, string> = {
   audio: 'Audio',
   video: 'Video',
 };
+
+/**
+ * What a cost is denominated in, for display. The token axes are per 1M tokens;
+ * the media axes are per single unit, and a model only ever declares one of them
+ * (models.dev supplies no media rates at all, so they come from the
+ * hand-maintained half of the catalog).
+ *
+ * Returns the first axis found — a cost mixing token and media axes is priced
+ * additively and has no single basis, so the token one is named as the headline.
+ */
+export function rateBasis(cost: Cost): string {
+  if (cost.input || cost.output || cost.cache_read || cost.cache_write) return 'per 1M tokens';
+  if (cost.character) return 'per character';
+  if (cost.second) return 'per second';
+  if (cost.image) return 'per image';
+  if (cost.call) return 'per call';
+  return '—';
+}

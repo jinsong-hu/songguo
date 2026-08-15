@@ -30,6 +30,7 @@ import { Page } from '../components/Layout';
 import { Skeleton } from '../components/Skeleton';
 import { useToast } from '../components/Toast';
 import { useFetch } from '../lib/useFetch';
+import { rateBasis } from '../lib/catalogIndex';
 import { useSettings } from '../lib/settingsContext';
 import { useTheme } from '../lib/useTheme';
 import styles from './SettingsPage.module.css';
@@ -354,7 +355,7 @@ export function SettingsPage() {
                     <th>Model</th>
                     <th className="num">Input</th>
                     <th className="num">Output</th>
-                    <th>Unit</th>
+                    <th>Basis</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -362,9 +363,9 @@ export function SettingsPage() {
                     <tr key={`${row.vendor}:${row.model}`}>
                       <td>{row.vendor}</td>
                       <td className="mono">{row.model}</td>
-                      <td className="num">{row.input}</td>
-                      <td className="num">{row.output}</td>
-                      <td className="mono">{row.unit}</td>
+                      <td className="num">{row.cost.input ?? 0}</td>
+                      <td className="num">{row.cost.output ?? 0}</td>
+                      <td className="mono">{rateBasis(row.cost)}</td>
                     </tr>
                   ))}
                 </tbody>

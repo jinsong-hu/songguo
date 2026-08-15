@@ -37,7 +37,8 @@ export function ProvidersPage() {
   };
 
   const existing = providers.data ?? [];
-  const vendors = catalog.data?.vendors ?? [];
+  // A map has no order; sort by name so the tile order is stable.
+  const vendors = Object.values(catalog.data ?? {}).sort((a, b) => a.name.localeCompare(b.name));
 
   return (
     <Page title="Providers">

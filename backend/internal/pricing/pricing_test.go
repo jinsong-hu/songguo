@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/songguo/songguo/internal/config"
+	"github.com/songguo/songguo/internal/catalog"
 	"github.com/songguo/songguo/internal/wire"
 )
 
@@ -14,127 +14,116 @@ func approx(a, b float64) bool {
 
 func TestCost(t *testing.T) {
 	tests := []struct {
-		name  string
-		price config.Price
-		norm  wire.Normalized
-		want  float64
+		name string
+		cost catalog.Cost
+		norm wire.Normalized
+		want float64
 	}{
 		{
-			name:  "per_1m_tokens",
-			price: config.Price{Input: 3, Output: 15, Unit: "per_1m_tokens"},
-			norm:  wire.Normalized{InputTokens: 1_000_000, OutputTokens: 2_000_000},
-			want:  3*1 + 15*2,
-		},
-		{
-			name:  "per_1k_tokens",
-			price: config.Price{Input: 0.5, Output: 1.5, Unit: "per_1k_tokens"},
-			norm:  wire.Normalized{InputTokens: 1000, OutputTokens: 2000},
-			want:  0.5*1 + 1.5*2,
-		},
-		{
-			name:  "per_token",
-			price: config.Price{Input: 0.001, Output: 0.002, Unit: "per_token"},
-			norm:  wire.Normalized{InputTokens: 10, OutputTokens: 5},
-			want:  0.001*10 + 0.002*5,
+			name: "token rates are per 1M",
+			cost: catalog.Cost{Input: 3, Output: 15},
+			norm: wire.Normalized{InputTokens: 1_000_000, OutputTokens: 2_000_000},
+			want: 3*1 + 15*2,
 		},
 		{
 			// Disjoint: 400k fresh input + 600k cache reads.
-			name:  "cached input billed at cached rate",
-			price: config.Price{Input: 0.28, Output: 0.42, CachedInput: 0.028, Unit: "per_1m_tokens"},
-			norm:  wire.Normalized{InputTokens: 400_000, CachedInputTokens: 600_000, OutputTokens: 0},
-			want:  0.4*0.28 + 0.6*0.028,
+			name: "cached input billed at cache_read",
+			cost: catalog.Cost{Input: 0.28, Output: 0.42, CacheRead: 0.028},
+			norm: wire.Normalized{InputTokens: 400_000, CachedInputTokens: 600_000},
+			want: 0.4*0.28 + 0.6*0.028,
 		},
 		{
 			// 600k fresh + 400k cache reads, no cached rate → both at input rate.
-			name:  "cached tokens without cached rate fall back to input rate",
-			price: config.Price{Input: 3, Output: 15, Unit: "per_1m_tokens"},
-			norm:  wire.Normalized{InputTokens: 600_000, CachedInputTokens: 400_000},
-			want:  3.0,
+			// "No cached rate" means "no discount", never "free".
+			name: "cache reads without a cache_read rate fall back to input",
+			cost: catalog.Cost{Input: 3, Output: 15},
+			norm: wire.Normalized{InputTokens: 600_000, CachedInputTokens: 400_000},
+			want: 3.0,
 		},
 		{
-			// Cache creation bills at the full input rate; cache reads at the cached
-			// rate: (1M + 500k)*2 + 400k*1, per 1M.
-			name:  "cache creation at input rate, reads at cached rate",
-			price: config.Price{Input: 2, Output: 0, CachedInput: 1, Unit: "per_1m_tokens"},
-			norm:  wire.Normalized{InputTokens: 1_000_000, CacheCreationTokens: 500_000, CachedInputTokens: 400_000},
-			want:  1.5*2 + 0.4*1,
+			// Cache writes bill at their own published rate now that models.dev
+			// supplies one: 1M fresh at 2 + 500k writes at 2.5 + 400k reads at 1.
+			name: "cache creation billed at cache_write",
+			cost: catalog.Cost{Input: 2, CacheRead: 1, CacheWrite: 2.5},
+			norm: wire.Normalized{InputTokens: 1_000_000, CacheCreationTokens: 500_000, CachedInputTokens: 400_000},
+			want: 1*2 + 0.5*2.5 + 0.4*1,
+		},
+		{
+			name: "cache writes without a cache_write rate fall back to input",
+			cost: catalog.Cost{Input: 2},
+			norm: wire.Normalized{CacheCreationTokens: 500_000},
+			want: 0.5 * 2,
 		},
 		{
 			// Thinking tokens are a subset of output and never priced separately.
-			name:  "thinking tokens do not change cost",
-			price: config.Price{Input: 3, Output: 15, Unit: "per_1m_tokens"},
-			norm:  wire.Normalized{InputTokens: 1_000_000, OutputTokens: 2_000_000, ThinkingTokens: 500_000},
-			want:  3*1 + 15*2,
+			name: "thinking tokens do not change cost",
+			cost: catalog.Cost{Input: 3, Output: 15},
+			norm: wire.Normalized{InputTokens: 1_000_000, OutputTokens: 2_000_000, ThinkingTokens: 500_000},
+			want: 3*1 + 15*2,
 		},
 		{
-			name:  "per_call defaults to one call",
-			price: config.Price{Input: 0.01, Unit: "per_call"},
-			norm:  wire.Normalized{},
-			want:  0.01,
+			name: "call axis defaults to one call",
+			cost: catalog.Cost{Call: 0.01},
+			norm: wire.Normalized{},
+			want: 0.01,
 		},
 		{
-			name:  "per_call explicit count",
-			price: config.Price{Input: 0.01, Unit: "per_call"},
-			norm:  wire.Normalized{Calls: 3},
-			want:  0.03,
+			name: "call axis with an explicit count",
+			cost: catalog.Cost{Call: 0.01},
+			norm: wire.Normalized{Calls: 3},
+			want: 0.03,
 		},
 		{
-			name:  "per_image",
-			price: config.Price{Input: 0.04, Unit: "per_image"},
-			norm:  wire.Normalized{Images: 2},
-			want:  0.08,
+			name: "image axis",
+			cost: catalog.Cost{Image: 0.04},
+			norm: wire.Normalized{Images: 2},
+			want: 0.08,
 		},
 		{
-			name:  "per_second",
-			price: config.Price{Input: 0.0001, Unit: "per_second"},
-			norm:  wire.Normalized{Seconds: 90},
-			want:  0.009,
+			name: "second axis",
+			cost: catalog.Cost{Second: 0.0001},
+			norm: wire.Normalized{Seconds: 90},
+			want: 0.009,
 		},
 		{
-			name:  "per_char",
-			price: config.Price{Input: 0.00002, Unit: "per_char"},
-			norm:  wire.Normalized{Chars: 500},
-			want:  0.01,
+			name: "character axis",
+			cost: catalog.Cost{Character: 0.00002},
+			norm: wire.Normalized{Chars: 500},
+			want: 0.01,
 		},
 		{
-			name:  "unknown unit yields zero",
-			price: config.Price{Input: 3, Output: 15, Unit: "per_banana"},
-			norm:  wire.Normalized{InputTokens: 1_000_000},
-			want:  0,
+			name: "a cost declaring nothing meters zero",
+			cost: catalog.Cost{},
+			norm: wire.Normalized{InputTokens: 1_000_000},
+			want: 0,
 		},
 		{
-			name:  "empty unit yields zero",
-			price: config.Price{Input: 3, Output: 15},
-			norm:  wire.Normalized{InputTokens: 1_000_000},
-			want:  0,
+			name: "zero usage zero cost",
+			cost: catalog.Cost{Input: 3, Output: 15},
+			norm: wire.Normalized{},
+			want: 0,
+		},
+		// An axis a model does not declare contributes nothing, and usage on a
+		// quantity it does not price contributes nothing. That is what makes
+		// configsvc.fallbackPrice safe without matching the metered quantity: a
+		// borrowed token rate against a speech call is inert, not wrong.
+		{
+			name: "token rate against speech usage is zero",
+			cost: catalog.Cost{Input: 10, Output: 50},
+			norm: wire.Normalized{Seconds: 120, Chars: 4_000},
+			want: 0,
 		},
 		{
-			name:  "zero usage zero cost",
-			price: config.Price{Input: 3, Output: 15, Unit: "per_1m_tokens"},
-			norm:  wire.Normalized{},
-			want:  0,
-		},
-		// The next two pin why a fallback price must never cross unit families
-		// (see configsvc.fallbackPrice): the quantities are disjoint, so a
-		// mismatched unit does not over- or under-bill, it computes exactly $0
-		// while appearing to carry a rate.
-		{
-			name:  "token rate against speech usage is zero",
-			price: config.Price{Input: 10, Output: 50, Unit: "per_1m_tokens"},
-			norm:  wire.Normalized{Seconds: 120, Chars: 4_000},
-			want:  0,
-		},
-		{
-			name:  "speech rate against token usage is zero",
-			price: config.Price{Input: 0.01, Unit: "per_second"},
-			norm:  wire.Normalized{InputTokens: 1_000_000, OutputTokens: 500_000},
-			want:  0,
+			name: "speech rate against token usage is zero",
+			cost: catalog.Cost{Second: 0.01},
+			norm: wire.Normalized{InputTokens: 1_000_000, OutputTokens: 500_000},
+			want: 0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Cost(tt.price, tt.norm)
+			got := Cost(tt.cost, tt.norm)
 			if !approx(got, tt.want) {
 				t.Errorf("Cost() = %v, want %v", got, tt.want)
 			}
@@ -142,46 +131,65 @@ func TestCost(t *testing.T) {
 	}
 }
 
+// TestCostAxesAreAdditive is the capability the single-`unit` price could not
+// express: a model billed on two quantities at once. Under the old shape one of
+// these axes was unstateable and silently metered $0.
+func TestCostAxesAreAdditive(t *testing.T) {
+	c := catalog.Cost{Input: 3, Output: 15, Second: 0.001, Character: 0.00002}
+	n := wire.Normalized{
+		InputTokens: 1_000_000, OutputTokens: 2_000_000,
+		Seconds: 60, Chars: 1_000,
+	}
+	want := 3*1 + 15*2 + 0.001*60 + 0.00002*1000
+	if got := Cost(c, n); !approx(got, want) {
+		t.Errorf("Cost() = %v, want %v (every declared axis contributes)", got, want)
+	}
+}
+
 // TestCostDeepSeekRealWorld prices a realistic DeepSeek call: cache hits at
 // ~1/10 of the miss rate must dominate the bill when most input is cached.
 func TestCostDeepSeekRealWorld(t *testing.T) {
-	price := config.Price{Input: 0.14, Output: 0.28, CachedInput: 0.0028, Unit: "per_1m_tokens"}
+	cost := catalog.Cost{Input: 0.14, Output: 0.28, CacheRead: 0.0028}
 	// Disjoint: 10k fresh input + 90k cache reads.
 	norm := wire.Normalized{InputTokens: 10_000, CachedInputTokens: 90_000, OutputTokens: 5_000}
-	got := Cost(price, norm)
+	got := Cost(cost, norm)
 	want := (10_000*0.14 + 90_000*0.0028 + 5_000*0.28) / 1e6
 	if !approx(got, want) {
 		t.Errorf("Cost() = %v, want %v", got, want)
 	}
 	// Sanity: ignoring the cache discount would overcharge ~8x on input.
-	full := Cost(config.Price{Input: 0.14, Output: 0.28, Unit: "per_1m_tokens"}, norm)
+	full := Cost(catalog.Cost{Input: 0.14, Output: 0.28}, norm)
 	if full <= got {
 		t.Errorf("expected discount: full %v should exceed discounted %v", full, got)
 	}
 }
 
-// TestCostBillingInvariance proves the disjoint token model bills exactly what the
-// pre-change folded model did. The old model stored InputTokens as the folded
-// total (fresh + cache_read + cache_create) and priced
+// TestCostBillingInvariance proves the disjoint token model bills exactly what
+// the pre-change folded model did. The old model stored InputTokens as the
+// folded total (fresh + cache_read + cache_create) and priced
 // (InputTokens-cached)*Input + cached*cachedRate + Output*Output. The new model
-// stores the three input parts disjointly; this asserts the two agree for a range
-// of representative vendor shapes, so redefining input_tokens to fresh-only changed
-// no invoice.
+// stores the three input parts disjointly; this asserts the two agree for a
+// range of representative vendor shapes, so redefining input_tokens to
+// fresh-only changed no invoice.
+//
+// It also pins the boundary of the cache_write change: with no cache_write
+// published, writes still bill at the input rate exactly as they always did, so
+// the new axis alters nothing for a cost that does not declare it.
 func TestCostBillingInvariance(t *testing.T) {
 	// oldFolded replicates the pre-change tokenCost from the folded total.
-	oldFolded := func(p config.Price, foldedInput, cached, output float64) float64 {
-		c := cached
-		if c > foldedInput {
-			c = foldedInput
+	oldFolded := func(c catalog.Cost, foldedInput, cached, output float64) float64 {
+		read := cached
+		if read > foldedInput {
+			read = foldedInput
 		}
-		rate := p.CachedInput
+		rate := c.CacheRead
 		if rate <= 0 {
-			rate = p.Input
+			rate = c.Input
 		}
-		return ((foldedInput-c)*p.Input + c*rate + output*p.Output) / 1e6
+		return ((foldedInput-read)*c.Input + read*rate + output*c.Output) / 1e6
 	}
 
-	price := config.Price{Input: 0.28, Output: 0.42, CachedInput: 0.028, Unit: "per_1m_tokens"}
+	cost := catalog.Cost{Input: 0.28, Output: 0.42, CacheRead: 0.028}
 	cases := []struct{ fresh, cacheRead, cacheCreate, output float64 }{
 		{1000, 0, 0, 500},              // no cache
 		{10, 74263, 969, 285},          // the Anthropic real-world example
@@ -195,40 +203,10 @@ func TestCostBillingInvariance(t *testing.T) {
 			CacheCreationTokens: c.cacheCreate,
 			OutputTokens:        c.output,
 		}
-		got := Cost(price, disjoint)
-		want := oldFolded(price, c.fresh+c.cacheRead+c.cacheCreate, c.cacheRead, c.output)
+		got := Cost(cost, disjoint)
+		want := oldFolded(cost, c.fresh+c.cacheRead+c.cacheCreate, c.cacheRead, c.output)
 		if !approx(got, want) {
-			t.Errorf("invariance broken for %+v: new=%v old=%v", c, got, want)
+			t.Errorf("shape %+v: Cost() = %v, folded model = %v", c, got, want)
 		}
-	}
-}
-
-// TestCostCacheAxisIsNotMonotonicInCachedInput is the reason an unpriced model
-// borrows a whole real price rather than a per-field maximum of its provider's
-// prices (see configsvc.fallbackPrice).
-//
-// CachedInput == 0 means "no discount, charge the full Input rate", so on the
-// cache-read axis a zero is the EXPENSIVE value. Taking max() field by field
-// would pick the largest declared discount and produce a "most expensive price"
-// that bills cache-heavy traffic — the common shape for agent workloads — for
-// less than a real model does.
-func TestCostCacheAxisIsNotMonotonicInCachedInput(t *testing.T) {
-	// dear declares no cache discount; cheap declares a large one.
-	dear := config.Price{Input: 15, Output: 75, CachedInput: 0, Unit: "per_1m_tokens"}
-	cheap := config.Price{Input: 1, Output: 5, CachedInput: 1.5, Unit: "per_1m_tokens"}
-	// chimera is what a per-field max would have produced from those two.
-	chimera := config.Price{Input: 15, Output: 75, CachedInput: 1.5, Unit: "per_1m_tokens"}
-
-	cacheHeavy := wire.Normalized{CachedInputTokens: 1_000_000}
-
-	if got, want := Cost(dear, cacheHeavy), 15.0; !approx(got, want) {
-		t.Fatalf("dear cache-read cost = %v, want %v (CachedInput 0 falls back to Input)", got, want)
-	}
-	if Cost(chimera, cacheHeavy) >= Cost(dear, cacheHeavy) {
-		t.Error("per-field max should have been cheaper than a real model here; the hazard this test documents is gone — re-check fallbackPrice")
-	}
-	// And the real price we do borrow is never cheaper than the one it beat.
-	if Cost(dear, cacheHeavy) < Cost(cheap, cacheHeavy) {
-		t.Error("borrowed price must not undercut the model it outranked")
 	}
 }

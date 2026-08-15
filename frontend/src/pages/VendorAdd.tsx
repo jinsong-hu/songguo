@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Check, Layers, Minus, Plus, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
 import type {
+  Cost,
   Catalog,
   CatalogEndpoint,
   CatalogVendor,
@@ -27,7 +28,7 @@ export function VendorAddPage() {
   const catalog = useFetch(() => api.catalog(), []);
   const providers = useFetch(() => api.providers(), []);
 
-  const vendor = catalog.data?.vendors.find((v) => v.id === vendorId);
+  const vendor = vendorId ? catalog.data?.[vendorId] : undefined;
   const custom = !!vendor?.custom;
   const sameVendorCount = (providers.data ?? []).filter((p) => p.catalog_id === vendorId).length;
   // Catalog vendors auto-take the vendor name for their first provider; a custom
@@ -354,7 +355,7 @@ export function VendorAddPage() {
                   onChange={(e) => setModelRow(ep.wire, i, e.target.value)}
                 />
                 <span className={styles.modelPrice}>
-                  {m.trim() ? (price ? `in ${price.input} · out ${price.output}` : 'unpriced') : ''}
+                  {m.trim() ? (price ? `in ${price.cost.input ?? 0} · out ${price.cost.output ?? 0}` : 'unpriced') : ''}
                 </span>
                 <button
                   type="button"
@@ -406,10 +407,7 @@ export const mkey = (wire: string, model: string) => `${wire} ${model}`;
 
 /** Per-model price borrowed from the catalog for custom providers. */
 export interface CatalogPrice {
-  input: number;
-  output: number;
-  cached_input: number;
-  unit: string;
+  cost: Cost;
   price_override?: boolean;
 }
 
@@ -417,10 +415,10 @@ export interface CatalogPrice {
 // The first vendor to define a model id wins.
 export function buildPriceIndex(catalog: Catalog | null | undefined): Record<string, CatalogPrice> {
   const index: Record<string, CatalogPrice> = {};
-  for (const vendor of catalog?.vendors ?? []) {
+  for (const vendor of Object.values(catalog ?? {})) {
     for (const [id, m] of Object.entries(vendor.models)) {
       if (index[id]) continue;
-      index[id] = { input: m.input, output: m.output, cached_input: m.cached_input ?? 0, unit: m.unit };
+      index[id] = { cost: m.cost };
     }
   }
   return index;
@@ -460,20 +458,12 @@ function customWireModels(
 
 function catalogPrice(id: string, vendor: CatalogVendor): ProviderModel | null {
   const m = vendor.models[id];
-  return m
-    ? { model: id, input: m.input, output: m.output, cached_input: m.cached_input ?? 0, unit: m.unit }
-    : null;
+  return m ? { model: id, cost: m.cost } : null;
 }
 
 function customPrice(id: string, priceIndex: Record<string, CatalogPrice>): ProviderModel {
   const p = priceIndex[id];
-  return {
-    model: id,
-    input: p?.input ?? 0,
-    output: p?.output ?? 0,
-    cached_input: p?.cached_input ?? 0,
-    unit: p?.unit ?? 'per_1m_tokens',
-  };
+  return { model: id, cost: p?.cost ?? {} };
 }
 
 // buildProvider turns a (wire → model ids) selection into the endpoints + models

@@ -3,6 +3,8 @@ package config
 import (
 	"strings"
 	"testing"
+
+	"github.com/songguo/songguo/internal/catalog"
 )
 
 func TestBuildValid(t *testing.T) {
@@ -16,9 +18,9 @@ func TestBuildValid(t *testing.T) {
 				Weight:       1,
 				Credential:   Credential{ID: "openai-key-1", APIKey: "sk-aaa"},
 				Prices: map[string]Price{
-					"gpt-4o":                 {Input: 2.50, Output: 10.00, Unit: "per_1m_tokens"},
-					"gpt-4o-mini":            {Input: 0.15, Output: 0.60, Unit: "per_1m_tokens"},
-					"text-embedding-3-small": {Input: 0.02, Unit: "per_1m_tokens"},
+					"gpt-4o":                 {Cost: catalog.Cost{Input: 2.5, Output: 10}},
+					"gpt-4o-mini":            {Cost: catalog.Cost{Input: 0.15, Output: 0.6}},
+					"text-embedding-3-small": {Cost: catalog.Cost{Input: 0.02}},
 				},
 			},
 			{
@@ -28,7 +30,7 @@ func TestBuildValid(t *testing.T) {
 				Priority:     2,
 				Credential:   Credential{ID: "deepseek-key-1", APIKey: "sk-bbb"},
 				Prices: map[string]Price{
-					"deepseek-chat": {Input: 0.27, Output: 1.10, Unit: "per_1m_tokens"},
+					"deepseek-chat": {Cost: catalog.Cost{Input: 0.27, Output: 1.1}},
 				},
 			},
 		},
@@ -55,7 +57,7 @@ func TestBuildValid(t *testing.T) {
 	if !ok {
 		t.Fatal("PriceFor(openai-main, gpt-4o) not found")
 	}
-	if p.Input != 2.50 || p.Output != 10.00 || p.Unit != "per_1m_tokens" {
+	if p.Cost.Input != 2.50 || p.Cost.Output != 10.00 {
 		t.Errorf("gpt-4o price = %+v, unexpected", p)
 	}
 
@@ -131,7 +133,7 @@ func TestSnapshotReturnsCopies(t *testing.T) {
 	cfg := Config{
 		Vendors: []Vendor{
 			{Name: "openai-main", Origin: "https://api.openai.com/v1", ServedModels: []string{"gpt-4o"}, Credential: Credential{APIKey: "sk-a"},
-				Prices: map[string]Price{"gpt-4o": {Input: 2.50, Unit: "per_1m_tokens"}}},
+				Prices: map[string]Price{"gpt-4o": {Cost: catalog.Cost{Input: 2.5}}}},
 		},
 	}
 	snap, err := Build(cfg)
@@ -141,13 +143,13 @@ func TestSnapshotReturnsCopies(t *testing.T) {
 
 	v, _ := snap.Vendor("openai-main")
 	v.ServedModels[0] = "mutated"
-	v.Prices["gpt-4o"] = Price{Input: 999}
+	v.Prices["gpt-4o"] = Price{Cost: catalog.Cost{Input: 999}}
 
 	again, _ := snap.Vendor("openai-main")
 	if again.ServedModels[0] == "mutated" {
 		t.Error("mutating returned ServedModels leaked into snapshot")
 	}
-	if again.Prices["gpt-4o"].Input == 999 {
+	if again.Prices["gpt-4o"].Cost.Input == 999 {
 		t.Error("mutating returned Prices leaked into snapshot")
 	}
 }
@@ -242,12 +244,17 @@ func TestValidationFailures(t *testing.T) {
 			wantSubs: []string{"credential api_key must be non-empty"},
 		},
 		{
-			name: "price with empty unit",
+			// A negative rate would credit money on every call and nothing
+			// downstream would catch it — pricing.Cost just sums what it is
+			// given. A cost declaring NO rate is deliberately not an error, so
+			// an unpriced model cannot take the whole snapshot down; see
+			// validatePrices.
+			name: "price with a negative rate",
 			cfg: Config{Vendors: []Vendor{
 				{Name: "a", Origin: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"},
-					Prices: map[string]Price{"m1": {Input: 1.0, Output: 2.0}}},
+					Prices: map[string]Price{"m1": {Cost: catalog.Cost{Input: 1, Output: -2}}}},
 			}},
-			wantSubs: []string{"empty unit"},
+			wantSubs: []string{"negative output rate"},
 		},
 		{
 			name:     "aggregates multiple problems",

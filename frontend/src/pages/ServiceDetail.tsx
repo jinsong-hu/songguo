@@ -217,15 +217,23 @@ function TestSection({
 
 function Hero({ model, info }: { model: string; info?: CatalogInfo }) {
   const meta = modelMeta(model);
-  const context = contextLabel(info?.context);
-  const modalities = (info?.modalities ?? []).map((m) => MODALITY_LABEL[m] ?? m);
+  const context = contextLabel(info?.limit?.context);
+  const modalities = (info?.modalities?.input ?? []).map((m) => MODALITY_LABEL[m] ?? m);
+  const cost = info?.cost;
 
   const facts: Array<[string, string]> = [];
   if (context) facts.push(['Context window', `${context} tokens`]);
   if (modalities.length > 0) facts.push(['Modalities', modalities.join(' · ')]);
-  if (info && info.input > 0) facts.push(['Input', `$${info.input} / 1M tokens`]);
-  if (info && info.output > 0) facts.push(['Output', `$${info.output} / 1M tokens`]);
-  if (info?.cached_input) facts.push(['Cached input', `$${info.cached_input} / 1M tokens`]);
+  if (cost?.input) facts.push(['Input', `$${cost.input} / 1M tokens`]);
+  if (cost?.output) facts.push(['Output', `$${cost.output} / 1M tokens`]);
+  if (cost?.cache_read) facts.push(['Cache read', `$${cost.cache_read} / 1M tokens`]);
+  if (cost?.cache_write) facts.push(['Cache write', `$${cost.cache_write} / 1M tokens`]);
+  // Media axes: models.dev has no field for these, so they only ever come from
+  // the hand-maintained half of the catalog (Volcengine speech and video).
+  if (cost?.character) facts.push(['Rate', `$${cost.character} / character`]);
+  if (cost?.second) facts.push(['Rate', `$${cost.second} / second`]);
+  if (cost?.image) facts.push(['Rate', `$${cost.image} / image`]);
+  if (cost?.call) facts.push(['Rate', `$${cost.call} / call`]);
 
   return (
     <div className={`card ${styles.hero}`} style={{ '--brand': meta.color } as CSSProperties}>

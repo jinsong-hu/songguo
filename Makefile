@@ -1,5 +1,5 @@
 # Songguo — dev / build orchestration
-.PHONY: dev backend frontend build install test clean
+.PHONY: dev backend frontend build install test clean catalog-sync catalog-check
 
 # Use bash so the cleanup function/loop below behaves consistently.
 SHELL := /bin/bash
@@ -67,6 +67,17 @@ install:
 
 test:
 	cd backend && go test ./...
+
+# Regenerate internal/catalog/models.json from models.dev, then review the diff.
+# Only models the hand-written catalog.json declares are generated; everything
+# models.dev cannot supply stays in catalog.json. See backend/cmd/catalogsync.
+catalog-sync:
+	cd backend && go run ./cmd/catalogsync
+
+# Compare the embedded prices against models.dev. Needs network, so it is kept
+# out of `make test` and run deliberately.
+catalog-check:
+	cd backend && go test -tags modelsdev -count=1 -v ./internal/modelsdev/
 
 clean:
 	rm -f songguo songguo.db songguo.db-*

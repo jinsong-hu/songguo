@@ -143,7 +143,7 @@ vendors:
       openai/images: %s/v1/images/generations
     credential: {id: %s, api_key: %s}
     prices:
-      realtime-model: { input: 1.0, unit: per_call }
+      realtime-model: { cost: { call: 1 } }
 `, vendor, baseURL, baseURL, credID, apiKey)
 }
 

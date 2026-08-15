@@ -23,12 +23,9 @@ const weightRangeMsg = "weight must be 0 or greater; 0 parks the provider"
 // --- views ---
 
 type providerModelView struct {
-	Model         string  `json:"model"`
-	Input         float64 `json:"input"`
-	Output        float64 `json:"output"`
-	CachedInput   float64 `json:"cached_input"`
-	Unit          string  `json:"unit"`
-	PriceOverride bool    `json:"price_override"`
+	Model         string       `json:"model"`
+	Cost          catalog.Cost `json:"cost"`
+	PriceOverride bool         `json:"price_override"`
 }
 
 // providerEndpointView is one wire bound to its full upstream URL + adapter (auth scheme).
@@ -74,7 +71,7 @@ func newProviderView(pvd store.Provider, stat store.VendorStat, hasStat bool, ro
 	}
 	models := make([]providerModelView, 0, len(pvd.Models))
 	for _, m := range pvd.Models {
-		models = append(models, providerModelView{Model: m.Model, Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: m.Unit, PriceOverride: m.PriceOverride})
+		models = append(models, providerModelView{Model: m.Model, Cost: m.Cost, PriceOverride: m.PriceOverride})
 	}
 	endpoints := make([]providerEndpointView, 0, len(pvd.Endpoints))
 	for _, ep := range pvd.Endpoints {
@@ -123,12 +120,9 @@ func newProviderView(pvd store.Provider, stat store.VendorStat, hasStat bool, ro
 // --- request bodies ---
 
 type providerModelReq struct {
-	Model         string  `json:"model"`
-	Input         float64 `json:"input,omitempty"`
-	Output        float64 `json:"output,omitempty"`
-	CachedInput   float64 `json:"cached_input,omitempty"`
-	Unit          string  `json:"unit,omitempty"`
-	PriceOverride bool    `json:"price_override,omitempty"`
+	Model         string       `json:"model"`
+	Cost          catalog.Cost `json:"cost,omitempty"`
+	PriceOverride bool         `json:"price_override,omitempty"`
 }
 
 type providerEndpointReq struct {
@@ -213,7 +207,7 @@ func sanitizeProvidersForUser(in []providerView) []providerView {
 		p.Endpoints = eps
 		models := make([]providerModelView, 0, len(p.Models))
 		for _, m := range p.Models {
-			models = append(models, providerModelView{Model: m.Model, Unit: m.Unit})
+			models = append(models, providerModelView{Model: m.Model})
 		}
 		p.Models = models
 		out = append(out, p)
@@ -552,11 +546,7 @@ func toStoreModels(in []providerModelReq) []store.ProviderModel {
 		if strings.TrimSpace(m.Model) == "" {
 			continue
 		}
-		unit := m.Unit
-		if unit == "" {
-			unit = "per_1m_tokens"
-		}
-		out = append(out, store.ProviderModel{Model: m.Model, Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: unit, PriceOverride: m.PriceOverride})
+		out = append(out, store.ProviderModel{Model: m.Model, Cost: m.Cost, PriceOverride: m.PriceOverride})
 	}
 	return out
 }

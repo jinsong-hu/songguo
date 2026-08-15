@@ -171,7 +171,7 @@ Read-only by design: if a usage shape isn't recognized the call still succeeds w
 
 - **`openai/chat`, `openai/completions`, `openai/embeddings`** — top-level `usage`: `prompt_tokens`/`input_tokens` + `completion_tokens`/`output_tokens`. Cached input per quirk: default `prompt_tokens_details.cached_tokens`, DeepSeek `prompt_cache_hit_tokens`, MiniMax `cached_tokens`. `prompt_tokens` is cache-inclusive, so `input_tokens = prompt_tokens − cached` (fresh); no cache-creation (→ 0). `completion_tokens_details.reasoning_tokens` → `thinking_tokens`. Streaming usage rides the final SSE chunk (some vendors only when the client sets `stream_options.include_usage`); embeddings is input-only, no stream.
 - **`openai/responses`** — `usage.input_tokens` (cache-inclusive) + `output_tokens` + `input_tokens_details.cached_tokens`; `input_tokens = input_tokens − cached` (fresh), `output_tokens_details.reasoning_tokens` → `thinking_tokens`. Streaming usage rides the `response.completed` event under `response.usage`.
-- **`anthropic/messages`** — the reference shape: `input_tokens` (already fresh) + `cache_read_input_tokens` + `cache_creation_input_tokens` mapped straight through as three disjoint fields (cache-create's 1.25× premium ignored, by design); `output_tokens_details.thinking_tokens` → `thinking_tokens`. Streaming merges `message_start.message.usage` (input) with `message_delta.usage` (output).
+- **`anthropic/messages`** — the reference shape: `input_tokens` (already fresh) + `cache_read_input_tokens` + `cache_creation_input_tokens` mapped straight through as three disjoint fields (cache-create bills at the model's `cache_write` rate, else `input`); `output_tokens_details.thinking_tokens` → `thinking_tokens`. Streaming merges `message_start.message.usage` (input) with `message_delta.usage` (output).
 - **`volc/tts`** — `usage.text_words` → `Chars` (per-char); streamed as NDJSON, and only returned when the client sets `X-Control-Require-Usage-Tokens-Return`, else coarse/unknown.
 - **`volc/asr`** — `audio_info.duration` (ms) → `Seconds` (per-second); the `submit` ack has no `audio_info` (meters zero), the `query` poll bills.
 - **`anthropic/count_tokens`** — zero-cost: Anthropic bills token counting as free, so the call is logged (for observability) but never priced; the response (`{"input_tokens":N}`, no `usage` object) is not parsed.
@@ -188,39 +188,107 @@ and never substitute a local token count.
 
 **An unknown *price* does not.** A model a provider serves but nobody published
 a rate for is given, at config-build time, **the most expensive rate that same
-provider charges in the same unit family**. Otherwise a newly released model
-(one not yet in `catalog.json`) silently bills $0 until someone notices — an
-under-bill indistinguishable from a free call in the ledger. The substitution:
+provider charges**. Otherwise a newly released model silently bills $0 until
+someone notices — an under-bill indistinguishable from a free call in the
+ledger. The substitution:
 
-- **stays inside a unit family** — `per_1m_tokens`/`per_1k_tokens`/`per_token`
-  are interchangeable after normalizing; `per_call`, `per_image`, `per_second`
-  and `per_char` each stand alone. Crossing families would not over-bill, it
-  would compute $0 while appearing to carry a rate, because the quantities are
-  disjoint.
-- **copies a whole real price**, never a per-field maximum. `cached_input: 0`
-  means "no discount, charge full input", so a field-wise max would pick the
-  *largest discount* and undercut a real model on cache-heavy traffic.
-- **never crosses providers.** A provider with no usable same-family rate keeps
-  its $0 and is warned about. Borrowing globally would make one provider's bill
-  a function of unrelated config.
+- **copies a whole real cost**, never a per-axis maximum. `cache_read: 0` means
+  "no discount, charge full input", so a field-wise max would pick the *largest
+  discount* and undercut a real model on cache-heavy traffic.
+- **never crosses providers.** A provider with no usable rate keeps its $0 and
+  is warned about. Borrowing globally would make one provider's bill a function
+  of unrelated config.
+- **lends only token rates.** Which quantity a brand-new model bills on is not
+  knowable — an unpriced row declares no axes — so a media rate is never
+  invented for it. Unpriced implies absent from the catalog, and a model new
+  enough to be missing is a chat model in practice; media wires have small,
+  fixed model sets that are hand-maintained. A speech model with no rate keeps
+  its $0 and is warned about.
 - **triggers on provenance, not on the number.** Only a model nobody ever
   stated a rate for is eligible. A zero *someone published* is a real price
-  meaning free — the catalog lists genuinely free tiers (`glm-4.7-flash`), and
-  an operator `price_override` of zero is a deliberate "don't bill this" — and
-  is left alone. Re-pricing those would invent a charge for a free model.
-- **skips implausibly scaled rates** (a `per_token` value that normalizes above
-  $1000/1M is almost certainly a unit typo), so one mistake can't become the
-  ceiling for a whole provider.
+  meaning free (`glm-4.7-flash`), and an operator `price_override` of zero is a
+  deliberate "don't bill this". This distinction is only visible in the
+  provenance: an empty cost and a published all-zero cost are the same value.
+- **skips implausibly scaled rates** (a token rate above $1000/1M is almost
+  certainly a basis mistake), so one typo can't become a provider's ceiling.
 
-Every price carries a `source` (`catalog`, `override`, `stored`, `unpriced`, or
-`fallback:<model>`), visible in `GET /api/pricing` and the vendor view, so a
-borrowed rate is never mistaken for a published one and the ledger can always be
-reconciled against the price table. Fallbacks are logged at reload.
+Every price carries a `source` (`catalog`, `feed`, `override`, `stored`,
+`unpriced`, or `fallback:<model>`), visible in `GET /api/pricing` and the vendor
+view, so a borrowed rate is never mistaken for a published one.
 
-A price lookup that *misses entirely* is different again: it means the request
-reached a vendor that never declared the model (a provider pin, an empty model
-string, an unmapped `X-Api-Resource-Id`). There is no rate to reason from, so the
+A price lookup that *misses entirely* is different again: the request reached a
+vendor that never declared the model. There is no rate to reason from, so the
 call bills $0 and logs a warning — a routing signal, not a pricing gap.
+
+### Cost is additive axes, not a rate plus a unit
+
+A model's cost declares one rate per metered quantity, and a call's cost is the
+**sum over the axes that model declares**:
+
+| axis | basis | `wire.Normalized` field |
+|---|---|---|
+| `input` | per 1M tokens | `InputTokens` |
+| `output` | per 1M tokens | `OutputTokens` |
+| `cache_read` | per 1M tokens | `CachedInputTokens` |
+| `cache_write` | per 1M tokens | `CacheCreationTokens` |
+| `character` | per character | `Chars` |
+| `second` | per second | `Seconds` |
+| `image` | per image | `Images` |
+| `call` | per request | `Calls` |
+
+The first four are models.dev's own fields at models.dev's basis, so generated
+entries stay byte-identical to upstream. The rest are songguo's, at the basis
+vendors publish, and exist because models.dev has no field of any kind for
+per-character or per-second billing across all 5,901 models it lists.
+
+Summing rather than dispatching on a `unit` fixes a real gap: a model billed on
+two quantities — an audio model charging tokens *and* seconds — could previously
+state only one, and silently metered $0 for the other. It also makes a
+mismatched fallback inert rather than wrong: a borrowed token rate against a
+speech call multiplies token counts that call never reported, and contributes
+nothing.
+
+Cache writes bill at `cache_write` when published, else at `input`. The 1.25x
+write premium used to be ignored because no rate was available; models.dev
+supplies one.
+
+### Half the catalog's prices are generated, and the files say which half
+
+`internal/catalog` embeds two files with two owners:
+
+- **`models.json` is generated.** `make catalog-sync` (`backend/cmd/catalogsync`)
+  rewrites it from models.dev; do not hand-edit. 38 models today.
+- **`catalog.json` is hand-maintained.** The routing topology — endpoints,
+  adapters, quirks, the `custom` template — which models.dev has no notion of
+  because everything there is SDK-shaped rather than URL-shaped. Plus the 29
+  models it cannot supply. 
+
+`Load` merges them and the hand-written entry wins, which doubles as the way to
+pin a rate the generator would otherwise overwrite.
+
+Hand-typing the prices had drifted badly: `gpt-5.6-luna` sat at 1.00/6.00
+against a published 0.20/1.20, with `gpt-5.6-terra`, `grok-4.5` and three `qwen`
+models wrong the same way. `make catalog-check` now fails when they drift again.
+
+What stays hand-maintained, and why it is not a gap to close:
+
+- **All of `volcengine-*` (25 models).** models.dev has no first-party
+  Volcengine provider; Doubao appears only under resellers (NanoGPT lists
+  `doubao-seed-2-0-pro-260215` at 0.782/3.876 against Volcengine's own
+  0.44/2.22).
+- **Alibaba's and Zhipu's embeddings, and `glm-5-turbo`** — simply not listed.
+- **Everything billed per character, second or call** — no schema for it exists
+  upstream.
+
+The Chinese vendors resolve to models.dev's **international** lists
+(`alibaba`, `moonshotai`, `minimax`), matching the rates songguo already
+carried. models.dev also publishes `-cn` variants; `alibaba-cn` prices
+`qwen-max` at 0.345/1.377 against the international 1.6/6.4, so the choice is a
+4.6x difference and deliberately explicit in `modelsdev.providerFor`.
+
+**Prices are not refreshed by this generator.** It seeds a fresh checkout and an
+air-gapped install; a generator that only runs when someone remembers is how the
+catalog rotted in the first place.
 
 ## Auth adapters
 

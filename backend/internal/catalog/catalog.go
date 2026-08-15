@@ -128,17 +128,17 @@ type Limit struct {
 // publish (USD per single unit).
 type Cost struct {
 	// Per 1M tokens — models.dev's fields, copied verbatim.
-	Input      float64 `json:"input,omitempty"`       // fresh input tokens
-	Output     float64 `json:"output,omitempty"`      // output tokens
-	CacheRead  float64 `json:"cache_read,omitempty"`  // cache-read input tokens
-	CacheWrite float64 `json:"cache_write,omitempty"` // cache-write input tokens
+	Input      float64 `json:"input,omitempty" yaml:"input"`             // fresh input tokens
+	Output     float64 `json:"output,omitempty" yaml:"output"`           // output tokens
+	CacheRead  float64 `json:"cache_read,omitempty" yaml:"cache_read"`   // cache-read input tokens
+	CacheWrite float64 `json:"cache_write,omitempty" yaml:"cache_write"` // cache-write input tokens
 
 	// Per single unit — songguo extensions. models.dev has no unit concept and
 	// no field of any kind for these, across all 5,901 models it lists.
-	Character float64 `json:"character,omitempty"` // per character (volc TTS)
-	Second    float64 `json:"second,omitempty"`    // per second of audio (volc ASR)
-	Image     float64 `json:"image,omitempty"`     // per image
-	Call      float64 `json:"call,omitempty"`      // per request (volc video)
+	Character float64 `json:"character,omitempty" yaml:"character"` // per character (volc TTS)
+	Second    float64 `json:"second,omitempty" yaml:"second"`       // per second of audio (volc ASR)
+	Image     float64 `json:"image,omitempty" yaml:"image"`         // per image
+	Call      float64 `json:"call,omitempty" yaml:"call"`           // per request (volc video)
 }
 
 // Zero reports whether a cost declares no rate at all, i.e. would always meter
@@ -170,6 +170,13 @@ func Load() (Catalog, error) {
 	}
 	return merge(gen, man), nil
 }
+
+// Manual returns just the hand-maintained half — catalog.json, before the
+// generated models are merged in. It exists for tooling that needs to know what
+// songguo declares as opposed to what a sync produced: pass the merged catalog
+// to modelsdev.Generate and every model looks already pinned, because the merge
+// has by then folded the generated entries into the same map.
+func Manual() (Catalog, error) { return parse(manual, "catalog.json") }
 
 func parse(raw []byte, name string) (Catalog, error) {
 	var c Catalog

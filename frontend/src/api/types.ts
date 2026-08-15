@@ -605,10 +605,8 @@ export interface Credential {
 }
 
 export interface Price {
-  input: number;
-  output: number;
-  unit: string;
-  /** Rate provenance: "catalog" | "override" | "stored" | "unpriced" | "fallback:<model>". */
+  cost: Cost;
+  /** Rate provenance: "catalog" | "feed" | "override" | "stored" | "unpriced" | "fallback:<model>". */
   source: string;
 }
 
@@ -736,11 +734,7 @@ export interface Service {
 
 export interface ProviderModel {
   model: string;
-  input: number;
-  output: number;
-  /** Rate for cache-hit input tokens; 0 = no discount (full input rate). */
-  cached_input: number;
-  unit: string;
+  cost: Cost;
   /** True when this row intentionally overrides catalog pricing. */
   price_override?: boolean;
 }
@@ -890,13 +884,48 @@ export interface PatchServiceProviderRoutingBody {
 
 // --- Catalog (read-only preset directory) ---
 
+/**
+ * Per-model rates, one field per metered quantity. Mirrors models.dev's `cost`
+ * object, extended with the media axes it has no field for.
+ *
+ * The axes are ADDITIVE, not alternatives — a call's cost is the sum over the
+ * axes its model declares — which is why there is no `unit`. Token axes are USD
+ * per 1M tokens (models.dev's basis); the media axes are USD per single unit
+ * (the basis vendors publish).
+ */
+export interface Cost {
+  /** Per 1M fresh input tokens. */
+  input?: number;
+  /** Per 1M output tokens. */
+  output?: number;
+  /** Per 1M cache-read input tokens; absent = no discount, charge `input`. */
+  cache_read?: number;
+  /** Per 1M cache-write input tokens; absent = charge `input`. */
+  cache_write?: number;
+  /** Per character (Volcengine TTS). */
+  character?: number;
+  /** Per second of audio (Volcengine ASR). */
+  second?: number;
+  /** Per image. */
+  image?: number;
+  /** Per request (Volcengine video). */
+  call?: number;
+}
+
 export interface CatalogModel {
-  input: number;
-  output: number;
-  cached_input?: number;
-  unit: string;
-  context?: number;
-  modalities?: string[];
+  id: string;
+  name?: string;
+  family?: string;
+  attachment?: boolean;
+  reasoning?: boolean;
+  tool_call?: boolean;
+  temperature?: boolean;
+  release_date?: string;
+  last_updated?: string;
+  open_weights?: boolean;
+  modalities?: { input?: string[]; output?: string[] };
+  limit?: { context?: number; input?: number; output?: number };
+  cost: Cost;
 }
 
 /** A preset wire bound to its full upstream URL + adapter, with the model ids it serves. */
@@ -912,18 +941,24 @@ export interface CatalogEndpoint {
 export interface CatalogVendor {
   id: string;
   name: string;
-  homepage?: string;
+  /** Vendor documentation URL (models.dev's `doc`). */
+  doc?: string;
+  /** Environment variables the vendor's SDK reads (models.dev's `env`). */
+  env?: string[];
+  npm?: string;
   quirks?: Record<string, string>;
   /** Template vendor: no preset models, user supplies base URL ({base} placeholder) and model ids. */
   custom?: boolean;
-  /** Price list keyed by model id, shared across this vendor's endpoints. */
+  /** Model list keyed by model id, shared across this vendor's endpoints. */
   models: Record<string, CatalogModel>;
   endpoints: CatalogEndpoint[];
 }
 
-export interface Catalog {
-  vendors: CatalogVendor[];
-}
+/**
+ * The preset directory, keyed by provider id — models.dev's own shape. A map has
+ * no order, so anything rendering a list of providers must sort (by `name`).
+ */
+export type Catalog = Record<string, CatalogVendor>;
 
 /**
  * Ledger write-queue occupancy — the gateway's clearest load signal, since
@@ -956,10 +991,8 @@ export interface Settings {
 export interface PricingRow {
   vendor: string;
   model: string;
-  input: number;
-  output: number;
-  unit: string;
-  /** Rate provenance: "catalog" | "override" | "stored" | "unpriced" | "fallback:<model>". */
+  cost: Cost;
+  /** Rate provenance: "catalog" | "feed" | "override" | "stored" | "unpriced" | "fallback:<model>". */
   source: string;
 }
 

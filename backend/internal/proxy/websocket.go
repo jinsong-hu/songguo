@@ -532,7 +532,7 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 		// no rate to reason from: bill $0 and say so.
 		if snap := h.snapshot(); snap != nil {
 			if price, ok := snap.PriceFor(vendorName, billingModel); ok {
-				cost = pricing.Cost(price, ext.Norm)
+				cost = pricing.Cost(price.Cost, ext.Norm)
 			} else {
 				h.logger.Warn("no price entry for model under this vendor; metering $0",
 					"vendor", vendorName, "model", billingModel)

@@ -34,7 +34,7 @@ function kindFromId(model: string): Kind {
 function wiresForModel(catalog: Catalog | null, model: string): Set<string> {
   const wires = new Set<string>();
   if (!catalog) return wires;
-  for (const vendor of catalog.vendors) {
+  for (const vendor of Object.values(catalog)) {
     for (const ep of vendor.endpoints) {
       if ((ep.models ?? []).includes(model)) wires.add(ep.wire);
     }
