@@ -300,13 +300,18 @@ without anyone noticing.
 
 Resolution order — the ordering is the whole design:
 
-| | source | beats |
+| | source | why it is where it is |
 |---|---|---|
-| 1 | operator `price_override` | everything; never consults the feed |
-| 2 | a pin in `catalog.json` | someone typed it deliberately |
-| 3 | the price feed (`feed`) | the seed, which is why a stale rate self-corrects |
-| 4 | the embedded catalog (`catalog`) | the offline floor and first-boot seed |
-| 5 | the stored row, else unpriced | |
+| 1 | the operator's row, when marked `price_override` | a rate someone typed wins outright |
+| 2 | the price feed (`feed`) | current, so a stale seed self-corrects |
+| 3 | the embedded catalog (`catalog`) | the offline floor and first-boot seed |
+| 4 | the operator's row as-is, else unpriced | |
+
+A rate hand-pinned in `catalog.json` gets **no rule of its own**, because it
+cannot collide: `modelsdev.Generate` skips every model the hand-written file
+defines and the feed is built from `Generate`, so a pinned model never reaches
+the feed to be overtaken by it. That invariant is held by a test
+(`TestGenerateNeverEmitsAPinnedModel`) rather than by an extra layer here.
 
 An automatic rate change is safe here for one specific reason: **cost is
 computed at call time and persisted to `calls.cost`**. A refresh can only affect

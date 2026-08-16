@@ -87,12 +87,6 @@ func (m *Manager) build() (*config.Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configsvc: load catalog: %w", err)
 	}
-	// The hand-written half is read separately so a pinned rate can outrank the
-	// price feed, exactly as it outranks the generated models.json.
-	pinned, err := catalog.Manual()
-	if err != nil {
-		return nil, fmt.Errorf("configsvc: load pinned catalog: %w", err)
-	}
 	// A missing or unreadable feed is not fatal: the embedded catalog is the
 	// floor, and metering must never depend on a refresh having happened.
 	feed, err := m.store.ListFeedPrices()
@@ -100,7 +94,7 @@ func (m *Manager) build() (*config.Snapshot, error) {
 		m.logger.Warn("cannot read refreshed prices; falling back to the embedded catalog", "err", err)
 		feed = nil
 	}
-	prices := priceSources{pinned: pinned, feed: feed, catalog: cat}
+	prices := priceSources{feed: feed, catalog: cat}
 	cfg := config.Config{}
 	for _, pvd := range providers {
 		if !pvd.Enabled {
@@ -289,36 +283,31 @@ func vendorsFromProvider(pvd store.Provider, outboundProxy *config.Proxy, prices
 	return vendors
 }
 
-// priceSources is the ordered set of places a published rate can come from.
-// They are separate fields rather than one merged catalog because the ORDER
-// between them is the whole design: a hand-pinned rate must outrank a refreshed
-// one, and both must outrank the generated seed.
+// priceSources is where a published rate can come from. Two places, not a
+// merged one, because the feed is current and the catalog is a seed and a
+// reader needs to be told which a number came from.
 type priceSources struct {
-	// pinned is catalog.json alone — the hand-maintained half. A model here was
-	// deliberately typed by someone and is never overwritten by a refresh.
-	pinned catalog.Catalog
 	// feed is the last successful price refresh, keyed [provider][model]. Empty
 	// until one lands, which is the normal state on a fresh or offline install.
 	feed map[string]map[string]store.FeedPrice
-	// catalog is the merged embedded catalog: the floor, always present.
+	// catalog is the embedded catalog, generated and hand-written already merged:
+	// the floor, always present.
 	catalog catalog.Catalog
 }
 
-// effectivePrice resolves one model's rate. The order is the contract:
+// effectivePrice resolves one model's rate from, in order:
 //
-//  1. an operator's price_override — always wins, never consults anything else;
-//  2. a hand-pinned catalog.json entry — someone typed it on purpose;
-//  3. the price feed — current, and the reason a stale rate self-corrects;
-//  4. the embedded catalog — the offline floor and first-boot seed;
-//  5. the stored row as-is, else unpriced (pass 2 may lend it a fallback).
+//  1. the operator's own row, when they marked it price_override;
+//  2. the price feed, which is why a stale rate self-corrects;
+//  3. the embedded catalog, the offline floor and first-boot seed;
+//  4. the operator's row as-is, else unpriced (pass 2 may lend it a fallback).
 //
-// Steps 3 and 4 both report PriceSourceFeed/PriceSourceCatalog rather than a
-// single "catalog", so GET /api/pricing can say which one a number came from.
+// A rate hand-pinned in catalog.json needs no rule of its own: modelsdev.Generate
+// skips every model the hand-written file defines, and the feed is built from
+// Generate, so a pinned model can never appear in the feed to be overtaken by it.
+// TestGenerateNeverEmitsAPinnedModel is what keeps that true.
 func effectivePrice(catalogID string, m store.ProviderModel, src priceSources) config.Price {
 	if !m.PriceOverride {
-		if p, ok := pinnedPrice(src.pinned, catalogID, m.Model); ok {
-			return p
-		}
 		if p, ok := feedPrice(src.feed, catalogID, m.Model); ok {
 			return p
 		}
@@ -395,23 +384,6 @@ func fallbackPrice(prices map[string]config.Price, forModel string) (config.Pric
 		return config.Price{}, "", false
 	}
 	return best, bestModel, true
-}
-
-// pinnedPrice reads the hand-maintained catalog only. It is what keeps a rate an
-// operator pinned in catalog.json from being replaced on the next refresh.
-func pinnedPrice(pinned catalog.Catalog, catalogID, model string) (config.Price, bool) {
-	if catalogID == "" {
-		return config.Price{}, false
-	}
-	p, ok := pinned[catalogID]
-	if !ok {
-		return config.Price{}, false
-	}
-	mdl, ok := p.Models[model]
-	if !ok {
-		return config.Price{}, false
-	}
-	return config.Price{Cost: mdl.Cost, Source: config.PriceSourceCatalog}, true
 }
 
 // feedPrice reads the last successful refresh. A provider row with no catalog_id

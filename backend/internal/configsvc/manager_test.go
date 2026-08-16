@@ -642,18 +642,19 @@ func catalogCost(t *testing.T, providerID, model string) catalog.Cost {
 	return m.Cost
 }
 
-// The price feed sits between a hand-pinned rate and the embedded catalog. That
-// order is the contract: a refresh must correct a stale seed without ever
-// overwriting a rate someone deliberately set.
-func TestFeedPriceOutranksCatalogButNotPinsOrOverrides(t *testing.T) {
+// The feed outranks the embedded catalog but not an operator's override. That
+// order is the contract: a refresh corrects a stale seed and never overtakes a
+// rate someone set by hand.
+//
+// A rate pinned in catalog.json needs no rule here — the feed cannot contain one
+// (modelsdev.TestGenerateNeverEmitsAPinnedModel) — so this fixture only inserts
+// feed rows for generated models, which is all the real feed ever produces.
+func TestFeedPriceOutranksCatalogButNotOverrides(t *testing.T) {
 	st := openTestStore(t)
 
 	// gpt-5.6-luna is generated (models.json), so the feed may re-price it.
-	// text-embedding-3-small is generated too; glm-5-turbo is pinned in
-	// catalog.json and must be immune.
 	if err := st.ReplaceFeedPrices([]store.FeedPrice{
 		{ProviderID: "openai", Model: "gpt-5.6-luna", Cost: catalog.Cost{Input: 7, Output: 8}},
-		{ProviderID: "zhipu", Model: "glm-5-turbo", Cost: catalog.Cost{Input: 123, Output: 456}},
 	}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -697,11 +698,12 @@ func TestFeedPriceOutranksCatalogButNotPinsOrOverrides(t *testing.T) {
 		t.Errorf("gpt-5.6-sol = %+v (%s), want the operator's 5 and an override source", sol.Cost, sol.Source)
 	}
 
-	// A rate pinned in catalog.json outranks the feed entirely.
+	// A model catalog.json pins resolves from the catalog: the feed carries no
+	// row for it, so there is nothing to outrank.
 	turbo, _ := m.Current().PriceFor("zhipu", "glm-5-turbo")
 	want := catalogCost(t, "zhipu", "glm-5-turbo")
 	if turbo.Cost != want {
-		t.Errorf("glm-5-turbo = %+v, want the pinned %+v (the feed must not overwrite a pin)", turbo.Cost, want)
+		t.Errorf("glm-5-turbo = %+v, want the pinned %+v", turbo.Cost, want)
 	}
 	if turbo.Source != config.PriceSourceCatalog {
 		t.Errorf("glm-5-turbo source = %q, want %q", turbo.Source, config.PriceSourceCatalog)
