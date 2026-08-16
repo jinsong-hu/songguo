@@ -296,7 +296,10 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
       wireModels,
       (id) => {
         const price = priceFor(id);
-        return { model: id, cost: price.cost, price_override: price.price_override };
+        // Only an override puts a rate on the row; otherwise the row states the
+        // model and the resolver supplies the rate. See catalogPrice.
+        if (!price.price_override) return { model: id, cost: {} };
+        return { model: id, cost: price.cost, price_override: true };
       },
       base,
       enabledUtility(),

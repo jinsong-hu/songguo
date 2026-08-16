@@ -456,14 +456,22 @@ function customWireModels(
   return map;
 }
 
+// A provider row declares WHICH models it serves, not what they cost. The rate
+// is resolved at config-build time from the price feed or the embedded catalog,
+// both of which outrank an un-overridden row — so copying the catalog's cost
+// here would write a number that is then never used, and that reads in the
+// database as though it were the rate being billed.
+//
+// The row's own cost is populated only when an operator overrides it.
 function catalogPrice(id: string, vendor: CatalogVendor): ProviderModel | null {
-  const m = vendor.models[id];
-  return m ? { model: id, cost: m.cost } : null;
+  return vendor.models[id] ? { model: id, cost: {} } : null;
 }
 
-function customPrice(id: string, priceIndex: Record<string, CatalogPrice>): ProviderModel {
-  const p = priceIndex[id];
-  return { model: id, cost: p?.cost ?? {} };
+// Same for a custom provider: an id the catalog happens to know is resolved by
+// catalogAnyModelPrice at build time, and one it does not is left unpriced for
+// the fallback pass. Either way the row states no rate of its own.
+function customPrice(id: string, _priceIndex: Record<string, CatalogPrice>): ProviderModel {
+  return { model: id, cost: {} };
 }
 
 // buildProvider turns a (wire → model ids) selection into the endpoints + models
