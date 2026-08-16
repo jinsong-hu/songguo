@@ -252,6 +252,43 @@ Cache writes bill at `cache_write` when published, else at `input`. The 1.25x
 write premium used to be ignored because no rate was available; models.dev
 supplies one.
 
+#### Context tiers
+
+Many frontier models charge more once a prompt crosses a size. `gpt-5.6-luna` is
+0.2/1.2 up to 272k and 0.4/1.8 above it; 8 of the 38 generated models carry a
+bracket, and 334 do upstream. Ignoring them under-bills long agent contexts by
+the tier multiple — the same class of error as a stale price, pointed the other
+way, and aimed squarely at the traffic songguo exists to route.
+
+```json
+"cost": {
+  "input": 0.2, "output": 1.2, "cache_read": 0.02,
+  "tiers": [
+    { "input": 0.4, "output": 1.8, "cache_read": 0.04,
+      "tier": { "type": "context", "size": 272000 } }
+  ]
+}
+```
+
+Four rules, each of which is a way to get this wrong:
+
+- **The bracket prices the whole request, not the excess.** Crossing 272k is a
+  cliff: every token in the request reprices, including the first one.
+- **Only the highest crossed bracket applies.** Brackets do not compound; a
+  model with brackets at 32k and 256k bills a 300k request entirely at the 256k
+  rate.
+- **The threshold is measured on the PROMPT.** Input, cache reads and cache
+  writes are disjoint and together are the prompt, so a cache-heavy request
+  crosses on their sum. Output never counts — a vendor brackets on what you
+  sent, not on what it wrote back.
+- **A bracket states only what changes.** An axis it omits keeps the base rate,
+  because reading an omission as zero would re-derive it from the raised input
+  rate and over-bill. Seven models upstream publish exactly this shape.
+
+`tier.type` is `context` on all 349 tiers upstream. An unrecognized type is
+ignored rather than guessed at, so a new kind of bracket bills at the base rate
+until it is implemented.
+
 ### Half the catalog's prices are generated, and the files say which half
 
 `internal/catalog` embeds two files with two owners:

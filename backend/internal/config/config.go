@@ -67,6 +67,12 @@ const (
 	PriceSourceFallbackPrefix = "fallback:" // + the model whose price was borrowed
 )
 
+// Equal compares two prices, rates and provenance alike. Price is not comparable
+// with == because catalog.Cost carries a tier table; see catalog.Cost.Equal.
+func (p Price) Equal(o Price) bool {
+	return p.Source == o.Source && p.Cost.Equal(o.Cost)
+}
+
 // IsFallbackPrice reports whether p's rate was borrowed from another model
 // rather than published for this one.
 func IsFallbackPrice(p Price) bool {

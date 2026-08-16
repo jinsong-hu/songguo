@@ -156,7 +156,7 @@ func (f *Feed) refresh(ctx context.Context) {
 				rejected++
 				continue
 			}
-			if before, ok := previous[pid][mid]; !ok || before.Cost != cost {
+			if before, ok := previous[pid][mid]; !ok || !before.Cost.Equal(cost) {
 				f.report(pid, mid, before.Cost, cost, ok)
 				moved++
 			}

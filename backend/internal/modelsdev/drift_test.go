@@ -51,7 +51,7 @@ func TestEmbeddedPricesMatchUpstream(t *testing.T) {
 			want := generated[pid].Models[mid].Cost
 			got := embedded[pid].Models[mid].Cost
 			checked++
-			if got != want {
+			if !got.Equal(want) {
 				t.Errorf("%s/%s: catalog has %+v, models.dev publishes %+v — run `make catalog-sync`",
 					pid, mid, got, want)
 			}

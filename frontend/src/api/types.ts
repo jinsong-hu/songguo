@@ -910,6 +910,21 @@ export interface Cost {
   image?: number;
   /** Per request (Volcengine video). */
   call?: number;
+  /**
+   * Context brackets: vendors raise token rates once a prompt crosses a size.
+   * The whole request is priced at the bracket it falls into — it is not a
+   * marginal rate on the excess — and only the highest crossed bracket applies.
+   */
+  tiers?: CostTier[];
+}
+
+/** Token rates that apply once a request's prompt exceeds `tier.size` tokens. */
+export interface CostTier {
+  input?: number;
+  output?: number;
+  cache_read?: number;
+  cache_write?: number;
+  tier: { type: string; size: number };
 }
 
 export interface CatalogModel {

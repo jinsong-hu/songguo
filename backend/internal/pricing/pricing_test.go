@@ -210,3 +210,136 @@ func TestCostBillingInvariance(t *testing.T) {
 		}
 	}
 }
+
+// TestCostContextTiers covers the bracket logic. A vendor prices the WHOLE
+// request at the bracket its prompt falls into, so crossing a threshold is a
+// cliff, not a marginal rate on the excess.
+func TestCostContextTiers(t *testing.T) {
+	// gpt-5.6-luna's real shape: 0.2/1.2 base, doubling above 272k.
+	luna := catalog.Cost{
+		Input: 0.2, Output: 1.2, CacheRead: 0.02,
+		Tiers: []catalog.CostTier{{
+			Input: 0.4, Output: 1.8, CacheRead: 0.04,
+			Tier: catalog.TierBound{Type: catalog.TierContext, Size: 272_000},
+		}},
+	}
+
+	tests := []struct {
+		name string
+		norm wire.Normalized
+		want float64
+	}{
+		{
+			name: "below the threshold bills the base rate",
+			norm: wire.Normalized{InputTokens: 100_000, OutputTokens: 1_000},
+			want: 0.1*0.2 + 0.001*1.2,
+		},
+		{
+			// Exactly at the size is NOT over it: the bracket is "context over N".
+			name: "exactly at the threshold is still the base rate",
+			norm: wire.Normalized{InputTokens: 272_000, OutputTokens: 1_000},
+			want: 0.272*0.2 + 0.001*1.2,
+		},
+		{
+			// The whole prompt reprices, not just the 1 token past the line.
+			name: "one token over reprices the entire request",
+			norm: wire.Normalized{InputTokens: 272_001, OutputTokens: 1_000},
+			want: 0.272001*0.4 + 0.001*1.8,
+		},
+		{
+			// The three input fields are disjoint and together are the prompt, so
+			// a cache-heavy request crosses on their sum — not on fresh input
+			// alone, which is the reading that would under-bill agent traffic.
+			name: "cached and cache-write tokens count toward the threshold",
+			norm: wire.Normalized{InputTokens: 10_000, CachedInputTokens: 250_000, CacheCreationTokens: 20_000, OutputTokens: 1_000},
+			want: 0.01*0.4 + 0.25*0.04 + 0.02*0.4 + 0.001*1.8,
+		},
+		{
+			// Output is not part of the prompt and cannot push a request over.
+			name: "output tokens do not cross the threshold",
+			norm: wire.Normalized{InputTokens: 1_000, OutputTokens: 500_000},
+			want: 0.001*0.2 + 0.5*1.2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Cost(luna, tt.norm); !approx(got, tt.want) {
+				t.Errorf("Cost() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// With two brackets only the highest crossed one applies; they do not compound.
+func TestCostPicksHighestCrossedTier(t *testing.T) {
+	c := catalog.Cost{
+		Input: 0.04, Output: 0.13,
+		Tiers: []catalog.CostTier{
+			{Input: 0.1, Output: 0.37, Tier: catalog.TierBound{Type: catalog.TierContext, Size: 32_000}},
+			{Input: 0.19, Output: 0.74, Tier: catalog.TierBound{Type: catalog.TierContext, Size: 256_000}},
+		},
+	}
+	cases := []struct {
+		prompt float64
+		in     float64
+	}{
+		{10_000, 0.04},  // below both
+		{100_000, 0.1},  // above the first only
+		{300_000, 0.19}, // above both — the higher wins, not the sum
+	}
+	for _, tc := range cases {
+		n := wire.Normalized{InputTokens: tc.prompt}
+		want := tc.prompt / 1e6 * tc.in
+		if got := Cost(c, n); !approx(got, want) {
+			t.Errorf("prompt %v: Cost() = %v, want %v (rate %v)", tc.prompt, got, want, tc.in)
+		}
+	}
+}
+
+// A tier states only what changes; an axis it omits keeps the base rate rather
+// than falling to zero (which would then re-derive from input and over-bill).
+func TestCostTierKeepsUnstatedAxesAtBase(t *testing.T) {
+	c := catalog.Cost{
+		Input: 1, Output: 2, CacheRead: 0.1,
+		Tiers: []catalog.CostTier{{
+			Input: 2, Output: 4, // no cache_read
+			Tier: catalog.TierBound{Type: catalog.TierContext, Size: 100},
+		}},
+	}
+	n := wire.Normalized{InputTokens: 1_000_000, CachedInputTokens: 1_000_000}
+	want := 1*2 + 1*0.1 // input at the tier rate, cache reads at the base rate
+	if got := Cost(c, n); !approx(got, want) {
+		t.Errorf("Cost() = %v, want %v (an unstated tier axis must keep its base rate)", got, want)
+	}
+}
+
+// An unrecognized tier type is ignored rather than guessed at, so a new kind of
+// bracket bills at the base rate until it is implemented.
+func TestCostIgnoresUnknownTierType(t *testing.T) {
+	c := catalog.Cost{
+		Input: 1, Output: 2,
+		Tiers: []catalog.CostTier{{
+			Input: 99, Output: 99,
+			Tier: catalog.TierBound{Type: "phase-of-the-moon", Size: 10},
+		}},
+	}
+	n := wire.Normalized{InputTokens: 1_000_000}
+	if got := Cost(c, n); !approx(got, 1) {
+		t.Errorf("Cost() = %v, want the base 1 (an unknown tier type must not apply)", got)
+	}
+}
+
+// Media axes are never tiered upstream, and a context bracket must not disturb
+// them: a speech call reports no tokens, so it can never cross a threshold.
+func TestCostTiersDoNotDisturbMediaAxes(t *testing.T) {
+	c := catalog.Cost{
+		Second: 0.001,
+		Tiers: []catalog.CostTier{{
+			Input: 99, Tier: catalog.TierBound{Type: catalog.TierContext, Size: 1},
+		}},
+	}
+	n := wire.Normalized{Seconds: 60}
+	if got := Cost(c, n); !approx(got, 0.06) {
+		t.Errorf("Cost() = %v, want 0.06", got)
+	}
+}

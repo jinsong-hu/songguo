@@ -17,7 +17,7 @@ import { Skeleton } from '../components/Skeleton';
 import { useToast } from '../components/Toast';
 import { useFetch } from '../lib/useFetch';
 import { useSession } from '../lib/sessionContext';
-import { contextLabel, indexCatalog, MODALITY_LABEL, type CatalogInfo } from '../lib/catalogIndex';
+import { contextLabel, indexCatalog, tierLabel, MODALITY_LABEL, type CatalogInfo } from '../lib/catalogIndex';
 import { BrandIcon, ModelIcon, modelMeta, providerBrand } from '../lib/modelBrand';
 import styles from './ServiceDetail.module.css';
 
@@ -228,6 +228,12 @@ function Hero({ model, info }: { model: string; info?: CatalogInfo }) {
   if (cost?.output) facts.push(['Output', `$${cost.output} / 1M tokens`]);
   if (cost?.cache_read) facts.push(['Cache read', `$${cost.cache_read} / 1M tokens`]);
   if (cost?.cache_write) facts.push(['Cache write', `$${cost.cache_write} / 1M tokens`]);
+  // Long requests cost more on many frontier models; without this the page
+  // states a rate that only holds below the bracket.
+  if (cost) {
+    const tiers = tierLabel(cost);
+    if (tiers) facts.push(['Long context', tiers]);
+  }
   // Media axes: models.dev has no field for these, so they only ever come from
   // the hand-maintained half of the catalog (Volcengine speech and video).
   if (cost?.character) facts.push(['Rate', `$${cost.character} / character`]);

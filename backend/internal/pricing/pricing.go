@@ -31,6 +31,15 @@ import (
 // Token axes are per 1M tokens (models.dev's basis); the media axes are per
 // single unit (the basis vendors publish). See catalog.Cost.
 //
+// # Context tiers
+//
+// Token rates are resolved against the request's prompt size first: vendors
+// charge more once a prompt crosses a threshold, and the raised rate applies to
+// the whole request rather than only the tokens past it. Taking the base rate
+// regardless under-bills long agent contexts by the tier multiple — 2x on the
+// gpt-5.6 family above 272k — which is the same class of error as a stale price,
+// pointed the other way. See catalog.Cost.At.
+//
 // The three input-side token fields are disjoint — fresh + cache-read +
 // cache-write is the total input — so no clamping is needed. Fresh input bills
 // at Input. Cache reads bill at CacheRead, falling back to Input when no
@@ -38,6 +47,9 @@ import (
 // Cache writes bill at CacheWrite, falling back to Input the same way.
 // ThinkingTokens are a subset of OutputTokens and are not priced separately.
 func Cost(c catalog.Cost, n wire.Normalized) float64 {
+	// Tier first: a vendor prices the whole request at the bracket its PROMPT
+	// falls into, so the rates below may already be the raised ones.
+	c = c.At(promptTokens(n))
 	total := tokenCost(c, n) / 1e6
 	total += c.Character * n.Chars
 	total += c.Second * n.Seconds
@@ -51,6 +63,14 @@ func Cost(c catalog.Cost, n wire.Normalized) float64 {
 		total += c.Call * calls
 	}
 	return total
+}
+
+// promptTokens is the request's input size, which is what a context tier is
+// measured against. The three input fields are disjoint and sum to the total
+// prompt; output is excluded because a vendor brackets on how much you sent,
+// not on how much it wrote back.
+func promptTokens(n wire.Normalized) float64 {
+	return n.InputTokens + n.CachedInputTokens + n.CacheCreationTokens
 }
 
 // tokenCost prices token usage at the per-1M scale, before the caller divides.

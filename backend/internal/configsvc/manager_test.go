@@ -11,7 +11,9 @@ import (
 
 	"github.com/songguo/songguo/internal/catalog"
 	"github.com/songguo/songguo/internal/config"
+	"github.com/songguo/songguo/internal/pricing"
 	"github.com/songguo/songguo/internal/store"
+	"github.com/songguo/songguo/internal/wire"
 )
 
 func quietLogger() *slog.Logger {
@@ -313,7 +315,7 @@ func TestManagerFallbackIsProviderScoped(t *testing.T) {
 		t.Fatalf("Reload: %v", err)
 	}
 	after, _ := m.Current().PriceFor("cheapco", "cheapco-new")
-	if after != before {
+	if !after.Equal(before) {
 		t.Errorf("cheapco-new changed from %+v to %+v after an unrelated provider was added", before, after)
 	}
 }
@@ -448,7 +450,7 @@ func TestManagerFallbackIsDeterministic(t *testing.T) {
 		if err := m.Reload(); err != nil {
 			t.Fatalf("Reload: %v", err)
 		}
-		if got, _ := m.Current().PriceFor("ties", "unpriced"); got != first {
+		if got, _ := m.Current().PriceFor("ties", "unpriced"); !got.Equal(first) {
 			t.Fatalf("reload %d chose %+v, want stable %+v", i, got, first)
 		}
 	}
@@ -488,7 +490,7 @@ func TestManagerUsesCatalogPriceUnlessOverridden(t *testing.T) {
 	// fail on every sync while saying nothing about the behaviour under test,
 	// which is that the catalog beats the stale value on the provider row.
 	want := catalogCost(t, "openai", "gpt-5.6-luna")
-	if luna.Cost != want {
+	if !luna.Cost.Equal(want) {
 		t.Fatalf("gpt-5.6-luna price = %+v, want the catalog's %+v", luna.Cost, want)
 	}
 	if luna.Cost.Input == 99 {
@@ -702,7 +704,7 @@ func TestFeedPriceOutranksCatalogButNotOverrides(t *testing.T) {
 	// row for it, so there is nothing to outrank.
 	turbo, _ := m.Current().PriceFor("zhipu", "glm-5-turbo")
 	want := catalogCost(t, "zhipu", "glm-5-turbo")
-	if turbo.Cost != want {
+	if !turbo.Cost.Equal(want) {
 		t.Errorf("glm-5-turbo = %+v, want the pinned %+v", turbo.Cost, want)
 	}
 	if turbo.Source != config.PriceSourceCatalog {
@@ -727,10 +729,50 @@ func TestNoFeedFallsBackToCatalog(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	got, _ := m.Current().PriceFor("openai", "gpt-5.6-luna")
-	if want := catalogCost(t, "openai", "gpt-5.6-luna"); got.Cost != want {
+	if want := catalogCost(t, "openai", "gpt-5.6-luna"); !got.Cost.Equal(want) {
 		t.Errorf("gpt-5.6-luna = %+v, want the embedded %+v", got.Cost, want)
 	}
 	if got.Source != config.PriceSourceCatalog {
 		t.Errorf("source = %q, want %q", got.Source, config.PriceSourceCatalog)
+	}
+}
+
+// Context tiers must survive the whole resolution path — catalog entry, through
+// config.Price, into the snapshot the proxy prices against. The tier data is
+// only useful if it arrives; pricing.Cost's own tests assume it already has it.
+func TestTiersReachTheSnapshot(t *testing.T) {
+	st := openTestStore(t)
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "openai", Vendor: "OpenAI", CatalogID: "openai", Enabled: true, APIKey: "sk-a",
+		Models:    []store.ProviderModel{{Model: "gpt-5.4", Cost: catalog.Cost{}}},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://api.openai.com/v1/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	got, ok := m.Current().PriceFor("openai", "gpt-5.4")
+	if !ok {
+		t.Fatal("no price for gpt-5.4")
+	}
+	want := catalogCost(t, "openai", "gpt-5.4")
+	if len(want.Tiers) == 0 {
+		t.Skip("gpt-5.4 no longer carries a context tier upstream; nothing to assert")
+	}
+	if len(got.Cost.Tiers) != len(want.Tiers) {
+		t.Fatalf("resolved cost has %d tier(s), catalog has %d — tiers are lost on the way to the snapshot",
+			len(got.Cost.Tiers), len(want.Tiers))
+	}
+
+	// And they actually bill: a prompt over the threshold must cost more than
+	// the same prompt priced at the base rate.
+	tier := got.Cost.Tiers[0].Tier.Size
+	over := pricing.Cost(got.Cost, wire.Normalized{InputTokens: float64(tier) + 1})
+	under := pricing.Cost(got.Cost, wire.Normalized{InputTokens: float64(tier)})
+	if over <= under {
+		t.Errorf("a prompt over the %d-token bracket cost %v, not more than %v just under it", tier, over, under)
 	}
 }

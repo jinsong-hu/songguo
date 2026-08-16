@@ -139,13 +139,111 @@ type Cost struct {
 	Second    float64 `json:"second,omitempty" yaml:"second"`       // per second of audio (volc ASR)
 	Image     float64 `json:"image,omitempty" yaml:"image"`         // per image
 	Call      float64 `json:"call,omitempty" yaml:"call"`           // per request (volc video)
+
+	// Tiers raises the token rates for large requests. Vendors charge more once
+	// a prompt crosses a context threshold — gpt-5.6-luna doubles above 272k —
+	// and ignoring that under-bills exactly the long agent contexts songguo is
+	// built to route. See At.
+	Tiers []CostTier `json:"tiers,omitempty" yaml:"tiers"`
+}
+
+// CostTier is the token rates that apply once a request crosses Tier.Size. The
+// nesting is models.dev's own shape, kept verbatim so a generated entry stays
+// byte-identical to upstream rather than needing a translation step.
+//
+// A tier states only the axes that change; anything it omits keeps the base
+// rate. Seven models upstream publish a tier that leaves out an axis their base
+// declares, and reading that as "unchanged in this bracket" changes only what
+// the vendor said changed.
+type CostTier struct {
+	Input      float64   `json:"input,omitempty" yaml:"input"`
+	Output     float64   `json:"output,omitempty" yaml:"output"`
+	CacheRead  float64   `json:"cache_read,omitempty" yaml:"cache_read"`
+	CacheWrite float64   `json:"cache_write,omitempty" yaml:"cache_write"`
+	Tier       TierBound `json:"tier" yaml:"tier"`
+}
+
+// TierBound is what a tier is measured against. Only "context" exists upstream
+// today (349 of 349 tiers); an unrecognized type is ignored rather than guessed
+// at, so a new kind of bracket bills at the base rate until it is implemented
+// instead of silently applying a threshold we do not understand.
+type TierBound struct {
+	Type string `json:"type" yaml:"type"`
+	Size int    `json:"size" yaml:"size"`
+}
+
+// TierContext is the only tier type upstream publishes: the bracket is chosen by
+// how large the request's input is.
+const TierContext = "context"
+
+// At resolves the rates for a request whose input is contextTokens long.
+//
+// A vendor prices the WHOLE request at the bracket its prompt falls into — it is
+// not marginal, so crossing 272k does not mean "the first 272k stay cheap". The
+// highest crossed threshold wins and only that one applies; brackets do not
+// compound.
+//
+// Tiers are stated in ascending order upstream, but this does not rely on that:
+// depending on an ordering nobody guarantees would silently misprice if it ever
+// changed, and picking the maximum explicitly costs one comparison.
+//
+// The returned cost carries no tiers, so it is a plain rate table that can be
+// summed. Media axes are untouched — every tier upstream carries token rates.
+func (c Cost) At(contextTokens float64) Cost {
+	best := -1
+	for i, t := range c.Tiers {
+		if t.Tier.Type != TierContext || contextTokens <= float64(t.Tier.Size) {
+			continue
+		}
+		if best < 0 || t.Tier.Size > c.Tiers[best].Tier.Size {
+			best = i
+		}
+	}
+	out := c
+	out.Tiers = nil
+	if best < 0 {
+		return out
+	}
+	t := c.Tiers[best]
+	if t.Input != 0 {
+		out.Input = t.Input
+	}
+	if t.Output != 0 {
+		out.Output = t.Output
+	}
+	if t.CacheRead != 0 {
+		out.CacheRead = t.CacheRead
+	}
+	if t.CacheWrite != 0 {
+		out.CacheWrite = t.CacheWrite
+	}
+	return out
+}
+
+// Equal compares two costs. Cost holds a slice, so == does not apply to it; the
+// axes are listed explicitly here rather than reflected over, so adding one
+// without updating this fails a test rather than silently comparing less.
+func (c Cost) Equal(o Cost) bool {
+	if c.Input != o.Input || c.Output != o.Output ||
+		c.CacheRead != o.CacheRead || c.CacheWrite != o.CacheWrite ||
+		c.Character != o.Character || c.Second != o.Second ||
+		c.Image != o.Image || c.Call != o.Call ||
+		len(c.Tiers) != len(o.Tiers) {
+		return false
+	}
+	for i := range c.Tiers {
+		if c.Tiers[i] != o.Tiers[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Zero reports whether a cost declares no rate at all, i.e. would always meter
 // $0. Distinct from a published zero on a genuinely free tier, which declares a
 // rate that happens to be zero — callers that care about provenance must ask
 // where the cost came from, not whether it is empty.
-func (c Cost) Zero() bool { return c == Cost{} }
+func (c Cost) Zero() bool { return c.Equal(Cost{}) }
 
 // Tokens reports whether the cost prices token usage, which is the axis group
 // that most models use and the only one models.dev supplies.

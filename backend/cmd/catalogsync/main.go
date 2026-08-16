@@ -115,16 +115,16 @@ func report(before, after []byte, gen catalog.Catalog, skips []modelsdev.Skip) {
 			}
 			if !had {
 				moved = append(moved, row{pid, mid, "(new)", rate(nc)})
-			} else if oc != nc {
+			} else if !oc.Equal(nc) {
 				moved = append(moved, row{pid, mid, rate(oc), rate(nc)})
 			}
 		}
 	}
 	if len(moved) > 0 {
 		fmt.Printf("\nprice changes (%d):\n", len(moved))
-		fmt.Printf("  %-14s %-28s %-22s %s\n", "PROVIDER", "MODEL", "BEFORE", "AFTER")
+		fmt.Printf("  %-14s %-28s %-34s %s\n", "PROVIDER", "MODEL", "BEFORE", "AFTER")
 		for _, m := range moved {
-			fmt.Printf("  %-14s %-28s %-22s %s\n", m.provider, m.model, m.from, m.to)
+			fmt.Printf("  %-14s %-28s %-34s %s\n", m.provider, m.model, m.from, m.to)
 		}
 	}
 
@@ -144,13 +144,19 @@ func report(before, after []byte, gen catalog.Catalog, skips []modelsdev.Skip) {
 
 // rate renders a cost compactly for the change table: the token pair when there
 // is one, else whichever media axis the model prices.
+//
+// Tiers are named even though their rates are not shown. Without that, a model
+// that gained or lost a context bracket prints an identical before and after and
+// the table reads as though nothing changed — which is exactly the row an
+// operator most needs to notice, since a bracket silently doubles the bill on
+// long requests.
 func rate(c catalog.Cost) string {
 	if c.Tokens() {
 		s := fmt.Sprintf("%g / %g", c.Input, c.Output)
 		if c.CacheRead != 0 {
 			s += fmt.Sprintf(" (cr %g)", c.CacheRead)
 		}
-		return s
+		return s + tierNote(c)
 	}
 	for _, a := range []struct {
 		name string
@@ -160,7 +166,36 @@ func rate(c catalog.Cost) string {
 			return fmt.Sprintf("%g /%s", a.v, a.name)
 		}
 	}
-	return "unpriced"
+	return "unpriced" + tierNote(c)
+}
+
+// tierNote summarizes a cost's context brackets, e.g. " +2 tiers >32k,>256k".
+func tierNote(c catalog.Cost) string {
+	if len(c.Tiers) == 0 {
+		return ""
+	}
+	sizes := make([]string, 0, len(c.Tiers))
+	for _, t := range c.Tiers {
+		sizes = append(sizes, ">"+compactTokens(t.Tier.Size))
+	}
+	sort.Strings(sizes)
+	plural := "s"
+	if len(c.Tiers) == 1 {
+		plural = ""
+	}
+	return fmt.Sprintf("  +%d tier%s %s", len(c.Tiers), plural, strings.Join(sizes, ","))
+}
+
+// compactTokens renders a threshold as 32k / 272k / 1M.
+func compactTokens(n int) string {
+	switch {
+	case n >= 1_000_000 && n%1_000_000 == 0:
+		return fmt.Sprintf("%dM", n/1_000_000)
+	case n >= 1000:
+		return fmt.Sprintf("%dk", n/1000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 func summarize(names []string) string {
