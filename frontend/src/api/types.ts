@@ -317,6 +317,8 @@ export interface TraceSide {
   /** True when `body` is base64-encoded binary rather than UTF-8 text. */
   body_base64?: boolean;
   content_type: string;
+  /** True when `body` is the recoverable decoded prefix of a cut encoded stream. */
+  truncated?: boolean;
 }
 
 export interface CallTrace {

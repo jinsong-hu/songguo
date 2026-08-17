@@ -130,6 +130,58 @@ func TestCallTraceDisplaysGzipText(t *testing.T) {
 	}
 }
 
+func TestCallTraceDisplaysTruncatedGzipPrefix(t *testing.T) {
+	s := newTestStore(t)
+	id, err := s.AppendCall(calls.Entry{
+		TS: time.Now(), UserID: "tokA", Model: "gpt-5.5", Modality: calls.ModalityChat,
+		Vendor: "openai", Status: 200, Err: "stream_error: context canceled",
+	})
+	if err != nil {
+		t.Fatalf("AppendCall: %v", err)
+	}
+
+	const prefix = "data: {\"delta\":\"hello\"}\n\ndata: {\"delta\":\"wor"
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(prefix))
+	if err := zw.Flush(); err != nil {
+		t.Fatalf("flush gzip prefix: %v", err)
+	}
+	// Deliberately do not close the writer: this is the captured shape of a
+	// gzip-compressed SSE response cut before its final event and gzip footer.
+	truncated := append([]byte(nil), gz.Bytes()...)
+
+	if err := s.SavePayload(store.Payload{
+		CallID:          id,
+		ReqHeaders:      map[string]string{"Content-Type": "application/json"},
+		ReqBody:         []byte(`{"model":"gpt-5.5"}`),
+		ReqContentType:  "application/json",
+		RespHeaders:     map[string]string{"Content-Type": "text/event-stream", "Content-Encoding": "gzip"},
+		RespBody:        truncated,
+		RespContentType: "text/event-stream",
+		CreatedAt:       time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("SavePayload: %v", err)
+	}
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
+
+	rec := do(h, "GET", "/api/calls/"+id+"/trace", "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("trace: code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var tv traceView
+	decodeBody(t, rec, &tv)
+	if tv.Response.BodyBase64 {
+		t.Fatalf("response body_base64 = true, want decoded prefix")
+	}
+	if !tv.Response.Truncated {
+		t.Fatal("response truncated = false, want true")
+	}
+	if tv.Response.Body != prefix {
+		t.Errorf("response body = %q, want decoded prefix %q", tv.Response.Body, prefix)
+	}
+}
+
 func TestCallTraceDisplaysZstdText(t *testing.T) {
 	s := newTestStore(t)
 	id, err := s.AppendCall(calls.Entry{

@@ -1277,7 +1277,7 @@ components:
         body: { type: string }
         body_base64: { type: boolean }
         content_type: { type: string }
-        truncated: { type: boolean }
+        truncated: { type: boolean, description: "True when body is the recoverable decoded prefix of an encoded stream that ended early." }
     Trace:
       type: object
       properties:

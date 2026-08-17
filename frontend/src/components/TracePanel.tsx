@@ -80,6 +80,14 @@ function TraceSidePane({ title, side }: { title: string; side: TraceSide }) {
         {side.body_base64 && (
           <span className={`chip ${styles.binaryChip}`}>binary (base64)</span>
         )}
+        {side.truncated && (
+          <span
+            className={`chip ${styles.truncatedChip}`}
+            title="The encoded stream ended early; showing the recoverable decoded prefix."
+          >
+            partial decode
+          </span>
+        )}
       </div>
 
       {headerEntries.length > 0 && (

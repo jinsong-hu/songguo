@@ -17,6 +17,8 @@ var ErrUnsupportedEncoding = errors.New("unsupported content encoding")
 
 // Decode returns a decoded copy of body when Content-Encoding contains only
 // supported encodings. The boolean reports whether decoding was attempted.
+// When a stream ends early, decoded contains the recoverable prefix alongside
+// the terminal error.
 func Decode(body []byte, contentEncoding string) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return nil, false, nil
@@ -28,7 +30,7 @@ func Decode(body []byte, contentEncoding string) ([]byte, bool, error) {
 	defer r.Close()
 	decoded, err := io.ReadAll(r)
 	if err != nil {
-		return nil, true, err
+		return decoded, true, err
 	}
 	return decoded, true, nil
 }

@@ -798,6 +798,7 @@ type traceSideView struct {
 	Body        string            `json:"body"`
 	BodyBase64  bool              `json:"body_base64,omitempty"`
 	ContentType string            `json:"content_type"`
+	Truncated   bool              `json:"truncated,omitempty"`
 }
 
 // traceView is the GET /api/calls/{id}/trace response.
@@ -835,12 +836,15 @@ func newTraceSide(headers map[string]string, body []byte, contentType string) tr
 		headers = map[string]string{}
 	}
 	displayBody := body
-	if decoded, ok := decodeTraceBody(body, headers["Content-Encoding"]); ok {
+	truncated := false
+	if decoded, ok, partial := decodeTraceBodyForDisplay(body, headers["Content-Encoding"]); ok {
 		displayBody = decoded
+		truncated = partial
 	}
 	side := traceSideView{
 		Headers:     headers,
 		ContentType: contentType,
+		Truncated:   truncated,
 	}
 	if utf8.Valid(displayBody) {
 		side.Body = string(displayBody)
@@ -849,6 +853,23 @@ func newTraceSide(headers map[string]string, body []byte, contentType string) tr
 		side.BodyBase64 = true
 	}
 	return side
+}
+
+// decodeTraceBodyForDisplay keeps a decoded prefix when a captured encoded
+// stream ended early. The raw stored body remains untouched; this only makes
+// completed events before the cut readable in the trace view.
+func decodeTraceBodyForDisplay(body []byte, contentEncoding string) ([]byte, bool, bool) {
+	decoded, ok, err := bodycodec.Decode(body, contentEncoding)
+	if !ok {
+		return nil, false, false
+	}
+	if err != nil {
+		if len(decoded) == 0 {
+			return nil, false, false
+		}
+		return decoded, true, true
+	}
+	return decoded, true, false
 }
 
 func decodeTraceBody(body []byte, contentEncoding string) ([]byte, bool) {

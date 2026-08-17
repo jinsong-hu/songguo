@@ -165,6 +165,12 @@
   color: var(--accent);
 }
 
+.truncatedChip {
+  background: var(--amber-weak);
+  border-color: color-mix(in srgb, var(--amber) 35%, var(--border));
+  color: var(--amber);
+}
+
 .headerList {
   display: flex;
   flex-direction: column;
