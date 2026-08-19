@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"net"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/store"
@@ -147,6 +149,102 @@ func TestCleanStreamRecordsNoError(t *testing.T) {
 	}
 	if o := calls.OutcomeOf(rows[0].Status, rows[0].Err); o != calls.OutcomeOK {
 		t.Errorf("outcome = %q, want ok", o)
+	}
+}
+
+// A Responses client may stop reading as soon as response.completed arrives.
+// That closes the downstream request context while the proxy is waiting for
+// transport EOF, but the protocol response is already complete and must remain
+// a clean success.
+func TestResponsesCompletedBeforeClientCloseRecordsSuccess(t *testing.T) {
+	upstreamCanceled := make(chan struct{})
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "event: response.completed\n")
+		_, _ = io.WriteString(w, `data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":12,"output_tokens":3}}}`+"\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+		close(upstreamCanceled)
+	}))
+	defer mock.Close()
+
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: vendorA
+    origin: %s/v1
+    served_models: [gpt-5.5]
+    priority: 1
+    wires: [openai/responses]
+    credential: {id: credA, api_key: keyA}
+    prices:
+      gpt-5.5: { cost: { input: 1, output: 2 } }
+`, mock.URL)
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	req, err := http.NewRequest(http.MethodPost, env.server.URL+"/v1/responses",
+		strings.NewReader(`{"model":"gpt-5.5","stream":true}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := env.client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+
+	sc := bufio.NewScanner(resp.Body)
+	sawCompleted := false
+	for sc.Scan() {
+		if strings.Contains(sc.Text(), `"type":"response.completed"`) {
+			sawCompleted = true
+			break
+		}
+	}
+	if !sawCompleted {
+		resp.Body.Close()
+		t.Fatal("client did not receive response.completed")
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("close response body: %v", err)
+	}
+
+	select {
+	case <-upstreamCanceled:
+	case <-time.After(2 * time.Second):
+		mock.CloseClientConnections()
+		t.Fatal("caller close did not cancel the in-flight upstream request")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var rows []callRow
+	for {
+		rows = env.callRows(t)
+		if len(rows) == 1 && rows[0].Status != calls.StatusPending {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("call did not finalize: rows = %+v", rows)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("call rows = %d, want 1", len(rows))
+	}
+	if rows[0].Err != "" {
+		t.Errorf("err = %q, want empty after response.completed", rows[0].Err)
+	}
+	if o := calls.OutcomeOf(rows[0].Status, rows[0].Err); o != calls.OutcomeOK {
+		t.Errorf("outcome = %q, want ok", o)
+	}
+	if got := rows[0].Usage["output_tokens"]; got != float64(3) {
+		t.Errorf("output_tokens = %v, want 3 from terminal usage", got)
 	}
 }
 

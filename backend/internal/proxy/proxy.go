@@ -864,11 +864,16 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	// bodyErr is the terminal error from relaying the vendor's body, if any. It
 	// is what makes a truncated stream visible to health: a clean end reads as
 	// io.EOF and leaves this nil, while a vendor that dies mid-response leaves
-	// an unexpected EOF or a connection reset. No payload inspection is
-	// involved — the transport tells us directly.
-	var bodyErr error
+	// an unexpected EOF or a connection reset. For protocols with an explicit
+	// successful terminal event, that event takes precedence over a later
+	// transport cancellation.
+	var (
+		bodyErr         error
+		streamCompleted bool
+	)
 	defer func() {
-		clientGone := r.Context().Err() != nil || errors.Is(bodyErr, errClientGone)
+		clientGone := !streamCompleted &&
+			(r.Context().Err() != nil || errors.Is(bodyErr, errClientGone))
 		h.router.ReportAttempt(router.Attempt{
 			Vendor: t.Vendor.Name, Credential: t.Credential.ID,
 			Model: model, Session: sel.Session,
@@ -905,8 +910,18 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		respBody, parseRespBody, bodyErr = h.streamBody(r.Context(), w, resp.Body, capture, scanner, resp.Header.Get("Content-Encoding"))
 		if scanner != nil {
 			ext = scanner.Result()
+			if completion, ok := scanner.(wire.StreamCompletionReporter); ok {
+				streamCompleted = completion.StreamCompleted()
+			}
 		} else {
 			ext = wire.Extraction{Confidence: calls.ConfidenceUnknown}
+		}
+		// The protocol's successful terminal event is authoritative. Some
+		// clients close the HTTP response immediately after receiving it instead
+		// of waiting for transport EOF; that cancellation happens after the
+		// model response is complete and must not be recorded as truncation.
+		if streamCompleted {
+			bodyErr = nil
 		}
 	} else {
 		full, cerr := h.copyBody(w, resp.Body)

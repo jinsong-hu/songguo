@@ -62,6 +62,13 @@ type FirstTokenNotifier interface {
 	SetFirstTokenCallback(func())
 }
 
+// StreamCompletionReporter is implemented by scanners whose protocol carries
+// an explicit successful terminal event. Once that event is observed, a later
+// transport cancellation cannot make the already-completed response truncated.
+type StreamCompletionReporter interface {
+	StreamCompleted() bool
+}
+
 // Quirks are per-service data flags that parameterize an extractor without
 // forking the wire (e.g. {"cache_tokens": "deepseek"}).
 type Quirks map[string]string

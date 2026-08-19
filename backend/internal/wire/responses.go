@@ -50,7 +50,8 @@ func responsesNormalize(usage map[string]any) Extraction {
 // accepted as a fallback for compatible vendors.
 type responsesScanner struct {
 	lineScanner
-	usage map[string]any
+	usage     map[string]any
+	completed bool
 }
 
 func newResponsesScanner(_ Quirks) StreamScanner {
@@ -78,6 +79,9 @@ func (s *responsesScanner) processLine(line []byte) {
 	if strings.HasSuffix(env.Type, ".delta") && nonEmptyJSONValue(env.Delta) {
 		s.markFirstToken()
 	}
+	if env.Type == "response.completed" {
+		s.completed = true
+	}
 	if env.Response.Usage != nil {
 		s.usage = env.Response.Usage
 	} else if env.Usage != nil {
@@ -87,4 +91,8 @@ func (s *responsesScanner) processLine(line []byte) {
 
 func (s *responsesScanner) Result() Extraction {
 	return responsesNormalize(s.usage)
+}
+
+func (s *responsesScanner) StreamCompleted() bool {
+	return s.completed
 }

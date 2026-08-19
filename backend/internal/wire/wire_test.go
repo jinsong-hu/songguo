@@ -210,6 +210,10 @@ func TestResponsesScannerCompletedEvent(t *testing.T) {
 	s := newResponsesScanner(nil)
 	firstTokens := 0
 	s.(FirstTokenNotifier).SetFirstTokenCallback(func() { firstTokens++ })
+	completion := s.(StreamCompletionReporter)
+	if completion.StreamCompleted() {
+		t.Fatal("stream completed before response.completed was observed")
+	}
 	stream := "event: response.output_text.delta\n" +
 		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n" +
 		"event: response.completed\n" +
@@ -222,6 +226,9 @@ func TestResponsesScannerCompletedEvent(t *testing.T) {
 	}
 	if firstTokens != 1 {
 		t.Errorf("first-token callbacks = %d, want 1", firstTokens)
+	}
+	if !completion.StreamCompleted() {
+		t.Error("stream not marked completed after response.completed")
 	}
 }
 
