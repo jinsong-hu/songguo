@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"strconv"
 	"testing"
 )
 
@@ -773,6 +774,95 @@ func TestComposeSystemBreakdown(t *testing.T) {
 	}
 	if userTexts != 2 {
 		t.Errorf("user blocks = %d, want 2 (plain + mixed)", userTexts)
+	}
+}
+
+// A Codex request ships its available-skills catalogue as a whole
+// developer-role block wrapped in <skills_instructions>. That tag is the
+// client's own declaration, so the catalogue splits out of `base` into its own
+// producer instead of hiding inside the system prompt's weight. Shape taken
+// from a real prod session, where the catalogue outweighed the system prompt
+// it sat beside (4,923 tokens vs 2,832).
+func TestComposeResponsesSkillsCatalogue(t *testing.T) {
+	body := `{
+	  "model": "gpt-x",
+	  "instructions": "# You are a working session\nYou were spun up to carry out one job.",
+	  "input": [
+	    {"type": "message", "role": "developer", "content": [
+	      {"type": "input_text", "text": "<skills_instructions>\n## Skills\n### Available skills\n- imagegen: Generate or edit raster images. (file: /skills/imagegen/SKILL.md)\n- lark-wiki: manage wiki spaces. (file: /skills/lark-wiki/SKILL.md)\n</skills_instructions>"},
+	      {"type": "input_text", "text": "<permissions instructions>\nsandbox_mode is danger-full-access.\n</permissions instructions>"}
+	    ]},
+	    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "fix the bug"}]}
+	  ]
+	}`
+	comp, ok := Compose("openai-responses", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	if childTokens(comp, "system", "skills") <= 0 {
+		t.Error("skills catalogue did not split out of the system bucket")
+	}
+	// The instructions field and the permissions block are NOT skills; they
+	// must stay base, or the split has just moved the lump rather than named it.
+	if childTokens(comp, "system", "base") <= 0 {
+		t.Error("system prompt and permissions text vanished from base")
+	}
+	if childTokens(comp, "user", "text") <= 0 {
+		t.Error("genuine user text vanished")
+	}
+	for _, b := range comp.Blocks {
+		if b.Producer == "skills" && b.Type != "Skills catalogue" {
+			t.Errorf("skills block labeled %q, want %q", b.Type, "Skills catalogue")
+		}
+	}
+}
+
+// The envelope split keys on the text, not the wire, so a client that ships the
+// same tag over the Anthropic wire is attributed identically. No Anthropic
+// client does today — this guards the property, so adding one needs no new code.
+func TestComposeSkillsEnvelopeIsWireAgnostic(t *testing.T) {
+	catalogue := "<skills_instructions>\n- imagegen: make pictures. (file: /skills/imagegen/SKILL.md)\n</skills_instructions>"
+	body := `{
+	  "model": "claude-x",
+	  "system": [
+	    {"type": "text", "text": "You are a careful assistant."},
+	    {"type": "text", "text": ` + strconv.Quote(catalogue) + `}
+	  ],
+	  "messages": [{"role": "user", "content": "hi"}]
+	}`
+	comp, ok := Compose("anthropic-messages", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	if childTokens(comp, "system", "skills") <= 0 {
+		t.Error("anthropic wire did not split the catalogue; envelope logic is wire-specific")
+	}
+	if childTokens(comp, "system", "base") <= 0 {
+		t.Error("the real system prompt should still be base")
+	}
+}
+
+// A block that merely contains the tag alongside other instructions is never
+// split — same contract as reminderProducer. Read-only sniffing does not carve
+// up a block it cannot attribute cleanly.
+func TestComposeSkillsEnvelopeWholeBlockOnly(t *testing.T) {
+	mixed := "Some preamble.\n<skills_instructions>\n- imagegen: make pictures.\n</skills_instructions>\nSome trailing policy."
+	body := `{
+	  "model": "gpt-x",
+	  "input": [
+	    {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": ` + strconv.Quote(mixed) + `}]},
+	    {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+	  ]
+	}`
+	comp, ok := Compose("openai-responses", []byte(body), 0)
+	if !ok {
+		t.Fatal("ok=false")
+	}
+	if childTokens(comp, "system", "skills") != 0 {
+		t.Error("a mixed block was split; envelope matching must be whole-block")
+	}
+	if childTokens(comp, "system", "base") <= 0 {
+		t.Error("mixed block should stay base")
 	}
 }
 

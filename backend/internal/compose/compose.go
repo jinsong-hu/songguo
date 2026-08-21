@@ -1,7 +1,8 @@
 // Package compose estimates how a chat request's input context window
 // decomposes across sources — one axis, "who put these bytes in the window":
 //
-//	system       — system/developer instructions
+//	system       — system/developer instructions (children: base, plus a
+//	               producer per recognized harness envelope — see systemEnvelopes)
 //	tool_schemas — tool definitions           (children: verbatim tool name)
 //	user         — human-authored turns       (children: text, attachments)
 //	assistant    — model prose + reasoning    (children: text, reasoning, attachments)
@@ -424,7 +425,8 @@ func anthTextUnit(role, text string) unit {
 	case "assistant":
 		return unit{src: "assistant", prod: "text", label: "Text block", text: text}
 	case "system", "developer":
-		return unit{src: "system", prod: "base", label: "Text block", text: text}
+		u, _ := systemTextUnit(text, "base", "Text block")
+		return u
 	default:
 		return userTextUnit(text)
 	}
@@ -459,6 +461,64 @@ func reminderProducer(text string) (string, bool) {
 	}
 }
 
+// systemEnvelope is one self-delimiting wrapper a harness puts around text it
+// injects into the *system* role. The tag is the client's own declaration of
+// what the text is, so reading it attributes nothing we were not told —
+// unlike inferring a producer from what the content happens to look like.
+//
+// To support a new harness, add a row. Matching is on the text alone, so every
+// wire that routes system-role text through systemTextUnit picks it up at once;
+// this is deliberately not per-wire logic.
+type systemEnvelope struct {
+	open, close string
+	producer    string
+	label       string
+}
+
+// systemEnvelopes is the recognized set. Anthropic-wire clients do not use
+// <skills_instructions> today; when one ships an equivalent tag it belongs
+// here, not in a second copy of this logic on that wire's parser.
+var systemEnvelopes = []systemEnvelope{
+	// Codex ships its available-skills catalogue as a whole developer-role
+	// block. It is routinely larger than the system prompt it sits beside, so
+	// lumping it into `base` hides the single biggest line item in the bucket.
+	{
+		open:     "<skills_instructions>",
+		close:    "</skills_instructions>",
+		producer: "skills",
+		label:    "Skills catalogue",
+	},
+}
+
+// systemProducer classifies system-role text that is *wholly* one harness
+// envelope. Mixed blocks (envelope plus other instructions) fall through to the
+// caller's default — read-only sniffing never splits a block it cannot
+// attribute cleanly, matching reminderProducer's contract.
+func systemProducer(text string) (producer, label string, ok bool) {
+	t := strings.TrimSpace(text)
+	for _, e := range systemEnvelopes {
+		if strings.HasPrefix(t, e.open) && strings.HasSuffix(t, e.close) {
+			return e.producer, e.label, true
+		}
+	}
+	return "", "", false
+}
+
+// systemTextUnit routes a system/developer-role text block, splitting out any
+// recognized harness envelope. It is the system-role sibling of userTextUnit:
+// both ask "did the harness declare who produced this?" and fall back to
+// treating the text as the role's own. fallbackProd/fallbackLabel keep each
+// call site's existing attribution for unenveloped text.
+func systemTextUnit(text, fallbackProd, fallbackLabel string) (unit, bool) {
+	if text == "" {
+		return unit{}, false
+	}
+	if prod, label, ok := systemProducer(text); ok {
+		return unit{src: "system", prod: prod, label: label, text: text}, true
+	}
+	return unit{src: "system", prod: fallbackProd, label: fallbackLabel, text: text}, true
+}
+
 // anthBlockUnit classifies one content block by (role, block type). Types we
 // do not recognize land in the explicit "other" bucket — an honest residual
 // beats silently guessing a bucket.
@@ -476,7 +536,7 @@ func anthBlockUnit(role string, raw json.RawMessage, model string, idToName map[
 		// Instruction-role blocks are system weight whatever their type —
 		// mirrors the plain-string form.
 		if b.Type == "text" {
-			return unit{src: "system", prod: "base", label: "Text block", text: b.Text}, b.Text != ""
+			return systemTextUnit(b.Text, "base", "Text block")
 		}
 		if s := compactStr(raw); s != "" {
 			return unit{src: "system", prod: "base", label: blockTypeLabel(b.Type), text: s}, true
@@ -776,15 +836,15 @@ func systemUnits(raw json.RawMessage) []unit {
 	}
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		if s == "" {
-			return nil
+		if u, ok := systemTextUnit(s, "base", "System prompt"); ok {
+			return []unit{u}
 		}
-		return []unit{{src: "system", prod: "base", label: "System prompt", text: s}}
+		return nil
 	}
 	blocks := anthBlocks(raw)
 	if blocks == nil {
-		if s := compactStr(raw); s != "" {
-			return []unit{{src: "system", prod: "base", label: "System prompt", text: s}}
+		if u, ok := systemTextUnit(compactStr(raw), "base", "System prompt"); ok {
+			return []unit{u}
 		}
 		return nil
 	}
@@ -799,8 +859,8 @@ func systemUnits(raw json.RawMessage) []unit {
 		if b.Type != "text" || text == "" {
 			text = compactStr(block)
 		}
-		if text != "" {
-			units = append(units, unit{src: "system", prod: "base", label: "System prompt", text: text})
+		if u, ok := systemTextUnit(text, "base", "System prompt"); ok {
+			units = append(units, u)
 		}
 	}
 	return units
@@ -955,6 +1015,12 @@ func openAIContentUnits(raw json.RawMessage, model, src, textProd string) []unit
 		if src == "user" {
 			return []unit{userTextUnit(s)}
 		}
+		if src == "system" {
+			if u, ok := systemTextUnit(s, textProd, "Text block"); ok {
+				return []unit{u}
+			}
+			return nil
+		}
 		return []unit{{src: src, prod: textProd, label: "Text block", text: s}}
 	}
 	var blocks []json.RawMessage
@@ -983,6 +1049,9 @@ func openAIContentBlockUnit(raw json.RawMessage, model, src, textProd string) (u
 		}
 		if src == "user" {
 			return userTextUnit(b.Text), true
+		}
+		if src == "system" {
+			return systemTextUnit(b.Text, textProd, "Text block")
 		}
 		return unit{src: src, prod: textProd, label: "Text block", text: b.Text}, true
 	case "image_url", "input_image":
