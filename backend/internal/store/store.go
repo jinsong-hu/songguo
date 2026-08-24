@@ -38,10 +38,20 @@ type Store struct {
 //
 // Values use pragma function-call syntax (`foreign_keys(1)`, not
 // `foreign_keys=1`): the driver prefixes each value with "pragma " verbatim.
+// cache_size is NEGATIVE on purpose: SQLite reads a negative value as a budget
+// in KiB rather than a page count, so -65536 is 64 MiB regardless of page_size.
+// The default is -2000 (2 MiB), which on the production gateway was a 2 MiB
+// cache in front of a 70 GB file — and because `calls` (~105 MB of live data)
+// has its pages spread across that whole file by years of blob churn, a scan of
+// it is thousands of scattered reads that the default cache cannot hold any of.
+// The same index scan measured 2.8s cold against 0.13s warm.
+//
+// It is per-CONNECTION, which is exactly why it rides the DSN with the others.
 const dsnPragmas = "_pragma=busy_timeout(5000)" +
 	"&_pragma=journal_mode(WAL)" +
 	"&_pragma=foreign_keys(1)" +
-	"&_pragma=synchronous(1)"
+	"&_pragma=synchronous(1)" +
+	"&_pragma=cache_size(-65536)"
 
 // Maximum concurrent connections. SQLite allows many readers but only one
 // writer, so this bounds memory and file descriptors rather than throughput;
@@ -377,6 +387,22 @@ func (s *Store) migrate() error {
 		// Derived/estimate — see calls.Entry. Summed into the sessions rollup.
 		{"calls", "tool_calls", "INTEGER NOT NULL DEFAULT 0"},
 		{"calls", "tool_tokens", "REAL NOT NULL DEFAULT 0"},
+		// Message-shape fingerprint of the REQUEST, computed off the hot path by the
+		// parse pipeline from the normalized parse.Call.Input — see
+		// parse.Fingerprint and store/messagecover.go. msg_count is the number of
+		// request messages, msg_head hashes the first one, msg_tail hashes all of
+		// them in order.
+		//
+		// They exist so the session view can tell, from metadata alone, that one
+		// captured request is a redundant prefix of a later one: an agent re-sends
+		// the whole conversation every turn, so all but a handful of a session's
+		// bodies are duplicates of the last. Zero/NULL on rows written before these
+		// columns or never parsed, which reads as "unknown" — and unknown is never
+		// treated as redundant, so the fallback is to read the body rather than to
+		// silently drop it.
+		{"calls", "msg_count", "INTEGER NOT NULL DEFAULT 0"},
+		{"calls", "msg_head", "BLOB"},
+		{"calls", "msg_tail", "BLOB"},
 		{"sessions", "title", "TEXT NOT NULL DEFAULT ''"},
 		// Owning consumer key, set from the session's calls going forward. Existing
 		// rows stay '' (no backfill), so a session that predates this column is

@@ -34,7 +34,7 @@ func TestPragmasApplyToEveryConnection(t *testing.T) {
 	}
 
 	for i, c := range conns {
-		var fk, busy, sync int
+		var fk, busy, sync, cache int
 		var journal string
 		if err := c.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&fk); err != nil {
 			t.Fatalf("conn %d: read foreign_keys: %v", i, err)
@@ -48,6 +48,9 @@ func TestPragmasApplyToEveryConnection(t *testing.T) {
 		if err := c.QueryRowContext(ctx, `PRAGMA journal_mode`).Scan(&journal); err != nil {
 			t.Fatalf("conn %d: read journal_mode: %v", i, err)
 		}
+		if err := c.QueryRowContext(ctx, `PRAGMA cache_size`).Scan(&cache); err != nil {
+			t.Fatalf("conn %d: read cache_size: %v", i, err)
+		}
 
 		if fk != 1 {
 			t.Errorf("conn %d: foreign_keys = %d, want 1 (cascade deletes silently skip without it)", i, fk)
@@ -60,6 +63,12 @@ func TestPragmasApplyToEveryConnection(t *testing.T) {
 		}
 		if journal != "wal" {
 			t.Errorf("conn %d: journal_mode = %q, want %q", i, journal, "wal")
+		}
+		// Must stay NEGATIVE. A positive value is a page COUNT, so if this ever
+		// reads back as 65536 the cache silently became page_size-dependent
+		// (256 MiB at 4 KiB pages) instead of the 64 MiB budget intended.
+		if cache != -65536 {
+			t.Errorf("conn %d: cache_size = %d, want -65536 (a KiB budget; the -2000 default is 2 MiB against a 70 GB file)", i, cache)
 		}
 	}
 }

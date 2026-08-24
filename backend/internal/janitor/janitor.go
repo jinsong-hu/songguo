@@ -112,4 +112,16 @@ func (j *Janitor) sweep(ctx context.Context) {
 		n, err := j.store.PruneSessions(ctx, now.Add(-j.windows.Sessions))
 		report("sessions", j.windows.Sessions, n, err)
 	}
+
+	// Refresh the query planner's statistics after the prunes, since they are what
+	// just changed the row counts the planner reasons about. Failure is logged and
+	// ignored: stale statistics make queries slower, never wrong, so this must
+	// never be able to abort a sweep.
+	if err := j.store.Optimize(ctx); err != nil {
+		switch {
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		default:
+			j.logger.Error("optimize failed", "err", err)
+		}
+	}
 }

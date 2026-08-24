@@ -1041,8 +1041,31 @@ func (a *api) sessionData(id string) (sessionView, error) {
 	for _, e := range entries {
 		v := newEntryView(e, a.bootTime)
 		v.HasTrace = hasTrace[e.ID]
-		a.enrichClientFromTrace(&v)
 		entViews = append(entViews, v)
+	}
+
+	// Client enrichment reads captured headers, so collect the ids that actually
+	// need it and fetch them in ONE query. Doing it inside the loop above called
+	// GetPayload per entry — which selects req_body and resp_body — so a session
+	// of a few hundred calls moved gigabytes of BLOBs to recover a few hundred
+	// User-Agent strings. Only rows predating the client_* columns need this, but
+	// that is 30% of the production ledger, so it fired constantly.
+	var needIDs []string
+	for _, v := range entViews {
+		if a.needsClientEnrichment(v) {
+			needIDs = append(needIDs, v.ID)
+		}
+	}
+	if len(needIDs) > 0 {
+		headers, err := a.store.RequestHeaders(needIDs)
+		if err != nil {
+			return sessionView{}, err
+		}
+		for i := range entViews {
+			if a.needsClientEnrichment(entViews[i]) {
+				enrichClientFromHeaders(&entViews[i], headers[entViews[i].ID])
+			}
+		}
 	}
 
 	return sessionView{
@@ -1065,15 +1088,34 @@ func (a *api) sessionData(id string) (sessionView, error) {
 	}, nil
 }
 
+// enrichClientFromTrace fills in client identity for one entry whose
+// client_name predates that column, reading only the captured request headers.
 func (a *api) enrichClientFromTrace(v *entryView) {
-	if v.ClientName != "" || !v.HasTrace {
+	if !a.needsClientEnrichment(*v) {
 		return
 	}
-	p, err := a.store.GetPayload(v.ID)
+	headers, err := a.store.RequestHeaders([]string{v.ID})
 	if err != nil {
 		return
 	}
-	ci := calls.ParseClientInfo(headerValue(p.ReqHeaders, "User-Agent"), headerValue(p.ReqHeaders, "X-Stainless-Os"))
+	enrichClientFromHeaders(v, headers[v.ID])
+}
+
+// needsClientEnrichment reports whether an entry's client identity has to come
+// from its capture. Rows written since the client_* columns exist already carry
+// it, and a row with no capture has nowhere to read it from.
+func (a *api) needsClientEnrichment(v entryView) bool {
+	return v.ClientName == "" && v.HasTrace
+}
+
+// enrichClientFromHeaders sets client identity from a capture's request headers.
+// A nil map is a no-op, so a pruned or malformed capture leaves the entry as it
+// was rather than blanking it.
+func enrichClientFromHeaders(v *entryView, h map[string]string) {
+	if len(h) == 0 {
+		return
+	}
+	ci := calls.ParseClientInfo(headerValue(h, "User-Agent"), headerValue(h, "X-Stainless-Os"))
 	v.ClientName = ci.Name
 	v.ClientVersion = ci.Version
 	v.ClientOS = ci.OS

@@ -93,6 +93,17 @@ func (p *parsePipeline) process(job parseJob) {
 	}); serr != nil {
 		p.logger.Error("save parsed call failed", "err", serr, "call_id", job.callID)
 	}
+
+	// Stamp the message-shape fingerprint onto the calls row. Done here because
+	// this is the one place the normalized messages already exist in memory —
+	// the caller has paid for the body read and the JSON unmarshal, and hashing
+	// what they produced is a rounding error on top. A failure is logged and
+	// dropped: the columns stay unknown, and an unknown fingerprint costs the
+	// session view a redundant body read rather than a missing conversation.
+	f := c.Fingerprint()
+	if ferr := p.store.SaveMessageFingerprint(job.callID, f.Count, f.Head, f.Tail); ferr != nil {
+		p.logger.Error("save message fingerprint failed", "err", ferr, "call_id", job.callID)
+	}
 }
 
 // Close stops accepting jobs and waits for in-flight ones to finish. Tests use

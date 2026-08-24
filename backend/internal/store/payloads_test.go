@@ -175,3 +175,62 @@ func TestSessionRequests(t *testing.T) {
 		t.Errorf("SessionRequests(missing) = %+v, want empty", empty)
 	}
 }
+
+// The test above has no fingerprints on its rows, so it exercises the FALLBACK
+// (unknown shapes are never treated as redundant) rather than the optimization.
+// This one fingerprints a growing conversation end to end and asserts the whole
+// path — SQL, cover, body fetch — returns only the last body.
+//
+// Without this, every existing SessionRequests test would keep passing if the
+// cover silently degraded to reading everything, since that IS the fallback.
+func TestSessionRequestsReadsOnlyTheCoveringBodies(t *testing.T) {
+	s := openTestStore(t)
+	base := time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC)
+
+	// Three turns of one growing conversation, then a compaction that replaces
+	// the history, then one more turn on the new context.
+	turns := []struct {
+		body  string
+		count int
+		head  string
+		tail  string
+	}{
+		{"turn1", 3, "A", "t3"},
+		{"turn2", 5, "A", "t5"},
+		{"turn3", 7, "A", "t7"},
+		{"turn4", 3, "S", "u3"}, // compacted: summary replaces the history
+		{"turn5", 4, "S", "u4"},
+	}
+
+	var ids []string
+	for i, turn := range turns {
+		id, err := s.AppendCall(calls.Entry{
+			TS: base.Add(time.Duration(i) * time.Minute), SessionID: "grow",
+			Wire: "anthropic/messages", Status: 200,
+		})
+		if err != nil {
+			t.Fatalf("AppendCall %d: %v", i, err)
+		}
+		if err := s.SavePayload(Payload{CallID: id, ReqBody: []byte(turn.body)}); err != nil {
+			t.Fatalf("SavePayload %d: %v", i, err)
+		}
+		if err := s.SaveMessageFingerprint(id, turn.count, []byte(turn.head), []byte(turn.tail)); err != nil {
+			t.Fatalf("SaveMessageFingerprint %d: %v", i, err)
+		}
+		ids = append(ids, id)
+	}
+
+	got, err := s.SessionRequests("grow")
+	if err != nil {
+		t.Fatalf("SessionRequests: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("read %d bodies, want 2 (last of each run); got %+v", len(got), got)
+	}
+	if got[0].CallID != ids[2] || string(got[0].ReqBody) != "turn3" {
+		t.Errorf("first covering body = %+v, want turn3 (last before compaction)", got[0])
+	}
+	if got[1].CallID != ids[4] || string(got[1].ReqBody) != "turn5" {
+		t.Errorf("second covering body = %+v, want turn5 (last of the new run)", got[1])
+	}
+}
