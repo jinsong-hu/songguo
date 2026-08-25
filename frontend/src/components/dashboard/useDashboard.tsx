@@ -68,10 +68,10 @@ export function useDashboard({ dimensions, isUser }: DashboardOptions) {
     return lastGood.current ?? { since: rollingTick - 86400, until: rollingTick };
   }, [range, rolling, rollingTick]);
 
-  // Granularity follows the window instead of being pinned per preset, so a
-  // one-hour view gets minute buckets and a 90-day view does not ask for 2160
-  // hourly points. Each chart still re-reads the bucket the server actually used
-  // off its own response.
+  // Granularity follows the window instead of being pinned per preset — minute
+  // buckets for a half-hour view, daily ones past a week, so a 90-day view does
+  // not ask for 2160 hourly points. Each chart still re-reads the bucket the
+  // server actually used off its own response.
   const bucket = useMemo(() => deriveBucket(since, until), [since, until]);
 
   const filter = useMemo<UsageFilter>(

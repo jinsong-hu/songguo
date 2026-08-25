@@ -50,43 +50,36 @@ export function resolveRange(range: TimeRange, now?: Date): ResolvedRange | null
 }
 
 /**
- * Bucket sizes the picker will ask for, coarsest last. `hour` and `day` keep
- * their word spellings because that is what the API has always called them; the
- * rest are the `<count><unit>` sizes it also accepts.
+ * The size ladder, finest first: a span at or under `upTo` seconds gets `size`,
+ * and anything past the last rung gets `day`. Four fixed rungs rather than the
+ * finest size fitting a point budget — a window always draws the same bars, so
+ * comparing two views is comparing like with like instead of the granularity
+ * shifting under you as the window is nudged. `hour` and `day` keep their word
+ * spellings because that is what the API has always called them.
  */
-const BUCKETS: { size: string; seconds: number }[] = [
-  { size: '1m', seconds: 60 },
-  { size: '5m', seconds: 5 * 60 },
-  { size: '15m', seconds: 15 * 60 },
-  { size: '30m', seconds: 30 * 60 },
-  { size: 'hour', seconds: 3600 },
-  { size: '3h', seconds: 3 * 3600 },
-  { size: '6h', seconds: 6 * 3600 },
-  { size: '12h', seconds: 12 * 3600 },
-  { size: 'day', seconds: 86400 },
-  { size: '7d', seconds: 7 * 86400 },
-  { size: '30d', seconds: 30 * 86400 },
+const BUCKETS: { upTo: number; size: string }[] = [
+  { upTo: 30 * 60, size: '1m' },
+  { upTo: 10 * 3600, size: '30m' },
+  // The one exclusive edge: a span of exactly seven days is daily, not hourly.
+  { upTo: 7 * 86400 - 1, size: 'hour' },
 ];
 
 /**
- * Roughly how many points a chart should carry. Well under the store's 10000
- * bucket cap — the binding constraint is legibility and payload size, not the
- * cap, and every series is gap-filled so the count is paid whether or not there
- * was traffic.
- */
-export const TARGET_POINTS = 240;
-
-/**
- * Pick the finest bucket that keeps a range under {@link TARGET_POINTS}. This
- * replaces hardcoding a bucket per preset, which is what let a custom range ask
- * for hourly points across a year.
+ * The bucket a range gets: **1m up to half an hour, 30m up to ten hours, hourly
+ * under a week, daily at a week or beyond**.
+ *
+ * The rungs are chosen so each window reads at a useful density — 30 bars for
+ * half an hour, 20 for ten hours, 24 for a day, 168 for a week, 90 for the
+ * 90-day retention horizon. The cost is that the widest windows draw more
+ * points than a coarser roll-up would; well within what a chart can carry, and
+ * far under the store's 10000-bucket cap.
  */
 export function deriveBucket(since: number, until: number): string {
   const span = Math.max(0, until - since);
   for (const b of BUCKETS) {
-    if (span / b.seconds <= TARGET_POINTS) return b.size;
+    if (span <= b.upTo) return b.size;
   }
-  return BUCKETS[BUCKETS.length - 1].size;
+  return 'day';
 }
 
 export interface Preset {

@@ -3,7 +3,6 @@ import dayjs from 'dayjs';
 import {
   DEFAULT_RANGE,
   PRESETS,
-  TARGET_POINTS,
   type TimeRange,
   deriveBucket,
   calendarBounds,
@@ -77,46 +76,39 @@ describe('resolveRange — absolute', () => {
 
 describe('deriveBucket', () => {
   it.each([
-    [3_600, '1m'],
-    [6 * 3_600, '5m'],
-    [86_400, '15m'],
-    [7 * 86_400, 'hour'],
-    [30 * 86_400, '3h'],
-    [90 * 86_400, '12h'],
-  ])('picks a sensible size for a %ss span', (span, want) => {
+    [300, '1m'],
+    [30 * 60, '1m'],
+    [30 * 60 + 1, '30m'],
+    [6 * 3_600, '30m'],
+    [10 * 3_600, '30m'],
+    [10 * 3_600 + 1, 'hour'],
+    [86_400, 'hour'],
+    [7 * 86_400 - 1, 'hour'],
+    [7 * 86_400, 'day'],
+    [30 * 86_400, 'day'],
+    [90 * 86_400, 'day'],
+    [400 * 86_400, 'day'],
+  ])('buckets a %ss span on the right rung', (span, want) => {
     expect(deriveBucket(0, span)).toBe(want);
   });
 
-  it('never exceeds the point target', () => {
-    const sizes: Record<string, number> = {
-      '1m': 60,
-      '5m': 300,
-      '15m': 900,
-      '30m': 1800,
-      hour: 3600,
-      '3h': 10800,
-      '6h': 21600,
-      '12h': 43200,
-      day: 86400,
-      '7d': 604800,
-      '30d': 2592000,
-    };
-    for (let span = 60; span < 400 * 86_400; span = Math.ceil(span * 1.7)) {
-      const bucket = deriveBucket(0, span);
-      expect(sizes[bucket], `unknown bucket ${bucket}`).toBeDefined();
-      expect(span / sizes[bucket], `span ${span}`).toBeLessThanOrEqual(TARGET_POINTS);
-    }
-  });
-
-  it('never asks for a size the API would reject', () => {
-    // Mirrors the Go side: hour/day, or <count><unit> in whole minutes, <= 365d.
+  it('only ever asks for a size on the ladder', () => {
     for (let span = 1; span < 400 * 86_400; span = Math.ceil(span * 1.7)) {
-      const bucket = deriveBucket(0, span);
-      expect(bucket).toMatch(/^(hour|day|\d+[mhd])$/);
+      expect(deriveBucket(0, span)).toMatch(/^(1m|30m|hour|day)$/);
     }
   });
 
-  it('floors at 1m for tiny and degenerate spans', () => {
+  it('never coarsens as the window grows', () => {
+    const seconds: Record<string, number> = { '1m': 60, '30m': 1800, hour: 3600, day: 86400 };
+    let prev = 0;
+    for (let span = 1; span < 400 * 86_400; span = Math.ceil(span * 1.3)) {
+      const size = seconds[deriveBucket(0, span)];
+      expect(size, `span ${span}`).toBeGreaterThanOrEqual(prev);
+      prev = size;
+    }
+  });
+
+  it('falls back to the finest rung for tiny and degenerate spans', () => {
     expect(deriveBucket(0, 1)).toBe('1m');
     expect(deriveBucket(0, 0)).toBe('1m');
     expect(deriveBucket(500, 100)).toBe('1m');
@@ -141,9 +133,10 @@ describe('presets', () => {
     }
   });
 
-  it('all produce a chart under the point target', () => {
+  it('all resolve to a size the API accepts', () => {
     for (const p of PRESETS) {
       const { since, until } = resolveRange(p.range, NOW)!;
+      // Mirrors the Go side: hour/day, or <count><unit> in whole minutes.
       expect(deriveBucket(since, until), p.label).toMatch(/^(hour|day|\d+[mhd])$/);
     }
   });
