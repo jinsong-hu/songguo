@@ -213,7 +213,7 @@ waiting or handle; the caller owns the loop, and each call meters independently.
 
 | Task | Tool(s) | Native call (wire) |
 |---|---|---|
-| Text-to-Image | `text-to-image` | `POST /v1/images/generations` (`openai/images`) |
+| Text-to-Image | `text-to-image` | `POST /v1/images/generations` (`openai/images-generate`) |
 | Text-to-Speech | `text-to-speech` | `POST /api/v3/tts/unidirectional` (`volc/tts-unidirectional`) |
 | Automatic Speech Recognition | `automatic-speech-recognition` → `get-transcription` | `…/auc/bigmodel/submit` → `…/query` (`volc/asr-file`) |
 | Text-to-Video | `text-to-video` → `get-text-to-video` | `…/generations/tasks` → `GET …/tasks/{id}` (`ark/video`) |

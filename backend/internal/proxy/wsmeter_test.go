@@ -249,8 +249,8 @@ func TestWebSocketNonVolcStaysZeroCost(t *testing.T) {
 	conn.Close()
 
 	rows := waitForRows(t, env, 1)
-	if rows[0].Wire != "openai/images" {
-		t.Errorf("wire = %q, want openai/images", rows[0].Wire)
+	if rows[0].Wire != "openai/images-generate" {
+		t.Errorf("wire = %q, want openai/images-generate", rows[0].Wire)
 	}
 	if rows[0].Cost != 0 {
 		t.Errorf("cost = %v, want 0 for ineligible WS session", rows[0].Cost)

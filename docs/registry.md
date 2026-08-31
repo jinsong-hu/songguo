@@ -26,7 +26,7 @@ A **wire** is the protocol contract. A **Songguo endpoint** is its inbound face;
 
 | Layer | What it is | Static / dynamic | Cardinality |
 |---|---|---|---|
-| **Wire** | Protocol shape + metering contract (`openai/chat`). The fixed vocabulary. | Static (compiled-in, 11 today) | the catalogue |
+| **Wire** | Protocol shape + metering contract (`openai/chat`). The fixed vocabulary. | Static (compiled-in, 17 today) | the catalogue |
 | **Songguo endpoint** | The public path a consumer calls (`POST /v1/chat/completions`). Inbound face of a wire. | Static (matched by suffix) | → exactly 1 wire |
 | **Provider endpoint** | An **exact vendor URL** that speaks the same wire (`https://api.openai.com/v1/chat/completions`) + its credential. Outbound face. | Dynamic (operator-set, SQLite) | → exactly 1 wire |
 | **Routing** | Given `(wire)` pick the provider endpoint, by `header → model-string → default`. Exact match, no aliasing. | Dynamic (SQLite) | selector → provider |
@@ -119,7 +119,7 @@ Two consequences:
 - **Paths are always native — there is no `/x/<provider>/` prefix.** A model-less endpoint is reached at its plain vendor path (`GET /v1/models`, `POST /api/v3/tts/unidirectional`); the provider comes from the header or the default, never the path.
 - **Bare `GET /v1/models` works** and returns the selected provider's list. That is a passthrough of *one* provider's response — Songguo still never aggregates lists across providers (a merged list would be a synthesized response = transform).
 
-## The registry — everything supported today (11 wires)
+## The registry — everything supported today (17 wires)
 
 One row per wire. **Endpoint** = the native path the consumer calls; **bold** marks the suffix that's actually matched (the prefix is conventional). **Providers** = example vendors that speak the wire — the real set is operator-configured in SQLite, not fixed here. **Routing** = how the provider is picked once the wire is matched (full order is always `header → model → default`; see [Provider selection](#provider-selection)). `exact model` = model-bearing, keyed on the body `model`; `header · default` = model-less, no model step.
 
@@ -129,6 +129,8 @@ One row per wire. **Endpoint** = the native path the consumer calls; **bold** ma
 | `POST /v1`**`/completions`** | `openai/completions` | OpenAI (legacy), … | exact `model` |
 | `POST /v1`**`/embeddings`** | `openai/embeddings` | OpenAI, Azure, … | exact `model` |
 | `POST /v1`**`/responses`** | `openai/responses` | OpenAI | exact `model` |
+| `POST /v1`**`/images/generations`** | `openai/images-generate` | OpenAI, Volcengine Ark, … | exact `model` |
+| `POST /v1`**`/images/edits`** | `openai/images-edit` | OpenAI (multipart), Volcengine Ark (JSON, same URL as generation) | exact `model` |
 | `GET /v1`**`/models`** | `openai/models` | any OpenAI-compatible | header · default |
 | `POST /v1`**`/messages`** | `anthropic/messages` | Anthropic | exact `model` |
 | `POST /v1`**`/messages/count_tokens`** | `anthropic/count_tokens` | Anthropic | exact `model` |
@@ -172,6 +174,7 @@ Read-only by design: if a usage shape isn't recognized the call still succeeds w
 - **`openai/chat`, `openai/completions`, `openai/embeddings`** — top-level `usage`: `prompt_tokens`/`input_tokens` + `completion_tokens`/`output_tokens`. Cached input per quirk: default `prompt_tokens_details.cached_tokens`, DeepSeek `prompt_cache_hit_tokens`, MiniMax `cached_tokens`. `prompt_tokens` is cache-inclusive, so `input_tokens = prompt_tokens − cached` (fresh); no cache-creation (→ 0). `completion_tokens_details.reasoning_tokens` → `thinking_tokens`. Streaming usage rides the final SSE chunk (some vendors only when the client sets `stream_options.include_usage`); embeddings is input-only, no stream.
 - **`openai/responses`** — `usage.input_tokens` (cache-inclusive) + `output_tokens` + `input_tokens_details.cached_tokens`; `input_tokens = input_tokens − cached` (fresh), `output_tokens_details.reasoning_tokens` → `thinking_tokens`. Streaming usage rides the `response.completed` event under `response.usage`.
 - **`anthropic/messages`** — the reference shape: `input_tokens` (already fresh) + `cache_read_input_tokens` + `cache_creation_input_tokens` mapped straight through as three disjoint fields (cache-create bills at the model's `cache_write` rate, else `input`); `output_tokens_details.thinking_tokens` → `thinking_tokens`. Streaming merges `message_start.message.usage` (input) with `message_delta.usage` (output).
+- **`openai/images-generate`, `openai/images-edit`** — whichever the vendor reported. A top-level `usage` (OpenAI's images API returns `input_tokens` + `output_tokens`, with a text/image split in `*_tokens_details`) is normalized like `openai/chat` and priced per token; a response without one falls back to `Calls = 1` for the per-call vendors (Ark Seedream). The text/image **input** split is not modeled — `Normalized` has one input axis, so image-input tokens bill at the text-input rate, which under-bills. Before this hybrid, both wires were per-call only, so a token-priced image model metered $0.
 - **`volc/tts`** — `usage.text_words` → `Chars` (per-char); streamed as NDJSON, and only returned when the client sets `X-Control-Require-Usage-Tokens-Return`, else coarse/unknown.
 - **`volc/asr`** — `audio_info.duration` (ms) → `Seconds` (per-second); the `submit` ack has no `audio_info` (meters zero), the `query` poll bills.
 - **`anthropic/count_tokens`** — zero-cost: Anthropic bills token counting as free, so the call is logged (for observability) but never priced; the response (`{"input_tokens":N}`, no `usage` object) is not parsed.

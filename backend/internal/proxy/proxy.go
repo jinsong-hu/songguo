@@ -570,7 +570,7 @@ func (h *handler) denyCapture(w http.ResponseWriter, r *http.Request, body []byt
 // captured via denyCapture, so they conform to the authenticated user's capture
 // setting.
 func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.User, capture bool, body []byte, callID string) (route, bool) {
-	res := meter.Classify(r.Method, r.URL.Path, body)
+	res := meter.Classify(r.Method, r.URL.Path, r.Header.Get("Content-Type"), body)
 	tags := extractTags(r.Header.Get("X-Songguo-Tags"), body)
 	attr := extractAttribution(r.Header)
 	client := calls.ParseClientInfo(r.UserAgent(), r.Header.Get("X-Stainless-Os"))

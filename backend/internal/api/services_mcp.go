@@ -88,7 +88,7 @@ func (a *api) buildServicesServer(key string, proxy http.Handler) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "songguo-services", Version: a.version}, nil)
 	d := &dispatcher{key: key, proxy: proxy}
 
-	// --- Text-to-Image (openai/images, synchronous) ---
+	// --- Text-to-Image (openai/images-generate, synchronous) ---
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "text-to-image",
 		Description: "Text-to-Image. Generate an image from a prompt via an OpenAI-compatible image endpoint (POST /v1/images/generations), routed by model. Args: prompt, model (required); size?, n?, provider?. Returns the image(s). Metered against your key.",

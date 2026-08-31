@@ -41,7 +41,10 @@ const TEST_KIND: Record<string, TestKind> = {
   'openai/responses': 'chat',
   'anthropic/messages': 'chat',
   'openai/embeddings': 'embedding',
-  'openai/images': 'image',
+  'openai/images-generate': 'image',
+  // openai/images-edit is deliberately absent: editing needs an image to edit,
+  // so it falls through to the honest "not interactively testable" panel and its
+  // curl snippet rather than a prompt box that cannot send a file.
   'ark/video': 'video',
   'volc/asr-file': 'asr',
   'volc/asr-stream-async': 'asrstream',
@@ -59,7 +62,8 @@ const TEST_ENDPOINT: Record<string, string> = {
   'openai/responses': 'POST /v1/responses',
   'anthropic/messages': 'POST /v1/messages',
   'openai/embeddings': 'POST /v1/embeddings',
-  'openai/images': 'POST /v1/images/generations',
+  'openai/images-generate': 'POST /v1/images/generations',
+  'openai/images-edit': 'POST /v1/images/edits',
   'ark/video': 'POST /api/v3/contents/generations/tasks',
   'volc/asr-file': 'POST /api/v3/auc/bigmodel/submit',
   'volc/asr-stream-async': 'WS /api/v3/sauc/bigmodel_async',
@@ -165,8 +169,10 @@ export function snippetFor(wire: string, opts: SnippetOpts): string {
       return asrFileSnippet(opts);
     case 'volc/tts-unidirectional':
       return ttsSnippet(opts);
-    case 'openai/images':
+    case 'openai/images-generate':
       return imageSnippet(opts);
+    case 'openai/images-edit':
+      return imageEditSnippet(opts);
     case 'ark/video':
       return videoSnippet(opts);
     case 'openai/embeddings':
@@ -231,6 +237,22 @@ function imageSnippet({ model, origin, token, providerId }: SnippetOpts): string
   return `curl ${origin}/v1/images/generations \\
   ${headers.join(' \\\n  ')} \\
   -d '${JSON.stringify(body, null, 2)}'`;
+}
+
+/** The shared image-edit instruction, kept alongside the generation prompt. */
+const IMAGE_EDIT_PROMPT = 'Put the red panda in a snowy forest, keep the laptop';
+
+// Editing is multipart/form-data — the image (and an optional mask) are file
+// parts, so -F rather than -d, and no Content-Type header: curl writes it with
+// the boundary. The gateway forwards those bytes verbatim and reads `model`
+// straight out of the form to route.
+function imageEditSnippet({ model, origin, token, providerId }: SnippetOpts): string {
+  const headers = [bearer(token), ...providerLines(providerId, false)];
+  return `curl ${origin}/v1/images/edits \\
+  ${headers.join(' \\\n  ')} \\
+  -F model=${model} \\
+  -F image=@panda.png \\
+  -F prompt='${IMAGE_EDIT_PROMPT}'`;
 }
 
 /** The shared video-generation prompt, so the snippet and the panel agree. */
@@ -399,8 +421,10 @@ function pythonSnippetFor(wire: string, opts: SnippetOpts): string {
       return pyAsrFileSnippet(opts);
     case 'volc/tts-unidirectional':
       return pyTtsSnippet(opts);
-    case 'openai/images':
+    case 'openai/images-generate':
       return pyImageSnippet(opts);
+    case 'openai/images-edit':
+      return pyImageEditSnippet(opts);
     case 'ark/video':
       return pyVideoSnippet(opts);
     case 'openai/embeddings':
@@ -482,6 +506,28 @@ resp = requests.post(
 ${headers}
     },
     json=${pyValue(body, 4)},
+)
+# Each data[] item carries an image "url" or base64 "b64_json".
+print(resp.json())`;
+}
+
+// files= makes requests build the multipart body; data= carries the text
+// fields. No Content-Type header — requests writes it with the boundary, and
+// setting it by hand would break the form.
+function pyImageEditSnippet({ model, origin, token, providerId }: SnippetOpts): string {
+  const headers = pyHeaders([
+    ['Authorization', `Bearer ${pyToken(token)}`],
+    ...pyProviderPair(providerId),
+  ]);
+  return `import requests
+
+resp = requests.post(
+    "${origin}/v1/images/edits",
+    headers={
+${headers}
+    },
+    data={"model": "${model}", "prompt": "${IMAGE_EDIT_PROMPT}"},
+    files={"image": open("panda.png", "rb")},
 )
 # Each data[] item carries an image "url" or base64 "b64_json".
 print(resp.json())`;

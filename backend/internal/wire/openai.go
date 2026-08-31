@@ -43,14 +43,45 @@ func init() {
 		Extract:  zeroCostExtract,
 		ZeroCost: true,
 	})
-	// Image generation (OpenAI-compatible /images/generations, e.g. Doubao
-	// Seedream). Responses carry no token usage, so it's billed per_call.
+	// Images split into two wires because they have two upstream URLs, and a
+	// provider endpoint is one exact URL per wire. OpenAI-style vendors serve
+	// editing at its own path (/images/edits, multipart); Volcengine Ark has no
+	// such path and does editing by posting an image field to the SAME
+	// generations URL. One wire could only ever point at one of those, which is
+	// how an edit request used to get forwarded to the generations endpoint.
+	//
+	// Both meter with imageExtract: per_call for vendors that report no usage,
+	// real tokens for those that do.
 	register(Wire{
-		Name:     "openai/images",
-		Suffixes: []string{"/images/generations", "/images/edits"},
+		Name:     "openai/images-generate",
+		Suffixes: []string{"/images/generations"},
 		Modality: calls.ModalityImage,
-		Extract:  perCallExtract,
+		Extract:  imageExtract,
 	})
+	register(Wire{
+		Name:     "openai/images-edit",
+		Suffixes: []string{"/images/edits"},
+		Modality: calls.ModalityImage,
+		Extract:  imageExtract,
+	})
+}
+
+// imageExtract meters an image call from whatever the vendor reported. The
+// OpenAI images API returns a top-level usage object (input_tokens,
+// output_tokens, and a text/image split in *_tokens_details) and its models are
+// priced per token, so throwing it away metered every such call at $0. Vendors
+// that return no usage — Ark Seedream and the rest of the per_call family — keep
+// the old behavior: the request itself is the billable unit.
+//
+// The text/image input split is deliberately NOT modeled: Normalized has one
+// input axis, so image-input tokens are billed at the text-input rate. That
+// under-bills, and it is the same compromise the catalog's rate mapping already
+// documents.
+func imageExtract(body []byte, q Quirks) Extraction {
+	if usage := topLevelUsage(body); usage != nil {
+		return openAINormalize(usage, q)
+	}
+	return perCallExtract(body, q)
 }
 
 // zeroCostExtract meters management endpoints as free without parsing.

@@ -153,7 +153,7 @@ func TestDispatchFallbackAndGeneric(t *testing.T) {
 	}
 
 	// Image/unknown wire → generic, with any top-level usage captured.
-	g, _ := Parse(Input{Wire: "openai/images", ReqBody: []byte(`{"model":"seedream"}`),
+	g, _ := Parse(Input{Wire: "openai/images-generate", ReqBody: []byte(`{"model":"seedream"}`),
 		RespBody: []byte(`{"data":[{}],"usage":{"input_tokens":3}}`)})
 	if g.Format != "generic" || g.Model != "seedream" || g.Tokens.Input != 3 {
 		t.Errorf("generic = %+v", g)

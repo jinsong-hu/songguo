@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -2073,4 +2074,225 @@ vendors:
 	if rows[0].Cost != 0 {
 		t.Errorf("cost = %v, want 0 (zero-cost wire)", rows[0].Cost)
 	}
+}
+
+// --- images: one endpoint, two vendor shapes -------------------------------
+
+// imageVendor is a mock image host that records the path and exact bytes it was
+// served, so a test can assert both where the request went and that the body
+// crossed untouched.
+type imageVendor struct {
+	mu          sync.Mutex
+	path        string
+	body        []byte
+	contentType string
+	calls       int
+}
+
+func (v *imageVendor) handler(response string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		v.mu.Lock()
+		v.path, v.body, v.contentType, v.calls = r.URL.Path, body, r.Header.Get("Content-Type"), v.calls+1
+		v.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, response)
+	}
+}
+
+// The two image vendors share the /v1/images/edits endpoint but not its shape:
+// the OpenAI-style one takes multipart at its own /images/edits URL, while Ark
+// takes JSON at the SAME URL it uses for generation. The model in the multipart
+// form is the only thing that can tell them apart — without reading it, the
+// request picks a provider by weight and a form can land on the JSON-only host.
+func TestImageEditRoutesByModelInsideMultipart(t *testing.T) {
+	openaiLike := &imageVendor{}
+	openaiSrv := httptest.NewServer(openaiLike.handler(
+		`{"data":[{"b64_json":"iVBOR"}],"usage":{"input_tokens":150,"output_tokens":1056}}`))
+	defer openaiSrv.Close()
+
+	ark := &imageVendor{}
+	arkSrv := httptest.NewServer(ark.handler(`{"data":[{"url":"https://ark/x.png"}]}`))
+	defer arkSrv.Close()
+
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: relay
+    origin: %s
+    served_models: [gpt-image-2]
+    priority: 1
+    endpoints:
+      openai/images-generate: %s/v1/images/generations
+      openai/images-edit: %s/v1/images/edits
+    credential: {id: relayKey, api_key: relay-secret}
+    prices:
+      gpt-image-2: { cost: { input: 5, output: 30 } }
+  - name: ark
+    origin: %s
+    served_models: [doubao-seedream-5.0-lite]
+    priority: 1
+    endpoints:
+      openai/images-generate: %s/api/plan/v3/images/generations
+      openai/images-edit: %s/api/plan/v3/images/generations
+    credential: {id: arkKey, api_key: ark-secret}
+    prices:
+      doubao-seedream-5.0-lite: { cost: { call: 1 } }
+`, openaiSrv.URL, openaiSrv.URL, openaiSrv.URL, arkSrv.URL, arkSrv.URL, arkSrv.URL)
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	form, contentType := imageEditForm(t, "gpt-image-2")
+	req, err := http.NewRequest(http.MethodPost, env.server.URL+"/v1/images/edits", bytes.NewReader(form))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", contentType)
+	resp, err := env.client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	if ark.calls != 0 {
+		t.Errorf("multipart edit reached the JSON-only vendor %d time(s)", ark.calls)
+	}
+	if openaiLike.path != "/v1/images/edits" {
+		t.Errorf("upstream path = %q, want /v1/images/edits (not the generations URL)", openaiLike.path)
+	}
+	// Byte-transparency: the form crosses the gateway untouched, boundary and all.
+	if !bytes.Equal(openaiLike.body, form) {
+		t.Error("multipart body was not forwarded verbatim")
+	}
+	if openaiLike.contentType != contentType {
+		t.Errorf("upstream Content-Type = %q, want %q", openaiLike.contentType, contentType)
+	}
+
+	rows := env.callRows(t)
+	if len(rows) != 1 {
+		t.Fatalf("call rows = %d, want 1", len(rows))
+	}
+	if rows[0].Model != "gpt-image-2" {
+		t.Errorf("model = %q, want gpt-image-2 read out of the form", rows[0].Model)
+	}
+	if rows[0].Wire != "openai/images-edit" {
+		t.Errorf("wire = %q, want openai/images-edit", rows[0].Wire)
+	}
+	// The vendor reported usage, so the call is priced on it rather than $0.
+	wantCost := 5*150/1e6 + 30*1056/1e6
+	if !approxEqual(rows[0].Cost, wantCost) {
+		t.Errorf("cost = %v, want %v", rows[0].Cost, wantCost)
+	}
+}
+
+// Ark's edit is ordinary JSON aimed at its generations URL: the same inbound
+// endpoint, a different upstream shape, no translation anywhere.
+func TestImageEditJSONGoesToArkGenerationsURL(t *testing.T) {
+	ark := &imageVendor{}
+	arkSrv := httptest.NewServer(ark.handler(`{"data":[{"url":"https://ark/x.png"}]}`))
+	defer arkSrv.Close()
+
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: ark
+    origin: %s
+    served_models: [doubao-seedream-5.0-lite]
+    priority: 1
+    endpoints:
+      openai/images-edit: %s/api/plan/v3/images/generations
+    credential: {id: arkKey, api_key: ark-secret}
+    prices:
+      doubao-seedream-5.0-lite: { cost: { call: 1 } }
+`, arkSrv.URL, arkSrv.URL)
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	body := `{"model":"doubao-seedream-5.0-lite","prompt":"snowy","image":"https://x/y.png"}`
+	resp := env.post(t, "/v1/images/edits", key, body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if ark.path != "/api/plan/v3/images/generations" {
+		t.Errorf("upstream path = %q, want the generations URL", ark.path)
+	}
+
+	rows := env.callRows(t)
+	if len(rows) != 1 {
+		t.Fatalf("call rows = %d, want 1", len(rows))
+	}
+	// No usage in the response, so the per-call rate still applies.
+	if !approxEqual(rows[0].Cost, 1) {
+		t.Errorf("cost = %v, want 1 (per-call fallback)", rows[0].Cost)
+	}
+}
+
+// A provider that only declares generation must not absorb edits: that silent
+// misroute is what the wire split exists to stop.
+func TestImageEditUnmatchedWhenOnlyGenerationConfigured(t *testing.T) {
+	vendor := &imageVendor{}
+	srv := httptest.NewServer(vendor.handler(`{"data":[]}`))
+	defer srv.Close()
+
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: relay
+    origin: %s
+    served_models: [gpt-image-2]
+    priority: 1
+    endpoints:
+      openai/images-generate: %s/v1/images/generations
+    credential: {id: relayKey, api_key: relay-secret}
+    prices:
+      gpt-image-2: { cost: { input: 5, output: 30 } }
+`, srv.URL, srv.URL)
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	resp := env.post(t, "/v1/images/edits", key, `{"model":"gpt-image-2","prompt":"x"}`)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 wire_unmatched", resp.StatusCode)
+	}
+	if vendor.calls != 0 {
+		t.Errorf("edit reached the generations endpoint %d time(s)", vendor.calls)
+	}
+}
+
+// imageEditForm builds an OpenAI-style edit form: a binary image file part plus
+// the model and prompt fields.
+func imageEditForm(t *testing.T, model string) ([]byte, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	file, err := w.CreateFormFile("image", "panda.png")
+	if err != nil {
+		t.Fatalf("create file part: %v", err)
+	}
+	if _, err := file.Write([]byte("\x89PNG\r\n\x1a\n\x00\x01\x02binary")); err != nil {
+		t.Fatalf("write file part: %v", err)
+	}
+	for _, kv := range [][2]string{{"model", model}, {"prompt", "put it in a snowy forest"}} {
+		field, err := w.CreateFormField(kv[0])
+		if err != nil {
+			t.Fatalf("create field %q: %v", kv[0], err)
+		}
+		if _, err := io.WriteString(field, kv[1]); err != nil {
+			t.Fatalf("write field %q: %v", kv[0], err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	return buf.Bytes(), w.FormDataContentType()
 }

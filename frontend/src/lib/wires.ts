@@ -8,7 +8,11 @@ const WIRE_NAMES: Record<string, string> = {
   'openai/completions': 'Completions',
   'openai/responses': 'Responses',
   'openai/embeddings': 'Embeddings',
-  'openai/images': 'Image generation',
+  'openai/images-generate': 'Image generation',
+  'openai/images-edit': 'Image editing',
+  // Retired 2026-08-31, kept for the ledger: calls served before the split
+  // recorded the old name, and history is not rewritten.
+  'openai/images': 'Image generation (legacy)',
   'openai/models': 'Models',
   'anthropic/messages': 'Messages',
   'anthropic/count_tokens': 'Count Tokens',
@@ -59,7 +63,9 @@ const WIRE_KIND: Record<string, string> = {
   'openai/completions': 'chat',
   'openai/responses': 'chat',
   'openai/embeddings': 'embedding',
-  'openai/images': 'image',
+  'openai/images-generate': 'image',
+  'openai/images-edit': 'image',
+  'openai/images': 'image', // retired; see WIRE_NAMES
   'openai/models': '',
   'anthropic/messages': 'chat',
   'anthropic/count_tokens': '',

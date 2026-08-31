@@ -138,9 +138,9 @@ vendors:
     origin: %s
     served_models: [realtime-model]
     priority: 1
-    wires: [openai/images]
+    wires: [openai/images-generate]
     endpoints:
-      openai/images: %s/v1/images/generations
+      openai/images-generate: %s/v1/images/generations
     credential: {id: %s, api_key: %s}
     prices:
       realtime-model: { cost: { call: 1 } }
@@ -297,8 +297,8 @@ func TestWebSocketHappyPath(t *testing.T) {
 	if r.Vendor != "rt" || r.Status != http.StatusSwitchingProtocols {
 		t.Errorf("row = %+v, want vendor=rt status=101", r)
 	}
-	if r.Wire != "openai/images" {
-		t.Errorf("row wire = %q, want openai/images", r.Wire)
+	if r.Wire != "openai/images-generate" {
+		t.Errorf("row wire = %q, want openai/images-generate", r.Wire)
 	}
 	if r.Usage == nil {
 		t.Fatalf("usage is nil, want bytes_up/bytes_down/duration_ms")

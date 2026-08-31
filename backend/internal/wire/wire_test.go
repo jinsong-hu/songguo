@@ -72,6 +72,68 @@ func TestResolveNoMatch(t *testing.T) {
 	}
 }
 
+// Generation and editing are separate wires because they are separate upstream
+// URLs. Neither may answer for the other's path: that is exactly how an edit
+// used to be forwarded to the generations endpoint.
+func TestResolveImageGenerateVsEdit(t *testing.T) {
+	enabled := []string{"openai/images-generate", "openai/images-edit"}
+	cases := []struct {
+		path string
+		want string
+	}{
+		{"/v1/images/generations", "openai/images-generate"},
+		{"/v1/images/edits", "openai/images-edit"},
+		{"/v1/images/edits/", "openai/images-edit"},
+		{"/api/plan/v3/images/generations", "openai/images-generate"},
+		{"/V1/Images/Edits", "openai/images-edit"},
+	}
+	for _, c := range cases {
+		w, ok := Resolve(enabled, "POST", c.path)
+		if !ok {
+			t.Fatalf("Resolve(%q): no match", c.path)
+		}
+		if w.Name != c.want {
+			t.Errorf("Resolve(%q) = %q, want %q", c.path, w.Name, c.want)
+		}
+	}
+	// A provider that declares only generation must not silently serve edits.
+	if w, ok := Resolve([]string{"openai/images-generate"}, "POST", "/v1/images/edits"); ok {
+		t.Errorf("generate-only provider matched an edit path as %q", w.Name)
+	}
+}
+
+// A vendor that reports usage is metered on it; one that reports none keeps the
+// per-call unit. Both image wires share the extractor.
+func TestImageExtract(t *testing.T) {
+	usage := []byte(`{"data":[{"b64_json":"…"}],"usage":{"input_tokens":150,"output_tokens":1056,` +
+		`"input_tokens_details":{"text_tokens":22,"image_tokens":128}}}`)
+	got := imageExtract(usage, nil)
+	if got.Confidence != calls.ConfidenceMeasured {
+		t.Fatalf("confidence = %q", got.Confidence)
+	}
+	// Text and image input share one axis; Calls stays 0 so a per-call price
+	// still bills exactly one (pricing defaults a missing count to 1).
+	want := Normalized{InputTokens: 150, OutputTokens: 1056}
+	if got.Norm != want {
+		t.Errorf("norm = %+v, want %+v", got.Norm, want)
+	}
+
+	noUsage := []byte(`{"model":"doubao-seedream-5.0-lite","data":[{"url":"https://x/y.png"}]}`)
+	got = imageExtract(noUsage, nil)
+	if got.Norm != (Normalized{Calls: 1}) {
+		t.Errorf("no-usage norm = %+v, want Calls=1", got.Norm)
+	}
+	if got.Confidence != calls.ConfidenceMeasured {
+		t.Errorf("no-usage confidence = %q, want measured", got.Confidence)
+	}
+
+	// A body that is not JSON at all (an image relayed raw, a truncated stream)
+	// must still meter, never error.
+	if got := imageExtract([]byte("\x89PNG\r\n"), nil); got.Norm != (Normalized{Calls: 1}) {
+		t.Errorf("non-JSON norm = %+v, want Calls=1", got.Norm)
+	}
+}
+
 func TestOpenAIExtract(t *testing.T) {
 	body := []byte(`{"id":"x","usage":{"prompt_tokens":100,"completion_tokens":20,"prompt_tokens_details":{"cached_tokens":40},"completion_tokens_details":{"reasoning_tokens":8}}}`)
 	got := openAIExtract(body, nil)

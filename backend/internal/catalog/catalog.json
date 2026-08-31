@@ -49,11 +49,21 @@
         ]
       },
       {
-        "wire": "openai/images",
+        "wire": "openai/images-generate",
         "endpoint": "https://api.openai.com/v1/images/generations",
         "adapter": "openai-compatible",
         "docs": "https://platform.openai.com/docs/api-reference/images",
         "note": "gpt-image-2 has separate text-input and image-input rates; this catalog stores the text-input rate as input and the image-token generation rate as output.",
+        "models": [
+          "gpt-image-2"
+        ]
+      },
+      {
+        "wire": "openai/images-edit",
+        "endpoint": "https://api.openai.com/v1/images/edits",
+        "adapter": "openai-compatible",
+        "docs": "https://platform.openai.com/docs/api-reference/images/createEdit",
+        "note": "Image editing takes multipart/form-data (the image and mask are file parts). Songguo forwards it verbatim and reads the model from the form; nothing is re-encoded.",
         "models": [
           "gpt-image-2"
         ]
@@ -596,11 +606,21 @@
         ]
       },
       {
-        "wire": "openai/images",
+        "wire": "openai/images-generate",
         "endpoint": "https://ark.cn-beijing.volces.com/api/plan/v3/images/generations",
         "adapter": "openai-compatible",
         "docs": "https://www.volcengine.com/docs/82379/2375486",
         "note": "Ark Agent Plan image generation (Seedream), OpenAI-compatible /images/generations. PLACEHOLDER PRICE: billed a flat $1 per call pending real per-image rates. Specify the model explicitly; vision models aren't reachable via Auto routing or the console switcher.",
+        "models": [
+          "doubao-seedream-5.0-lite"
+        ]
+      },
+      {
+        "wire": "openai/images-edit",
+        "endpoint": "https://ark.cn-beijing.volces.com/api/plan/v3/images/generations",
+        "adapter": "openai-compatible",
+        "docs": "https://www.volcengine.com/docs/82379/2375486",
+        "note": "Ark has no /images/edits path: editing is the generations endpoint with an image field in the JSON body, which is why this wire's URL is the same as the generation one. The caller sends Ark's native shape — songguo does not translate an OpenAI multipart edit into it.",
         "models": [
           "doubao-seedream-5.0-lite"
         ]
@@ -1051,8 +1071,13 @@
         "adapter": "openai-compatible"
       },
       {
-        "wire": "openai/images",
+        "wire": "openai/images-generate",
         "endpoint": "{base}/v1/images/generations",
+        "adapter": "openai-compatible"
+      },
+      {
+        "wire": "openai/images-edit",
+        "endpoint": "{base}/v1/images/edits",
         "adapter": "openai-compatible"
       },
       {
