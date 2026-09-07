@@ -124,15 +124,31 @@ func TestRefreshRejectsImplausibleRates(t *testing.T) {
 	}
 }
 
-// The feed only ever quotes models songguo declares, through the same mapping
-// cmd/catalogsync uses — it cannot introduce a provider or model of its own.
-func TestRefreshIgnoresUndeclaredModels(t *testing.T) {
+// The feed's boundary is the PROVIDER, not the model: it quotes every model a
+// mapped provider publishes, and nothing from a provider songguo does not map.
+//
+// The model half is the entire point of the refresh. A model the hand-written
+// catalog never named is exactly the one that used to meter wrong — nobody edits
+// a file the day a vendor ships — so a rate arriving for one is the feature, not
+// a leak.
+//
+// The provider half is still a hard restriction, and it is what keeps a quoted
+// price attributable. models.dev lists 213 providers, most of them resellers
+// quoting their own markup for somebody else's model: deepseek-v4-pro is
+// 0.435/0.87 on DeepSeek's own list and up to 1.215/3.645 on a reseller's.
+// Widening the map would trade a missing price for a confidently wrong one.
+//
+// History: until 2026-09-07 this asserted the opposite of its first half — "the
+// feed only ever quotes models songguo declares" — under the name
+// TestRefreshIgnoresUndeclaredModels. It was renamed rather than edited so the
+// inversion had to be decided at the compiler, instead of an existing test
+// quietly changing meaning.
+func TestRefreshQuotesEveryModelOfAMappedProvider(t *testing.T) {
 	st := openTestStore(t)
 	fd := newTestFeed(t, st, &stubFetcher{providers: map[string]catalog.Provider{
 		"openai": {ID: "openai", Name: "OpenAI", Models: map[string]catalog.Model{
-			"gpt-5.6-luna":     {ID: "gpt-5.6-luna", Cost: catalog.Cost{Input: 0.2}},
-			"some-new-model":   {ID: "some-new-model", Cost: catalog.Cost{Input: 9}},
-			"another-unlisted": {ID: "another-unlisted", Cost: catalog.Cost{Input: 9}},
+			"gpt-5.6-luna":   {ID: "gpt-5.6-luna", Cost: catalog.Cost{Input: 0.2}},
+			"some-new-model": {ID: "some-new-model", Cost: catalog.Cost{Input: 9}},
 		}},
 		// Not mapped to any songguo provider.
 		"cerebras": {ID: "cerebras", Name: "Cerebras", Models: map[string]catalog.Model{
@@ -143,14 +159,14 @@ func TestRefreshIgnoresUndeclaredModels(t *testing.T) {
 	fd.refresh(context.Background())
 
 	got, _ := st.ListFeedPrices()
-	if _, ok := got["openai"]["some-new-model"]; ok {
-		t.Error("feed quoted a model the catalog does not declare")
-	}
-	if _, ok := got["cerebras"]; ok {
-		t.Error("feed quoted a provider songguo does not map")
+	if _, ok := got["openai"]["some-new-model"]; !ok {
+		t.Error("feed dropped a model the catalog does not declare — the case the refresh exists to cover")
 	}
 	if _, ok := got["openai"]["gpt-5.6-luna"]; !ok {
 		t.Error("feed dropped a declared model")
+	}
+	if _, ok := got["cerebras"]; ok {
+		t.Error("feed quoted a provider songguo does not map — a reseller's markup would become a published rate")
 	}
 }
 

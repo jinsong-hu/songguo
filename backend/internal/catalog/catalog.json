@@ -1007,8 +1007,7 @@
         "docs": "https://platform.kimi.com/docs/api/overview.md",
         "note": "Automatic context caching on k2.5+; cached tokens reported as top-level usage.cached_tokens. Prices are CNY list ÷ 7.2.",
         "models": [
-          "kimi-k2.6",
-          "kimi-k2.5"
+          "kimi-k2.6"
         ]
       },
       {
@@ -1024,8 +1023,7 @@
         "note": "Same models, Anthropic wire format. Moonshot's recommended Claude Code model is kimi-k2.7-code (thinking always on).",
         "models": [
           "kimi-k2.7-code",
-          "kimi-k2.6",
-          "kimi-k2.5"
+          "kimi-k2.6"
         ]
       }
     ]

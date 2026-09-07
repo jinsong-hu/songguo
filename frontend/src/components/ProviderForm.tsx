@@ -297,7 +297,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
       (id) => {
         const price = priceFor(id);
         // Only an override puts a rate on the row; otherwise the row states the
-        // model and the resolver supplies the rate. See catalogPrice.
+        // model and the resolver supplies the rate. See modelRow in VendorAdd.
         if (!price.price_override) return { model: id, cost: {} };
         return { model: id, cost: price.cost, price_override: true };
       },

@@ -1,0 +1,40 @@
+# Compares the embedded prices in internal/catalog/models.json against what
+# models.dev publishes today.
+#
+# Scheduled, not a pull-request check. This job fails when UPSTREAM moves, which
+# is not the contributor's doing — gating merges on it would block unrelated work
+# every time a vendor reprices. What it is for is noticing, because nothing else
+# does: the drift it catches is invisible in the diff, invisible at runtime, and
+# shows up only as a wrong number on a bill.
+#
+# History: this guard was written with the package it protects and then run by
+# hand, behind a build tag, via `make catalog-check`. In the months it existed it
+# was never once run automatically, and gpt-5.6-sol sat embedded at 5/30 against
+# a published 4/20 — over-billing every call that resolved from the catalog
+# rather than the feed.
+#
+# A failure is fixed with `make catalog-sync`, which rewrites models.json.
+name: Catalog price drift
+
+on:
+  schedule:
+    # 07:19 UTC. Deliberately not on the hour: models.dev is a small
+    # community-run service and the top of every hour is when everyone's cron
+    # fires.
+    - cron: '19 7 * * *'
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+
+      - name: Compare embedded prices against models.dev
+        run: make catalog-check

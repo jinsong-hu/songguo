@@ -298,9 +298,20 @@ type priceSources struct {
 // effectivePrice resolves one model's rate from, in order:
 //
 //  1. the operator's own row, when they marked it price_override;
-//  2. the price feed, which is why a stale rate self-corrects;
-//  3. the embedded catalog, the offline floor and first-boot seed;
-//  4. the operator's row as-is, else unpriced (pass 2 may lend it a fallback).
+//  2. the price feed for this provider's catalog id, which is why a stale rate
+//     self-corrects;
+//  3. the feed under ANY provider, for a row that names no catalog id;
+//  4. the embedded catalog, same two steps — the offline floor and first-boot
+//     seed, used until a refresh lands;
+//  5. the operator's row as-is, else unpriced (pass 2 may lend it a fallback).
+//
+// Steps 3 and 5 are why most operators get a current rate at all. A provider
+// added from the "Custom" tile carries no catalog id, and until the feed grew an
+// any-provider step those rows could reach only the EMBEDDED catalog — so the
+// daily refresh, which is the entire point of internal/pricefeed, did nothing
+// for them. On the deployment this was found in, that was 11 of 13 providers,
+// billing a build-time snapshot while the correct number sat unread in the
+// feed_prices table.
 //
 // A rate hand-pinned in catalog.json needs no rule of its own: modelsdev.Generate
 // skips every model the hand-written file defines, and the feed is built from
@@ -309,6 +320,9 @@ type priceSources struct {
 func effectivePrice(catalogID string, m store.ProviderModel, src priceSources) config.Price {
 	if !m.PriceOverride {
 		if p, ok := feedPrice(src.feed, catalogID, m.Model); ok {
+			return p
+		}
+		if p, ok := feedAnyModelPrice(src.feed, m.Model); ok {
 			return p
 		}
 		if p, ok := catalogModelPrice(src.catalog, catalogID, m.Model); ok {
@@ -386,18 +400,86 @@ func fallbackPrice(prices map[string]config.Price, forModel string) (config.Pric
 	return best, bestModel, true
 }
 
-// feedPrice reads the last successful refresh. A provider row with no catalog_id
-// is not matched: the feed is keyed by catalog provider, and guessing which
-// upstream an unlabelled provider corresponds to would be inventing a rate.
+// rehosts are catalog providers that resell models another vendor makes, at
+// their own markup. They are ranked LAST when a model id has to be matched
+// without a catalog id to narrow it (see anyProviderOrder).
+//
+// Membership is about the price list, not the company: azure-openai is here
+// because models.dev's "azure" list carries 87 models — Anthropic's, DeepSeek's,
+// xAI's, Moonshot's — at Azure's rates, and dashscope because Alibaba re-hosts
+// Zhipu's GLM line alongside its own Qwen models. Both are still the RIGHT
+// source for a provider that names them, which is why they are demoted rather
+// than excluded.
+var rehosts = map[string]bool{"azure-openai": true, "dashscope": true}
+
+// anyProviderOrder is the order providers are consulted when a model id must be
+// resolved without a catalog id: makers first, re-hosts last, alphabetical
+// within each group so a reload never changes the answer.
+//
+// The ordering is a correctness fix, not a tidiness one. Plain alphabetical
+// order put azure-openai ahead of deepseek and xai, and once the generator began
+// taking each provider's whole published list that became actively wrong:
+//
+//	deepseek-v4-pro    azure-openai 1.74/3.48   vs deepseek 0.435/0.87  (4x over)
+//	deepseek-v4-flash  azure-openai 0.19/0.51   vs deepseek 0.14/0.28
+//	grok-4.6           azure-openai NO COST     vs xai      2/6         (meters $0)
+//
+// The last row is why the two any-provider lookups also skip a candidate whose
+// cost meters zero: a provider can list a model it publishes no rate for, and
+// letting that win would convert a real rate into free — the same silent zero
+// this change exists to remove.
+//
+// That skip is deliberately NOT applied when a provider names its catalog id.
+// There a published zero is a real price meaning free — the catalog carries
+// genuinely free tiers — and the rest of this file already depends on telling
+// that apart from "nobody stated a rate" (see the provenance gate in
+// vendorsFromProvider's pass 2). The difference is that an exact match is an
+// answer and an any-provider match is a guess, and only a guess should decline
+// to believe a zero.
+func anyProviderOrder(ids []string) []string {
+	sort.SliceStable(ids, func(i, j int) bool {
+		if rehosts[ids[i]] != rehosts[ids[j]] {
+			return !rehosts[ids[i]]
+		}
+		return ids[i] < ids[j]
+	})
+	return ids
+}
+
+// feedPrice reads the last successful refresh for a provider that names its
+// catalog id. Model ids are matched canonically (catalog.LookupIDs), so an
+// operator who typed claude-fable-5.1 still resolves the feed's
+// claude-fable-5-1.
 func feedPrice(feed map[string]map[string]store.FeedPrice, catalogID, model string) (config.Price, bool) {
 	if catalogID == "" || feed == nil {
 		return config.Price{}, false
 	}
-	fp, ok := feed[catalogID][model]
-	if !ok {
-		return config.Price{}, false
+	return feedPriceFrom(feed[catalogID], model)
+}
+
+// feedAnyModelPrice matches a model id under any provider in the feed — the
+// feed's counterpart to catalogAnyModelPrice, for the provider rows that carry
+// no catalog id. Without it those rows never see a refreshed rate at all.
+func feedAnyModelPrice(feed map[string]map[string]store.FeedPrice, model string) (config.Price, bool) {
+	for _, id := range anyProviderOrder(config.SortedKeys(feed)) {
+		if p, ok := feedPriceFrom(feed[id], model); ok && !config.PriceMetersZero(p) {
+			return p, true
+		}
 	}
-	return config.Price{Cost: fp.Cost, Source: config.PriceSourceFeed}, true
+	return config.Price{}, false
+}
+
+func feedPriceFrom(models map[string]store.FeedPrice, model string) (config.Price, bool) {
+	index := make(map[string]store.FeedPrice, len(models))
+	for k, v := range models {
+		index[catalog.CanonicalID(k)] = v
+	}
+	for _, id := range catalog.LookupIDs(model) {
+		if fp, ok := index[id]; ok {
+			return config.Price{Cost: fp.Cost, Source: config.PriceSourceFeed}, true
+		}
+	}
+	return config.Price{}, false
 }
 
 func catalogModelPrice(cat catalog.Catalog, catalogID, model string) (config.Price, bool) {
@@ -408,24 +490,29 @@ func catalogModelPrice(cat catalog.Catalog, catalogID, model string) (config.Pri
 	if !ok {
 		return config.Price{}, false
 	}
-	m, ok := p.Models[model]
-	if !ok {
-		return config.Price{}, false
-	}
-	return config.Price{Cost: m.Cost, Source: config.PriceSourceCatalog}, true
+	return catalogPriceFrom(p.Models, model)
 }
 
 // catalogAnyModelPrice matches a model id under any provider, for a provider row
-// that carries no catalog_id. Iteration order over a map is random, so the
-// providers are visited in a stable order to keep the resolved price the same
-// across reloads when two presets happen to serve the same model id.
+// that carries no catalog_id. See anyProviderOrder for why the order matters.
 func catalogAnyModelPrice(cat catalog.Catalog, model string) (config.Price, bool) {
-	for _, id := range config.SortedKeys(cat) {
-		m, ok := cat[id].Models[model]
-		if !ok {
-			continue
+	for _, id := range anyProviderOrder(config.SortedKeys(cat)) {
+		if p, ok := catalogPriceFrom(cat[id].Models, model); ok && !config.PriceMetersZero(p) {
+			return p, true
 		}
-		return config.Price{Cost: m.Cost, Source: config.PriceSourceCatalog}, true
+	}
+	return config.Price{}, false
+}
+
+func catalogPriceFrom(models map[string]catalog.Model, model string) (config.Price, bool) {
+	index := make(map[string]catalog.Model, len(models))
+	for k, v := range models {
+		index[catalog.CanonicalID(k)] = v
+	}
+	for _, id := range catalog.LookupIDs(model) {
+		if m, ok := index[id]; ok {
+			return config.Price{Cost: m.Cost, Source: config.PriceSourceCatalog}, true
+		}
 	}
 	return config.Price{}, false
 }

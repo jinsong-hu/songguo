@@ -32,6 +32,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"regexp"
+	"strings"
 )
 
 //go:embed models.json
@@ -327,9 +329,67 @@ func merge(gen, man Catalog) Catalog {
 	return out
 }
 
+// versionDot matches a dot used as a version separator: one between two digits.
+// The guard on both sides is the whole rule — a bare dot-to-dash rewrite would
+// also mangle a dot that separates words.
+var versionDot = regexp.MustCompile(`(\d)\.(\d)`)
+
+// CanonicalID is the form two model ids are compared in.
+//
+// The same model is written two ways in the wild. songguo (and the operator
+// typing into the dashboard) carries claude-fable-5.1 and gpt-5.6-sol, where
+// models.dev keys them claude-fable-5-1 and gpt-5-6-sol. Comparing the literal
+// strings therefore misses, and the miss is expensive: a model that fails to
+// match its published rate meters as unpriced.
+//
+// Lowercasing and rewriting the version dot to a dash collapses both spellings
+// onto one key, in one rule that needs no direction. That replaces the older
+// approach of deriving candidate spellings per lookup, which only ever
+// converted dash to dot and so could not find a dotted id at all.
+//
+// The substitution runs twice because the pattern consumes the digit on either
+// side, so a chain like 2.0.1 needs a second pass for the middle — the same
+// reason modelsdev.dots ran twice.
+//
+// Two DISTINCT models must never meet here: colliding ids would silently merge
+// their prices, which is a worse failure than not matching at all.
+// TestCanonicalIDNeverCollides holds that against every id models.dev publishes
+// under a provider songguo maps.
+func CanonicalID(id string) string {
+	s := strings.ToLower(id)
+	return versionDot.ReplaceAllString(versionDot.ReplaceAllString(s, "$1-$2"), "$1-$2")
+}
+
+// dateSuffix matches a trailing -YYYYMMDD release pin, e.g.
+// claude-haiku-4-5-20251001.
+var dateSuffix = regexp.MustCompile(`-\d{8}$`)
+
+// LookupIDs returns the canonical forms to try when resolving a model id to a
+// published rate, most specific first:
+//
+//  1. the id itself, so an upstream that lists the dated build separately (both
+//     claude-haiku-4-5 and claude-haiku-4-5-20251001 exist) wins on its own row;
+//  2. the id with its trailing -YYYYMMDD release pin dropped, so a dated id the
+//     upstream does NOT list still finds the undated model it is a build of.
+//
+// Order is the whole point. Falling back to the undated rate is right when
+// nothing more specific exists and wrong when it does — vendors reprice between
+// builds, so a dated id must never take a sibling build's number while its own
+// is published.
+func LookupIDs(id string) []string {
+	canon := CanonicalID(id)
+	out := []string{canon}
+	if undated := dateSuffix.ReplaceAllString(canon, ""); undated != canon {
+		out = append(out, undated)
+	}
+	return out
+}
+
 // DeclaredModels returns the model ids a provider's endpoints serve, deduped.
-// It is the set cmd/catalogsync generates prices for: the catalog carries the
-// models songguo actually routes, not every model an upstream happens to list.
+// It is what the dashboard offers as the preset's suggested models; pricing does
+// NOT consult it. modelsdev.Generate prices every model the upstream publishes,
+// so a model missing from this list still meters correctly — which is the whole
+// point, since a vendor ships models faster than this file is edited.
 func (p Provider) DeclaredModels() []string {
 	seen := make(map[string]bool)
 	var out []string

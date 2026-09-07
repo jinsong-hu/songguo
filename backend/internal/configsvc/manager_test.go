@@ -534,6 +534,138 @@ func TestManagerBorrowsCatalogPriceForUnlinkedProvider(t *testing.T) {
 	}
 }
 
+// TestFeedReachesProvidersWithNoCatalogID is the fix for what made the daily
+// refresh a no-op on a real deployment. A provider added from the "Custom" tile
+// records no catalog id, and feedPrice will not guess one — so before
+// feedAnyModelPrice existed those rows could reach only the EMBEDDED catalog and
+// billed a build-time snapshot forever. It was 11 of 13 providers there.
+func TestFeedReachesProvidersWithNoCatalogID(t *testing.T) {
+	st := openTestStore(t)
+
+	// The refresh corrected this rate; the embedded catalog still has the old one.
+	if err := st.ReplaceFeedPrices([]store.FeedPrice{
+		{ProviderID: "openai", Model: "gpt-5.6-sol", Cost: catalog.Cost{Input: 4, Output: 20}},
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "reseller", Vendor: "Custom", Enabled: true, APIKey: "sk-a", // no CatalogID
+		Models:    []store.ProviderModel{{Model: "gpt-5.6-sol", Cost: catalog.Cost{}}},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://relay.example.com/v1/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	p, ok := m.Current().PriceFor("reseller", "gpt-5.6-sol")
+	if !ok {
+		t.Fatal("no price resolved")
+	}
+	if p.Cost.Input != 4 || p.Cost.Output != 20 {
+		t.Errorf("gpt-5.6-sol = %+v, want the feed's 4/20 — a provider with no catalog id is still owed the refresh", p.Cost)
+	}
+	if p.Source != config.PriceSourceFeed {
+		t.Errorf("source = %q, want %q", p.Source, config.PriceSourceFeed)
+	}
+}
+
+// TestAnyProviderPrefersTheMakerOverAReseller is the guard on the riskiest part
+// of taking each provider's whole published list. models.dev's azure list
+// carries 87 models it re-hosts — Anthropic's, DeepSeek's, xAI's — at Azure's
+// rates, and the any-provider lookup used to visit providers alphabetically, so
+// "azure-openai" beat "deepseek" and "xai".
+//
+// Two distinct failures, both of them silent:
+//
+//   - a re-host's markup wins (deepseek-v4-pro at 1.74 against 0.435), and
+//   - a re-host that lists the model with NO cost wins, converting a real rate
+//     into free.
+func TestAnyProviderPrefersTheMakerOverAReseller(t *testing.T) {
+	st := openTestStore(t)
+
+	if err := st.ReplaceFeedPrices([]store.FeedPrice{
+		// The re-host: a markup on one model, no rate at all on the other.
+		{ProviderID: "azure-openai", Model: "deepseek-v4-pro", Cost: catalog.Cost{Input: 1.74, Output: 3.48}},
+		{ProviderID: "azure-openai", Model: "grok-4.6", Cost: catalog.Cost{}},
+		{ProviderID: "azure-openai", Model: "gpt-image-1", Cost: catalog.Cost{Input: 5, Output: 40}},
+		// The makers.
+		{ProviderID: "deepseek", Model: "deepseek-v4-pro", Cost: catalog.Cost{Input: 0.435, Output: 0.87}},
+		{ProviderID: "xai", Model: "grok-4.6", Cost: catalog.Cost{Input: 2, Output: 6}},
+		// A MAKER that lists a model without publishing a rate for it — real,
+		// models.dev's openai entry for gpt-image-1 carries no cost. Ordering
+		// cannot save this one: openai is not a re-host, so it is visited first
+		// and only the zero check moves past it.
+		{ProviderID: "openai", Model: "gpt-image-1", Cost: catalog.Cost{}},
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "reseller", Vendor: "Custom", Enabled: true, APIKey: "sk-a", // no CatalogID
+		Models: []store.ProviderModel{
+			{Model: "deepseek-v4-pro", Cost: catalog.Cost{}},
+			{Model: "grok-4.6", Cost: catalog.Cost{}},
+			{Model: "gpt-image-1", Cost: catalog.Cost{}},
+		},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://relay.example.com/v1/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// The ordering carries this one: both list a rate, and the maker's wins.
+	pro, _ := m.Current().PriceFor("reseller", "deepseek-v4-pro")
+	if pro.Cost.Input != 0.435 || pro.Cost.Output != 0.87 {
+		t.Errorf("deepseek-v4-pro = %+v, want DeepSeek's own 0.435/0.87, not Azure's markup", pro.Cost)
+	}
+	// The zero check carries this one, and it is the failure that costs real
+	// money: a rate silently becoming free.
+	img, _ := m.Current().PriceFor("reseller", "gpt-image-1")
+	if img.Cost.Input != 5 || img.Cost.Output != 40 {
+		t.Errorf("gpt-image-1 = %+v, want 5/40 — a listing with no rate must not win and meter the model free", img.Cost)
+	}
+	// Belt and braces: here both mechanisms point the same way.
+	grok, _ := m.Current().PriceFor("reseller", "grok-4.6")
+	if grok.Cost.Input != 2 || grok.Cost.Output != 6 {
+		t.Errorf("grok-4.6 = %+v, want xAI's 2/6", grok.Cost)
+	}
+}
+
+// An operator types the dotted spelling a client sends; models.dev keys some
+// models with dashes. Before canonical matching the two never met, so the model
+// resolved as unpriced and the fallback pass lent it a sibling's rate.
+func TestPriceResolvesAcrossDottedAndDashedSpellings(t *testing.T) {
+	st := openTestStore(t)
+
+	if err := st.ReplaceFeedPrices([]store.FeedPrice{
+		{ProviderID: "anthropic", Model: "claude-fable-5-1", Cost: catalog.Cost{Input: 10, Output: 50}},
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "sub2api", Vendor: "Custom", Enabled: true, APIKey: "sk-a",
+		Models:    []store.ProviderModel{{Model: "claude-fable-5.1", Cost: catalog.Cost{}}},
+		Endpoints: []store.ProviderEndpoint{{Wire: "anthropic/messages", Endpoint: "https://relay.example.com/v1/messages", Adapter: "anthropic-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := NewManager(st, quietLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	p, _ := m.Current().PriceFor("sub2api", "claude-fable-5.1")
+	if p.Cost.Input != 10 || p.Cost.Output != 50 {
+		t.Errorf("claude-fable-5.1 = %+v, want the feed's claude-fable-5-1 at 10/50", p.Cost)
+	}
+}
+
 // A provider whose endpoints span two (origin, adapter) groups (e.g. DeepSeek's
 // OpenAI and Anthropic surfaces, same host but different auth) expands into two
 // routing vendors sharing one key: the primary group keeps the provider name,

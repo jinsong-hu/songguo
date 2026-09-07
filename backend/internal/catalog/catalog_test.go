@@ -8,11 +8,14 @@ import (
 
 // TestCatalogLoads parses and merges the embedded files and checks structural
 // invariants: every endpoint names a registered wire and a non-empty URL +
-// adapter, and every model an endpoint references is defined in the provider's
-// model map. That last one is what keeps the generated models.json and the
-// hand-written catalog.json from drifting apart — cmd/catalogsync generates
-// exactly the models the endpoints declare, so a gap means the sync is stale or
-// a hand edit dropped a model an endpoint still serves.
+// adapter, and every model an endpoint suggests is defined in the provider's
+// model map.
+//
+// That last check changed meaning when cmd/catalogsync started generating every
+// model an upstream publishes rather than only the ones the endpoints name. It
+// no longer detects a stale SYNC — a model an endpoint omits is now priced
+// anyway. It detects a stale catalog.json: an endpoint suggesting a model
+// models.dev has retired, which is a dead entry in the dashboard's picker.
 func TestCatalogLoads(t *testing.T) {
 	c, err := Load()
 	if err != nil {
@@ -26,6 +29,15 @@ func TestCatalogLoads(t *testing.T) {
 		"openai-compatible":    true,
 		"anthropic-compatible": true,
 		"volc-speech":          true,
+	}
+
+	canon := make(map[string]map[string]bool, len(c))
+	for id, p := range c {
+		set := make(map[string]bool, len(p.Models))
+		for mid := range p.Models {
+			set[CanonicalID(mid)] = true
+		}
+		canon[id] = set
 	}
 
 	for id, p := range c {
@@ -49,8 +61,12 @@ func TestCatalogLoads(t *testing.T) {
 				t.Errorf("provider %q endpoint %q has unknown adapter %q", id, ep.Wire, ep.Adapter)
 			}
 			for _, m := range ep.Models {
-				if _, ok := p.Models[m]; !ok {
-					t.Errorf("provider %q endpoint %q references model %q not in provider models", id, ep.Wire, m)
+				// Canonically, because the two files legitimately spell a
+				// version differently: catalog.json carries the dotted form a
+				// client sends, models.json carries models.dev's key. A literal
+				// compare would report drift where there is none.
+				if _, ok := canon[id][CanonicalID(m)]; !ok {
+					t.Errorf("provider %q endpoint %q suggests model %q, which models.dev no longer publishes — drop it from catalog.json", id, ep.Wire, m)
 				}
 			}
 		}
@@ -107,9 +123,90 @@ func TestMergeKeepsGeneratedIdentityWhenManualIsSilent(t *testing.T) {
 	}
 }
 
-// TestDeclaredModels is what cmd/catalogsync reads to decide what to generate,
+// TestCanonicalID pins the rule that lets the two spellings of a model id meet.
+func TestCanonicalID(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		// The version dot becomes a dash, which is the whole job.
+		{"claude-fable-5.1", "claude-fable-5-1"},
+		{"claude-fable-5-1", "claude-fable-5-1"},
+		{"gpt-5.6-sol", "gpt-5-6-sol"},
+		{"GPT-5.6-Sol", "gpt-5-6-sol"},
+		// Twice, because the pattern consumes the digit on either side and a
+		// chain would otherwise keep its middle separator.
+		{"doubao-seed-2.0.1-pro", "doubao-seed-2-0-1-pro"},
+		// A dot NOT between two digits is not a version separator and stays.
+		{"gpt-4o.preview", "gpt-4o.preview"},
+		// Already-dashed and dotless ids are untouched.
+		{"gpt-5-mini", "gpt-5-mini"},
+		{"gpt-6-astra", "gpt-6-astra"},
+		{"text-embedding-3-small", "text-embedding-3-small"},
+	} {
+		if got := CanonicalID(tc.in); got != tc.want {
+			t.Errorf("CanonicalID(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestLookupIDsPrefersTheDatedBuild guards the ordering rule: a dated id must
+// take its OWN published rate when the upstream lists it, and fall back to the
+// undated model only when it does not. Vendors reprice between builds, so the
+// reverse order would quietly bill a build at a sibling's rate.
+func TestLookupIDsPrefersTheDatedBuild(t *testing.T) {
+	got := LookupIDs("claude-haiku-4-5-20251001")
+	want := []string{"claude-haiku-4-5-20251001", "claude-haiku-4-5"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("LookupIDs = %v, want %v", got, want)
+	}
+	// An id with no date pin yields exactly one form — no speculative second
+	// lookup that could match something else.
+	if got := LookupIDs("gpt-6-astra"); len(got) != 1 || got[0] != "gpt-6-astra" {
+		t.Fatalf("LookupIDs(gpt-6-astra) = %v, want [gpt-6-astra]", got)
+	}
+	// A trailing number that is not 8 digits is a version, not a date pin.
+	if got := LookupIDs("qwen3.8-max-0902"); len(got) != 1 {
+		t.Fatalf("LookupIDs(qwen3.8-max-0902) = %v, want one form", got)
+	}
+}
+
+// TestCanonicalIDNeverCollides is the safety net under CanonicalID. Two distinct
+// models meeting under the rule would silently merge their prices — one would
+// bill at the other's rate with nothing to show for it — which is strictly worse
+// than the missed match the rule exists to fix.
+//
+// It runs over the embedded catalog, which since the generator began taking each
+// mapped provider's whole published list is a full copy of what models.dev names
+// under those providers. So a future upstream id that collides with one we
+// already carry fails here at the next `make catalog-sync`, before it can reach
+// a price.
+func TestCanonicalIDNeverCollides(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	checked := 0
+	for id, p := range c {
+		seen := make(map[string]string, len(p.Models))
+		for mid := range p.Models {
+			checked++
+			k := CanonicalID(mid)
+			if prev, dup := seen[k]; dup {
+				t.Errorf("provider %q: %q and %q both canonicalize to %q — their prices would merge", id, prev, mid, k)
+				continue
+			}
+			seen[k] = mid
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no models checked — this test is vacuous")
+	}
+	t.Logf("checked %d model id(s) for canonical collisions", checked)
+}
+
+// TestDeclaredModels covers the dashboard's suggested-model list for a preset,
 // so it must dedupe across endpoints that share a model and skip companion
-// wires that serve none.
+// wires that serve none. Pricing no longer reads it — modelsdev.Generate prices
+// every model the upstream publishes — so a gap here costs a suggestion, not a
+// rate.
 func TestDeclaredModels(t *testing.T) {
 	p := Provider{Endpoints: []Endpoint{
 		{Wire: "openai/chat", Models: []string{"a", "b"}},

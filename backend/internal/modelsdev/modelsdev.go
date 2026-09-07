@@ -1,10 +1,18 @@
 // Package modelsdev reads model metadata and prices from models.dev's public
-// api.json and selects the entries songguo carries.
+// api.json and takes every model published by the providers songguo maps.
 //
 // It is the source behind both cmd/catalogsync (which writes models.json at
 // build time) and internal/pricefeed (which refreshes prices in a running
 // gateway). Neither path lets a fetched rate reach metering unchecked — see
 // pricefeed for the gates.
+//
+// # models.dev is the base; catalog.json is the override
+//
+// The published list is the floor, and the hand-written catalog.json states only
+// what models.dev cannot: the routing topology, the models with no first-party
+// upstream (every Volcengine one), and any rate an operator wants pinned. So a
+// model a vendor ships today is priced by the next refresh, without an edit, a
+// rebuild or a deploy. See Generate for why that direction is the safe one.
 //
 // # Why models.dev rather than a model-first list
 //
@@ -32,10 +40,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
-	"slices"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/songguo/songguo/internal/catalog"
@@ -69,15 +74,9 @@ var providerFor = map[string]string{
 	"zhipu":        "zhipuai",
 }
 
-// aliases pins a songguo model id to a models.dev key when the derivation rules
-// in slugsFor cannot get there. Empty today — the dash-to-dot and date-suffix
-// rules cover every model we carry — and it exists so the next irregularly named
-// model has an obvious home instead of a new special case.
-var aliases = map[string]string{}
-
-// Skip records a model the generator left alone, and why. Every declared model
-// that is not generated produces one, so the report names the hand-maintained
-// half rather than leaving it as a silent absence.
+// Skip records something the generator left alone, and why, so the sync report
+// names the hand-maintained half rather than leaving it as a silent absence.
+// Model is empty when the whole provider was skipped.
 type Skip struct {
 	Provider string
 	Model    string
@@ -117,49 +116,67 @@ func (c *Client) Fetch(ctx context.Context) (map[string]catalog.Provider, error)
 
 // Generate builds the generated half of the catalog from an upstream snapshot.
 //
-// For each mapped provider it emits exactly the models the hand-written catalog
-// declares through its endpoints — songguo carries the models it routes, not
-// every model an upstream happens to list. A model the hand-written file already
-// prices is skipped, so catalog.json always wins and stays the place to pin a
-// rate.
+// For each mapped provider it emits EVERY model models.dev lists under it. A
+// model the hand-written file already prices is skipped, so catalog.json always
+// wins and stays the place to pin a rate.
+//
+// # Why the whole list, and not the models we declare
+//
+// This used to iterate hand[id].DeclaredModels() — the ids written on
+// catalog.json's endpoints — so models.dev was only ever queried, never
+// enumerated. That made pricing a new model a RELEASE: edit catalog.json, run
+// catalogsync, rebuild, redeploy. In the gap, a model a vendor shipped last week
+// metered as unpriced however promptly models.dev published its rate, and the
+// fallback pass then lent it a sibling's number. gpt-6-astra arrived priced at
+// 10/50 upstream and billed at 5/30; grok-4.6 billed at zero. Enumerating
+// upstream makes a new model a config change instead.
+//
+// The cost of the old rule was never paid for by the thing it bought. Carrying a
+// price for a model nobody routes is free — it is one row nothing reads — while
+// missing one silently misbills every call.
+//
+// # Why NOT every provider models.dev carries
+//
+// providerFor stays exactly as it is, and this is the load-bearing restriction.
+// models.dev lists 213 providers; 1,081 model ids appear under more than one and
+// 834 of those DISAGREE on price, because most are resellers. deepseek-v4-pro is
+// 0.435/0.87 under deepseek's own list and up to 1.215/3.645 under a reseller's.
+// Enumerating the nine first-party lists is what keeps a price attributable to
+// the vendor that set it; widening the map would trade a missing price for a
+// wrong one, which is the worse failure.
 func Generate(upstream map[string]catalog.Provider, hand catalog.Catalog) (catalog.Catalog, []Skip) {
 	out := make(catalog.Catalog)
 	var skips []Skip
 
 	for _, id := range sortedKeys(hand) {
 		ours := hand[id]
-		declared := ours.DeclaredModels()
-		sort.Strings(declared)
 
 		mdID, mapped := providerFor[id]
 		if !mapped {
-			for _, m := range declared {
-				skips = append(skips, Skip{id, m, "provider has no models.dev counterpart"})
-			}
+			skips = append(skips, Skip{id, "", "provider has no models.dev counterpart"})
 			continue
 		}
 		up, ok := upstream[mdID]
 		if !ok {
-			for _, m := range declared {
-				skips = append(skips, Skip{id, m, "models.dev has no provider " + mdID})
-			}
+			skips = append(skips, Skip{id, "", "models.dev has no provider " + mdID})
 			continue
 		}
 
 		models := make(map[string]catalog.Model)
-		for _, m := range declared {
-			if _, pinned := ours.Models[m]; pinned {
-				skips = append(skips, Skip{id, m, "pinned in catalog.json"})
+		for _, m := range sortedKeys(up.Models) {
+			// Pinning is matched on the canonical id so a rate hand-pinned as
+			// glm-4.5 is not overwritten by an upstream glm-4-5. Without that,
+			// TestGenerateNeverEmitsAPinnedModel's guarantee would hold only for
+			// ids that happen to be spelled identically on both sides.
+			if pinnedID, pinned := pinnedAs(ours, m); pinned {
+				skips = append(skips, Skip{id, pinnedID, "pinned in catalog.json"})
 				continue
 			}
-			found, ok := lookup(up.Models, m)
-			if !ok {
-				skips = append(skips, Skip{id, m, "not listed by models.dev/" + mdID})
-				continue
-			}
-			// Key and id are songguo's model string — what a client actually
-			// sends and what routing matches. models.dev's key differs only in
-			// the dotted version forms (claude-opus-4.8 vs claude-opus-4-8).
+			found := up.Models[m]
+			// The key is models.dev's own string. Lookups canonicalize both
+			// sides (catalog.CanonicalID), so an operator who types the dotted
+			// spelling still resolves — there is no need to guess here which of
+			// the two forms a client will send.
 			found.ID = m
 			models[m] = found
 		}
@@ -246,55 +263,24 @@ func retryable(err error) bool {
 	return true
 }
 
-var (
-	dateSuffix = regexp.MustCompile(`-\d{8}$`)
-	digitDash  = regexp.MustCompile(`(\d)-(\d)`)
-)
-
-// lookup finds the models.dev entry for a songguo model id, trying the id as
-// written before any rewriting so a literal match always wins.
-func lookup(models map[string]catalog.Model, id string) (catalog.Model, bool) {
-	lower := make(map[string]catalog.Model, len(models))
-	for k, v := range models {
-		lower[strings.ToLower(k)] = v
-	}
-	for _, c := range slugsFor(id) {
-		if m, ok := lower[c]; ok {
-			return m, true
+// pinnedAs reports whether catalog.json prices a model that is the same model as
+// the given upstream id, and under which spelling it wrote it.
+//
+// The comparison is canonical rather than literal because the two files spell
+// versions differently: a rate pinned as glm-4.5 must still shield an upstream
+// glm-4-5. A literal match would let the generator emit the upstream twin
+// alongside the pin, and since merge() lets the hand-written entry win, the
+// result would be a generated row that is never read — invisible, but exactly
+// the "the feed overwrote a rate someone typed on purpose" failure if the merge
+// order ever changed.
+func pinnedAs(ours catalog.Provider, upstreamID string) (string, bool) {
+	want := catalog.CanonicalID(upstreamID)
+	for id := range ours.Models {
+		if catalog.CanonicalID(id) == want {
+			return id, true
 		}
 	}
-	return catalog.Model{}, false
-}
-
-// slugsFor derives the models.dev keys to try for a songguo model id, in
-// preference order and lowercased. Three rules cover everything we carry:
-//
-//   - the id verbatim, which is most of them;
-//   - a dash between two digits is a version separator models.dev writes as a
-//     dot (claude-opus-4-8 -> claude-opus-4.8). The guard on both sides is the
-//     point: a bare dash-before-digit rule would mangle gpt-5-mini;
-//   - a trailing -YYYYMMDD pin is dropped (claude-haiku-4-5-20251001).
-//
-// Anything left over goes in aliases.
-func slugsFor(id string) []string {
-	if a, ok := aliases[id]; ok {
-		return []string{strings.ToLower(a)}
-	}
-	noDate := dateSuffix.ReplaceAllString(id, "")
-	var out []string
-	for _, form := range []string{id, dots(id), noDate, dots(noDate)} {
-		s := strings.ToLower(form)
-		if !slices.Contains(out, s) {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-// dots rewrites version dashes. Applied twice because the pattern consumes the
-// digit on both sides, so a chain like 4-5-6 needs a second pass for the middle.
-func dots(s string) string {
-	return digitDash.ReplaceAllString(digitDash.ReplaceAllString(s, "$1.$2"), "$1.$2")
+	return "", false
 }
 
 func sortedKeys[V any](m map[string]V) []string {

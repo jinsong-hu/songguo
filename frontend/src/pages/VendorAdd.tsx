@@ -37,8 +37,10 @@ export function VendorAddPage() {
   const needsName = custom || sameVendorCount > 0;
   const suggestedName = custom ? 'my-provider' : vendor ? `${vendor.name} ${sameVendorCount + 1}` : '';
 
-  // Prices for user-typed custom models are borrowed from the built-in catalog by
-  // model id, so the user never re-enters known prices.
+  // Indexed by model id purely to LABEL each row as priced or not while typing.
+  // It does not decide what gets created — see modelRow — and it reads only the
+  // embedded catalog, so a model priced solely by a since-fetched feed refresh
+  // shows "unpriced" here and still meters correctly.
   const priceIndex = useMemo(() => buildPriceIndex(catalog.data), [catalog.data]);
 
   // Model-bearing wires (the cards). Catalog vendors only show wires that already
@@ -162,7 +164,7 @@ export function VendorAddPage() {
         return;
       }
       const wireModels = customWireModels(modelWires, customModels);
-      const { endpoints, models } = buildProvider(vendor, wireModels, (id) => customPrice(id, priceIndex), url, enabledUtility());
+      const { endpoints, models } = buildProvider(vendor, wireModels, modelRow, url, enabledUtility());
       if (models.length === 0) {
         setErr('Add at least one model.');
         return;
@@ -170,7 +172,7 @@ export function VendorAddPage() {
       body = { name: providerName, enabled: true, api_key: apiKey.trim() || undefined, models, endpoints };
     } else {
       const wireModels = catalogWireModels(vendor, checked);
-      const { endpoints, models } = buildProvider(vendor, wireModels, (id) => catalogPrice(id, vendor), null, enabledUtility());
+      const { endpoints, models } = buildProvider(vendor, wireModels, modelRow, null, enabledUtility());
       if (models.length === 0) {
         setErr('Select at least one model.');
         return;
@@ -462,15 +464,20 @@ function customWireModels(
 // here would write a number that is then never used, and that reads in the
 // database as though it were the rate being billed.
 //
-// The row's own cost is populated only when an operator overrides it.
-function catalogPrice(id: string, vendor: CatalogVendor): ProviderModel | null {
-  return vendor.models[id] ? { model: id, cost: {} } : null;
-}
-
-// Same for a custom provider: an id the catalog happens to know is resolved by
-// catalogAnyModelPrice at build time, and one it does not is left unpriced for
-// the fallback pass. Either way the row states no rate of its own.
-function customPrice(id: string, _priceIndex: Record<string, CatalogPrice>): ProviderModel {
+// The row's own cost is populated only when an operator overrides it, which the
+// add form has no field for; ProviderForm's edit path is where that happens.
+//
+// It applies to a preset tile and the custom template alike. A preset used to
+// return null for an id the embedded catalog did not know, and buildProvider
+// drops every null — so typing a model a vendor shipped last week into the
+// OpenAI tile reported success and created nothing. The only way to add it was
+// the Custom template, which records no catalog id, and a provider with no
+// catalog id could not be reached by the price feed at all. One silent drop in
+// this function is what pushed a whole deployment onto stale prices.
+//
+// Nothing here needs to know whether the id is priced: an unknown id is left for
+// the resolver, exactly as ProviderForm already does when editing.
+function modelRow(id: string): ProviderModel {
   return { model: id, cost: {} };
 }
 
