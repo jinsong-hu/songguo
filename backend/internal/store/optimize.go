@@ -21,9 +21,11 @@ import (
 // seconds of scattered IO — acceptable hourly and off the hot path, not
 // acceptable in front of the first request after a deploy.
 
-// Optimize refreshes the query planner's statistics. Safe to call repeatedly and
-// safe to call concurrently with traffic: it takes the write lock only briefly,
-// at the end, to store the statistics it gathered.
+// Optimize refreshes the query planner's statistics. Safe to call repeatedly
+// and concurrently with readers. The Store admission gate is held for the
+// statement so its final statistics write cannot race another mutator; on a
+// never-analyzed database that also makes writers wait through the first scan.
+// Later hourly passes use the much cheaper PRAGMA optimize path.
 //
 // A database that has never been analyzed gets a full ANALYZE; after that the
 // cheaper PRAGMA optimize suffices.
@@ -35,6 +37,8 @@ import (
 // as it found it. The explicit ANALYZE is what guarantees the first pass
 // actually produces stats.
 func (s *Store) Optimize(ctx context.Context) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	has, err := s.hasQueryStats()
 	if err != nil {
 		return err

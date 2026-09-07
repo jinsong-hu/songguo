@@ -34,6 +34,8 @@ type FeedPrice struct {
 // no models, and callers must keep the previous rows instead (see
 // internal/pricefeed).
 func (s *Store) ReplaceFeedPrices(prices []FeedPrice, at time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	if len(prices) == 0 {
 		return fmt.Errorf("store: refusing to replace feed prices with an empty set")
 	}

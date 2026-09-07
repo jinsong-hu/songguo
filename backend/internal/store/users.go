@@ -85,6 +85,8 @@ func genKey() (string, error) {
 // the public User plus the plaintext key, which is shown to the caller only
 // once.
 func (s *Store) CreateUser(nu NewUser) (User, string, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	id, err := randID()
 	if err != nil {
 		return User{}, "", err
@@ -143,6 +145,8 @@ const AdminUserID = "admin"
 // prefix, and full key to the current admin key from .env; an empty key is a
 // no-op (the admin API runs unprotected, so there is no key to mirror).
 func (s *Store) EnsureAdminUser(plaintext string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	if plaintext == "" {
 		return nil
 	}
@@ -270,6 +274,8 @@ func (s *Store) ListUsers() ([]User, error) {
 // UpdateUser applies the non-nil fields of upd to the user and returns the
 // updated row.
 func (s *Store) UpdateUser(id string, upd UserUpdate) (User, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	var (
 		sets []string
 		args []any
@@ -326,6 +332,8 @@ func (s *Store) UpdateUser(id string, upd UserUpdate) (User, error) {
 // RevokeUser marks a user revoked as of now. Revoking an already-revoked
 // user refreshes the timestamp.
 func (s *Store) RevokeUser(id string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	res, err := s.db.Exec(`UPDATE users SET revoked_at = ? WHERE id = ?`, time.Now().Unix(), id)
 	if err != nil {
 		return fmt.Errorf("store: revoke user: %w", err)
@@ -338,6 +346,8 @@ func (s *Store) RevokeUser(id string) error {
 
 // DeleteUser permanently removes a user. An unknown id yields ErrNotFound.
 func (s *Store) DeleteUser(id string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	res, err := s.db.Exec(`DELETE FROM users WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("store: delete user: %w", err)

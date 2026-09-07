@@ -123,6 +123,16 @@ const DefaultQueue = 32768
 // would bury the signal it is trying to raise.
 const blockLogInterval = time.Second
 
+// busyRetryAttempts is deliberately small and bounded. The store serializes
+// all in-process mutators, so this is for an external SQLite writer or a
+// transient driver-level lock that still escapes the gate. Retries happen
+// in-place at the queue head: requeueing would let a finalize or child write
+// overtake a failed create.
+const (
+	busyRetryAttempts = 4
+	busyRetryDelay    = 25 * time.Millisecond
+)
+
 // Stats is a snapshot of queue occupancy and lifetime counters, for the admin
 // API. Depth is the live signal; HighWater and Blocked are what reveal a
 // problem that has already passed.
@@ -243,31 +253,41 @@ func (w *Writer) run() {
 	}
 }
 
-// apply performs one write. A failure is logged and counted, never retried:
-// the ops behind it in the queue belong to other calls and must not wait on
-// this one, and a retry of a create whose finalize is already queued would
-// reorder them.
+// apply performs one write. SQLite lock contention is retried in place at the
+// queue head; all other failures are logged and counted immediately. Keeping
+// a busy retry here, rather than requeueing the op, preserves create ->
+// finalize -> children ordering.
 func (w *Writer) apply(op Op) {
 	var err error
 	switch op.Kind {
-	case KindCreate:
-		err = w.store.CreateCall(op.Entry)
-	case KindFinalize:
-		err = w.store.FinalizeCall(op.Entry)
 	case KindUpsert:
-		if err = w.store.CreateCall(op.Entry); err == nil {
-			err = w.store.FinalizeCall(op.Entry)
+		// These are two independent statements, but they remain one ordered
+		// queue item. If finalize is busy after create committed, retry only
+		// finalize; never repeat create.
+		err = w.retryBusy(func() error { return w.store.CreateCall(op.Entry) })
+		if err == nil {
+			err = w.retryBusy(func() error { return w.store.FinalizeCall(op.Entry) })
 		}
-	case KindPayload:
-		if op.Payload != nil {
-			err = w.store.SavePayload(*op.Payload)
-		}
-	case KindComposition:
-		if op.Composition != nil {
-			err = w.store.SaveComposition(op.CallID, *op.Composition)
-		}
-	case KindBarrier:
-		// Nothing to write; reaching it is the signal.
+	default:
+		err = w.retryBusy(func() error {
+			switch op.Kind {
+			case KindCreate:
+				return w.store.CreateCall(op.Entry)
+			case KindFinalize:
+				return w.store.FinalizeCall(op.Entry)
+			case KindPayload:
+				if op.Payload != nil {
+					return w.store.SavePayload(*op.Payload)
+				}
+			case KindComposition:
+				if op.Composition != nil {
+					return w.store.SaveComposition(op.CallID, *op.Composition)
+				}
+			case KindBarrier:
+				// Nothing to write; reaching it is the signal.
+			}
+			return nil
+		})
 	}
 
 	if err != nil {
@@ -280,6 +300,18 @@ func (w *Writer) apply(op Op) {
 	if op.After != nil {
 		op.After()
 	}
+}
+
+func (w *Writer) retryBusy(write func() error) error {
+	var err error
+	for attempt := 0; attempt < busyRetryAttempts; attempt++ {
+		err = write()
+		if err == nil || !store.IsBusy(err) || attempt == busyRetryAttempts-1 {
+			return err
+		}
+		time.Sleep(busyRetryDelay << attempt)
+	}
+	return err
 }
 
 // callID reports which call an op belongs to, for logging.

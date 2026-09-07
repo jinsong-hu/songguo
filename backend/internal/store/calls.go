@@ -25,6 +25,8 @@ const (
 // known at request-start are persisted here; the rest are filled in at finalize.
 // Usage and Tags are JSON-encoded; ts is stored as unix milliseconds.
 func (s *Store) CreateCall(e calls.Entry) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	if e.ID == "" {
 		return fmt.Errorf("store: create call: empty id")
 	}
@@ -71,6 +73,8 @@ func (s *Store) CreateCall(e calls.Entry) error {
 // > row returned nil and vanished without an error or a log line. Every other
 // > mutator in this package already checks RowsAffected (see users.go).
 func (s *Store) FinalizeCall(e calls.Entry) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	if e.ID == "" {
 		return fmt.Errorf("store: finalize call: empty id")
 	}

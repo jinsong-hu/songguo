@@ -28,6 +28,8 @@ func (s *Store) LoadSpend(userID string) (float64, bool, error) {
 
 // SaveSpend writes a user's running total.
 func (s *Store) SaveSpend(userID string, total float64) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	if _, err := s.db.Exec(
 		`INSERT INTO user_spend (user_id, spend, updated_at) VALUES (?, ?, ?)
 		 ON CONFLICT(user_id) DO UPDATE SET spend = excluded.spend, updated_at = excluded.updated_at`,
@@ -42,6 +44,8 @@ func (s *Store) SaveSpend(userID string, total float64) error {
 // user_spend deliberately has no FK to users, so this is explicit rather than a
 // cascade: an orphaned total must never be able to block deleting a user.
 func (s *Store) DeleteSpend(userID string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	if _, err := s.db.Exec(`DELETE FROM user_spend WHERE user_id = ?`, userID); err != nil {
 		return fmt.Errorf("store: delete spend: %w", err)
 	}

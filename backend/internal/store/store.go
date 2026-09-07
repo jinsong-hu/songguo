@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/catalog"
@@ -29,6 +30,15 @@ var ErrNotFound = errors.New("store: not found")
 // Store is a handle to the SQLite-backed calls and user tables.
 type Store struct {
 	db *sql.DB
+
+	// writeMu is the admission lock shared by every mutation through this Store.
+	// The application owns one Store, so WAL readers remain concurrent while its
+	// SQLite writers queue for the database's single writer slot here. Letting
+	// database/sql connections race for that slot made retention, ledger, spend
+	// and price-feed writes exhaust busy_timeout and lose work. Serialize before
+	// SQLite instead, where callers wait rather than fail and retention can
+	// deliberately yield between batches.
+	writeMu sync.Mutex
 }
 
 // dsnPragmas are applied by the driver on EVERY new connection, which is the
