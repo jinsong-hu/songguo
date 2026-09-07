@@ -66,7 +66,9 @@ func anthropicNormalize(usage map[string]any) Extraction {
 // must be read or input tokens are silently dropped.
 type anthropicScanner struct {
 	lineScanner
-	merged map[string]any
+	merged    map[string]any
+	completed bool
+	streamErr string
 }
 
 func newAnthropicScanner(_ Quirks) StreamScanner {
@@ -87,6 +89,10 @@ func (s *anthropicScanner) processLine(line []byte) {
 		Message struct {
 			Usage map[string]any `json:"usage"`
 		} `json:"message"`
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
 	}
 	if err := json.Unmarshal(payload, &env); err != nil {
 		return
@@ -94,8 +100,37 @@ func (s *anthropicScanner) processLine(line []byte) {
 	if env.Type == "content_block_delta" && len(env.Delta) > 0 {
 		s.markFirstToken()
 	}
+	switch env.Type {
+	case "message_stop":
+		// The protocol's terminal event. Everything after it is epilogue, so a
+		// client that closes here has a complete answer, not a truncated one.
+		s.completed = true
+	case "error":
+		// An in-band failure the vendor reported itself. First one wins: it is
+		// the cause, and anything after is fallout.
+		if s.streamErr == "" {
+			s.streamErr = anthropicErrorText(env.Error.Type, env.Error.Message)
+		}
+	}
 	s.merge(env.Message.Usage)
 	s.merge(env.Usage)
+}
+
+// anthropicErrorText renders an SSE error event as one line, preferring the
+// vendor's own message and never returning the empty string — "" is the
+// StreamErrorReporter signal for "no error seen", so an error event with an
+// empty body must still read as an error.
+func anthropicErrorText(errType, message string) string {
+	switch {
+	case errType != "" && message != "":
+		return errType + ": " + message
+	case message != "":
+		return message
+	case errType != "":
+		return errType
+	default:
+		return "vendor reported a stream error with no detail"
+	}
 }
 
 func (s *anthropicScanner) merge(usage map[string]any) {
@@ -111,6 +146,10 @@ func (s *anthropicScanner) merge(usage map[string]any) {
 		}
 	}
 }
+
+func (s *anthropicScanner) StreamCompleted() bool { return s.completed }
+
+func (s *anthropicScanner) StreamError() string { return s.streamErr }
 
 func (s *anthropicScanner) Result() Extraction {
 	return anthropicNormalize(s.merged)

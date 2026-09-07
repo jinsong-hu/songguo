@@ -2,8 +2,11 @@ package proxy
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -149,6 +152,123 @@ func TestCleanStreamRecordsNoError(t *testing.T) {
 	}
 	if o := calls.OutcomeOf(rows[0].Status, rows[0].Err); o != calls.OutcomeOK {
 		t.Errorf("outcome = %q, want ok", o)
+	}
+}
+
+// A relay whose OWN upstream dies mid-answer does not leave a broken socket
+// behind. It writes a protocol error event and then closes cleanly, so every
+// transport-level signal says "healthy stream": 200 header, clean EOF, no reset.
+// Read only those and the row is a spotless success — which is how a real
+// upstream outage stayed invisible in the ledger while clients saw the failure
+// on every turn.
+//
+// The vendor stated the outcome in-band. Recording it invents nothing.
+func TestInBandStreamErrorIsNotRecordedAsClean200(t *testing.T) {
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "event: message_start\n"+
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":100}}}`+"\n\n")
+		_, _ = io.WriteString(w, "event: error\n"+
+			`data: {"type":"error","error":{"type":"stream_read_error","message":"upstream stream disconnected: unexpected EOF"}}`+"\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Return normally: the relay closes its side cleanly after saying so.
+	}))
+	defer mock.Close()
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, anthropicYAML(mock.URL)), st)
+
+	resp := env.post(t, "/v1/messages", key, `{"model":"claude-x","stream":true,"messages":[]}`)
+	_, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	rows := env.callRows(t)
+	if len(rows) != 1 {
+		t.Fatalf("call rows = %d, want 1", len(rows))
+	}
+	// The status stays the vendor's: the client really did receive a 200 header.
+	if rows[0].Status != http.StatusOK {
+		t.Errorf("status = %d, want 200 (the client really did get a 200 header)", rows[0].Status)
+	}
+	if rows[0].Err == "" {
+		t.Fatal("err is empty: an in-band stream error is being recorded as a clean success")
+	}
+	if !strings.HasPrefix(rows[0].Err, calls.ErrPrefixStream) {
+		t.Errorf("err = %q, want the %q prefix", rows[0].Err, calls.ErrPrefixStream)
+	}
+	// The vendor's own words are what make the row actionable — a generic slug
+	// would say "something broke" and send the operator back to the logs.
+	if !strings.Contains(rows[0].Err, "upstream stream disconnected: unexpected EOF") {
+		t.Errorf("err = %q, want the vendor's own message preserved", rows[0].Err)
+	}
+	if o := calls.OutcomeOf(rows[0].Status, rows[0].Err); o != calls.OutcomeTruncated {
+		t.Errorf("outcome = %q, want truncated", o)
+	}
+	// Usage reported before the break is still owed and must still be metered.
+	if got := rows[0].Usage["input_tokens"]; got != float64(100) {
+		t.Errorf("input_tokens = %v, want 100 (tokens spent before the break are still owed)", got)
+	}
+}
+
+// The mirror of the above: an ordinary Anthropic stream ends with message_stop
+// and must stay a clean success. Without this, "surface in-band errors" is one
+// bad match away from flagging all healthy traffic.
+func TestAnthropicCleanStreamRecordsNoError(t *testing.T) {
+	mock := httptest.NewServer(anthropicUpstream())
+	defer mock.Close()
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, anthropicYAML(mock.URL)), st)
+
+	resp := env.post(t, "/v1/messages", key, `{"model":"claude-x","stream":true,"messages":[]}`)
+	_, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	rows := env.callRows(t)
+	if len(rows) != 1 {
+		t.Fatalf("call rows = %d, want 1", len(rows))
+	}
+	if rows[0].Err != "" {
+		t.Errorf("err = %q, want empty for a clean relay", rows[0].Err)
+	}
+	if o := calls.OutcomeOf(rows[0].Status, rows[0].Err); o != calls.OutcomeOK {
+		t.Errorf("outcome = %q, want ok", o)
+	}
+}
+
+// errReader fails every read with a fixed error.
+type errReader struct{ err error }
+
+func (r errReader) Read([]byte) (int, error) { return 0, r.err }
+
+// streamBody checks the caller's context at the top of each loop, but the
+// upstream read can lose that race and return context.Canceled itself — the
+// caller's cancellation propagating through the request context it was built
+// with. Same fact, one branch over. Blaming the vendor for it charges a
+// provider with a caller pressing Esc, and puts a client_gone row into the
+// truncation count where it reads as a provider fault.
+func TestCanceledUpstreamReadIsClientGoneNotVendorFailure(t *testing.T) {
+	h := &handler{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+
+	// A live context, so only the read carries the cancellation: this is the
+	// race, not the loop-top check.
+	_, _, err := h.streamBody(context.Background(), httptest.NewRecorder(),
+		errReader{err: context.Canceled}, false, nil, "")
+
+	if !errors.Is(err, errClientGone) {
+		t.Fatalf("err = %v, want errClientGone", err)
+	}
+	if got := relayErr(err); got != calls.ErrClientGone {
+		t.Errorf("ledger slug = %q, want %q", got, calls.ErrClientGone)
+	}
+	// Health must not see it either: the vendor did nothing wrong.
+	if got := upstreamBodyErr(err); got != nil {
+		t.Errorf("upstreamBodyErr = %v, want nil (a caller's cancel is not the vendor's fault)", got)
 	}
 }
 

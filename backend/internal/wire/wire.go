@@ -69,6 +69,23 @@ type StreamCompletionReporter interface {
 	StreamCompleted() bool
 }
 
+// StreamErrorReporter is implemented by scanners whose protocol carries an
+// explicit in-band failure event, and returns the empty string when none was
+// seen.
+//
+// This is the mirror of StreamCompletionReporter, and it exists because a
+// relay that dies mid-answer usually closes its side CLEANLY afterwards: it
+// writes a protocol error event, then EOF. Transport sees a healthy stream, so
+// without reading the event the call lands in the ledger as a clean 200 and the
+// failure is invisible — which is exactly how a 54-a-day upstream outage hid
+// inside the success count.
+//
+// Reading it invents nothing. The vendor STATED an outcome in its own words;
+// we record what it said and attribute it to the vendor that said it.
+type StreamErrorReporter interface {
+	StreamError() string
+}
+
 // Quirks are per-service data flags that parameterize an extractor without
 // forking the wire (e.g. {"cache_tokens": "deepseek"}).
 type Quirks map[string]string

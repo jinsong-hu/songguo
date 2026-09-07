@@ -334,6 +334,23 @@ something that was not true:
   row already in the ledger — useless for a feature whose whole point is that
   the history reads honestly. `(status, err)` already encodes it totally;
   `TestOutcomeOfIsTotal` is the guard that keeps that true as slugs are added.
+- **A failure the vendor states in-band is an observation, not an inference.**
+  The transport is not the only place a stream can report its own death. A relay
+  whose upstream died mid-answer writes a protocol error event and *then closes
+  cleanly* — 200 header, clean EOF, no reset — so every transport-level signal
+  says "healthy". Read only those and the row is a spotless success while the
+  caller is staring at the error. So a scanner that sees its protocol's error
+  event (`wire.StreamErrorReporter`) surfaces it, in the vendor's own words,
+  attributed to the vendor that said it. This is the same read-only sniffing as
+  metering: we are quoting the body, never rewriting it, and never guessing.
+  It fills a silence only — `bodyErr` already set wins, so a real transport
+  break stays the more terminal fact and a caller who walked away
+  (`client_gone`) stays nobody's failure.
+
+  The boundary: an explicit error event is the vendor **saying** it failed.
+  *Absence* of a terminal event is us **concluding** it did, and that we do not
+  record — resellers are uneven about protocol epilogues, and inventing a
+  post-mortem from a missing event is exactly what this section forbids.
 
 What we refuse to say is as load-bearing as what we say:
 
@@ -410,6 +427,26 @@ the page would show it. `TestPolicyDenialIsNarrowerThanGatewayBlame` is the guar
 > dashboard's "Transport" bucket keyed on it and was permanently empty while
 > real transport failures hid inside the 5xx count. Old rows still carry `0` and
 > `OutcomeOf` still decodes it; nothing writes it.
+
+> History: the 2026-08-01 fix above caught streams that broke at the *transport*
+> layer and stopped there, which left the commonest reseller failure still
+> invisible. A relay in front of Anthropic lost its own upstream mid-answer,
+> emitted `event: error` with `upstream stream disconnected: unexpected EOF`,
+> and closed cleanly; songguo saw a 200 and a clean EOF and filed 54 of them in
+> one day as successes, inside the same window's "healthy" count, while every
+> one of them killed a turn for the caller. Fixed 2026-09-07 by
+> `wire.StreamErrorReporter`. The Anthropic scanner gained `message_stop`
+> completion at the same time — the wire had never implemented
+> `StreamCompletionReporter`, so only `openai/responses` was getting the
+> trust-completed-streams behavior added on 2026-08-19.
+>
+> The same edit stopped charging `context.Canceled` to the vendor. `streamBody`
+> checks the caller's context at the top of its loop, but the upstream read can
+> win that race and return the cancellation itself; the ledger then recorded a
+> caller pressing Esc as `stream_error: context canceled` — a provider
+> truncation, in the failure half of every rate. 62 rows in one week. Health had
+> always been right about these (`clientGone` is computed separately); only the
+> ledger was wrong.
 
 ## Key docs
 

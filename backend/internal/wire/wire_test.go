@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/songguo/songguo/internal/calls"
@@ -255,6 +256,73 @@ func TestAnthropicScannerMergesStartAndDelta(t *testing.T) {
 	}
 	if firstTokens != 1 {
 		t.Errorf("first-token callbacks = %d, want 1", firstTokens)
+	}
+}
+
+// message_stop is the protocol's terminal event, so a stream carrying it is
+// complete no matter what the transport does afterwards.
+func TestAnthropicScannerReportsCompletion(t *testing.T) {
+	s := newAnthropicScanner(nil)
+	s.Write([]byte("event: message_start\n" +
+		"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n"))
+	if s.(StreamCompletionReporter).StreamCompleted() {
+		t.Error("completed before message_stop")
+	}
+	s.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+	if !s.(StreamCompletionReporter).StreamCompleted() {
+		t.Error("message_stop did not mark the stream complete")
+	}
+	if got := s.(StreamErrorReporter).StreamError(); got != "" {
+		t.Errorf("StreamError = %q, want empty for a clean stream", got)
+	}
+}
+
+// A relay whose own upstream dies mid-answer says so in-band and then closes
+// cleanly. The event is the only trace of the failure, so the scanner must
+// surface it — with the vendor's own words, which is what makes the row
+// actionable rather than just non-empty.
+func TestAnthropicScannerReportsInBandError(t *testing.T) {
+	s := newAnthropicScanner(nil)
+	s.Write([]byte("event: message_start\n" +
+		"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n" +
+		"event: error\n" +
+		"data: {\"type\":\"error\",\"error\":{\"type\":\"stream_read_error\"," +
+		"\"message\":\"upstream stream disconnected: unexpected EOF\"}}\n\n"))
+
+	got := s.(StreamErrorReporter).StreamError()
+	if !strings.Contains(got, "upstream stream disconnected: unexpected EOF") {
+		t.Errorf("StreamError = %q, want the vendor's own message preserved", got)
+	}
+	if !strings.Contains(got, "stream_read_error") {
+		t.Errorf("StreamError = %q, want the vendor's error type preserved", got)
+	}
+	if s.(StreamCompletionReporter).StreamCompleted() {
+		t.Error("an errored stream must not report completion")
+	}
+	// Usage seen before the break is still real and must survive: the tokens
+	// were spent whether or not the answer arrived.
+	if got := s.Result().Norm.InputTokens; got != 5 {
+		t.Errorf("input tokens = %v, want 5 (usage before the break is still owed)", got)
+	}
+}
+
+// "" is the "no error seen" signal, so an error event with nothing in it must
+// still read as an error rather than vanishing.
+func TestAnthropicScannerEmptyErrorEventStillReportsError(t *testing.T) {
+	s := newAnthropicScanner(nil)
+	s.Write([]byte("event: error\ndata: {\"type\":\"error\"}\n\n"))
+	if got := s.(StreamErrorReporter).StreamError(); got == "" {
+		t.Error("an empty error event was swallowed; it must still report a failure")
+	}
+}
+
+// The first error is the cause; later ones are fallout.
+func TestAnthropicScannerKeepsFirstError(t *testing.T) {
+	s := newAnthropicScanner(nil)
+	s.Write([]byte("event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"first\"}}\n\n" +
+		"event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"second\"}}\n\n"))
+	if got := s.(StreamErrorReporter).StreamError(); !strings.Contains(got, "first") {
+		t.Errorf("StreamError = %q, want the first error retained", got)
 	}
 }
 

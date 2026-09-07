@@ -907,11 +907,15 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 				})
 			}
 		}
+		var streamErr string
 		respBody, parseRespBody, bodyErr = h.streamBody(r.Context(), w, resp.Body, capture, scanner, resp.Header.Get("Content-Encoding"))
 		if scanner != nil {
 			ext = scanner.Result()
 			if completion, ok := scanner.(wire.StreamCompletionReporter); ok {
 				streamCompleted = completion.StreamCompleted()
+			}
+			if reporter, ok := scanner.(wire.StreamErrorReporter); ok {
+				streamErr = reporter.StreamError()
 			}
 		} else {
 			ext = wire.Extraction{Confidence: calls.ConfidenceUnknown}
@@ -922,6 +926,18 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		// model response is complete and must not be recorded as truncation.
 		if streamCompleted {
 			bodyErr = nil
+		}
+		// An in-band error event is the vendor's own verdict on a stream that
+		// then ended cleanly at the transport layer — the shape a relay leaves
+		// behind when ITS upstream died mid-answer. Without this the row is a
+		// spotless 200 and the outage is invisible.
+		//
+		// Only when bodyErr is still nil, which keeps two truths intact: a real
+		// transport break is the more terminal fact about our own hop and stays
+		// recorded, and a caller who walked away (errClientGone) is still nobody's
+		// failure. So this fills a silence; it never overwrites an observation.
+		if bodyErr == nil && streamErr != "" {
+			bodyErr = errors.New(streamErr)
 		}
 	} else {
 		full, cerr := h.copyBody(w, resp.Body)
@@ -1180,7 +1196,16 @@ func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.
 			// io.EOF is the normal end of a stream. Anything else — an
 			// unexpected EOF, a connection reset, an HTTP/2 stream error — means
 			// the vendor stopped mid-response.
-			if !errors.Is(err, io.EOF) {
+			switch {
+			case errors.Is(err, io.EOF):
+			case errors.Is(err, context.Canceled):
+				// Same fact as the ctx check at the top of the loop, one branch
+				// over: the only context here is the caller's, so its
+				// cancellation propagating out of the upstream read means our
+				// client hung up — the read simply won the race. Recording it as
+				// the vendor's doing would blame a provider for a caller's Esc.
+				termErr = errClientGone
+			default:
 				termErr = err
 			}
 			break
