@@ -3,6 +3,7 @@ import type { CallEntry, CallTrace, TraceSide } from '../api/types';
 import { CopyButton } from './CopyButton';
 import { ErrorBanner } from './ErrorBanner';
 import { Skeleton } from './Skeleton';
+import { displayBody } from '../lib/traceBody';
 import { useFetch } from '../lib/useFetch';
 import styles from '../pages/ActivityFeed.module.css';
 
@@ -58,18 +59,9 @@ export function TracePanel({ entry }: { entry: CallEntry }) {
   );
 }
 
-/** Pretty-print JSON bodies with 2-space indent; fall back to raw text. */
-function prettyBody(body: string): string {
-  try {
-    return JSON.stringify(JSON.parse(body), null, 2);
-  } catch {
-    return body;
-  }
-}
-
 function TraceSidePane({ title, side }: { title: string; side: TraceSide }) {
   const headerEntries = Object.entries(side.headers);
-  const display = side.body_base64 ? side.body : prettyBody(side.body);
+  const display = displayBody(side.body, side.body_base64);
   return (
     <div className={styles.traceSide}>
       <div className={styles.traceSideHead}>
@@ -86,6 +78,16 @@ function TraceSidePane({ title, side }: { title: string; side: TraceSide }) {
             title="The encoded stream ended early; showing the recoverable decoded prefix."
           >
             partial decode
+          </span>
+        )}
+        {/* Distinct from "partial decode": that says the capture is missing
+            bytes, this says only the display is. Copy still has all of them. */}
+        {display.elided > 0 && (
+          <span
+            className="chip"
+            title="Long values are shortened here so the payload renders; Copy yields the untouched body."
+          >
+            {display.elided.toLocaleString()} chars elided
           </span>
         )}
       </div>
@@ -106,7 +108,7 @@ function TraceSidePane({ title, side }: { title: string; side: TraceSide }) {
           <CopyButton value={side.body} className={styles.copyBody} />
         </div>
         <pre className={styles.bodyCode}>
-          {display || <span className="muted">(empty)</span>}
+          {display.text || <span className="muted">(empty)</span>}
         </pre>
       </div>
     </div>
