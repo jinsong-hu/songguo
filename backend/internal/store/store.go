@@ -544,6 +544,19 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("store: migrate: %w", err)
 	}
 
+	// (user_id, ts) for LastSeenByUser. idx_calls_user_id alone gets the planner
+	// to the right rows and then makes it fetch every one of them from the table
+	// to find the largest ts — a per-user scan whose rows are scattered through a
+	// file far larger than the cache. Carrying ts IN the index turns that into a
+	// single seek to the end of the user's range, reading no table pages at all,
+	// which is what SQLite's MAX-over-an-index-range optimization needs.
+	//
+	// This one query runs once per user on every load of the users list, so the
+	// per-user cost was multiplied by the user count: ~25 s in production.
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_calls_user_ts ON calls(user_id, ts)`); err != nil {
+		return fmt.Errorf("store: migrate: %w", err)
+	}
+
 	// Step 3b: Drop columns retired post-v1. calls.attempt tracked per-call
 	// failover, which no longer exists (one attempt per request); drop it from
 	// pre-existing databases so the schema matches the CREATE above.
