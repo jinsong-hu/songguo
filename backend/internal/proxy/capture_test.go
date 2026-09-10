@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/store"
 )
 
@@ -188,13 +190,113 @@ func TestCodexSessionTitleRequiresCapture(t *testing.T) {
 	}
 }
 
-// --- a transport-failed attempt records a row but captures no payload ---
+// --- the request side is captured at dispatch, while the call is in flight ---
 
-// With no failover, the only way an attempt lands without a forwarded response
-// is a failure before the response exists (a transport/dial error). That still
-// records a call row, but there is nothing to capture — GetPayload must miss.
-// (A forwarded error status, e.g. a 500, IS captured: it is the served response.)
-func TestCaptureNoPayloadOnTransportFailure(t *testing.T) {
+// The request body is buffered at ingress and persisted before the dial, so a
+// call that is in flight — here, an upstream that never answers until told to —
+// already shows what was sent. The response side lands at finalize, overwriting
+// the request-only row.
+func TestCaptureRequestVisibleWhileInFlight(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		once.Do(func() { close(entered) })
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-1","object":"chat.completion","choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}`)
+	}))
+	defer mock.Close()
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t", Capture: true})
+	env := newEnv(t, snapshotFunc(t, captureYAML(mock.URL)), st)
+
+	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
+	type result struct {
+		status int
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		req, err := http.NewRequest(http.MethodPost, env.server.URL+"/v1/chat/completions", strings.NewReader(reqBody))
+		if err == nil {
+			req.Header.Set("Authorization", "Bearer "+key)
+			req.Header.Set("Content-Type", "application/json")
+			var resp *http.Response
+			resp, err = env.client.Do(req)
+			if err == nil {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+				done <- result{status: resp.StatusCode}
+				return
+			}
+		}
+		done <- result{err: err}
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not reach the upstream")
+	}
+
+	// In flight: the upstream holds the request and no response exists. The
+	// create and dispatch-capture ops are already queued; drain applies them.
+	env.drain(t)
+	entries, err := st.QueryCalls(storeFilterAll())
+	if err != nil {
+		t.Fatalf("QueryCalls: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("call rows = %d, want 1", len(entries))
+	}
+	if entries[0].Status != calls.StatusPending {
+		t.Errorf("status = %d, want pending while in flight", entries[0].Status)
+	}
+	p, err := st.GetPayload(entries[0].ID)
+	if err != nil {
+		t.Fatalf("in-flight request should be captured: GetPayload: %v", err)
+	}
+	if string(p.ReqBody) != reqBody {
+		t.Errorf("captured req body = %q, want %q", p.ReqBody, reqBody)
+	}
+	if len(p.RespBody) != 0 {
+		t.Errorf("resp body should be empty while in flight, got %q", p.RespBody)
+	}
+
+	// Let the upstream answer: finalize overwrites the row with the full pair.
+	close(release)
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("client.Do: %v", res.err)
+	}
+	if res.status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", res.status)
+	}
+	env.drain(t)
+	p, err = st.GetPayload(entries[0].ID)
+	if err != nil {
+		t.Fatalf("GetPayload after finalize: %v", err)
+	}
+	if string(p.ReqBody) != reqBody {
+		t.Errorf("req body changed across finalize: %q", p.ReqBody)
+	}
+	if !strings.Contains(string(p.RespBody), "chatcmpl-1") {
+		t.Errorf("final payload should carry the response, got %q", p.RespBody)
+	}
+}
+
+// --- a transport-failed attempt keeps the request-only capture ---
+
+// The request side is persisted at dispatch, before the dial, so an attempt
+// that fails at the transport layer never gets a response to pair with it —
+// but the request really was dispatched, and the row stays: what we tried to
+// send a dead provider is exactly what an operator debugging it wants.
+// (A forwarded error status, e.g. a 500, IS captured in full: it is the served
+// response.)
+func TestCaptureTransportFailureKeepsRequest(t *testing.T) {
 	// A server we immediately close, so its origin refuses connections — the
 	// single attempt fails at dial and never produces a response to forward.
 	dead := httptest.NewServer((&mockUpstream{}).handler())
@@ -231,8 +333,15 @@ vendors:
 	if len(entries) != 1 {
 		t.Fatalf("call rows = %d, want 1", len(entries))
 	}
-	if _, err := st.GetPayload(entries[0].ID); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("transport-failed attempt should have no payload, got %v", err)
+	p, err := st.GetPayload(entries[0].ID)
+	if err != nil {
+		t.Fatalf("transport-failed attempt should keep its request capture: %v", err)
+	}
+	if want := `{"model":"gpt-4o","messages":[]}`; string(p.ReqBody) != want {
+		t.Errorf("captured req body = %q, want %q", p.ReqBody, want)
+	}
+	if len(p.RespBody) != 0 {
+		t.Errorf("transport failure has no response to capture, got %q", p.RespBody)
 	}
 }
 

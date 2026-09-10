@@ -18,9 +18,14 @@ export function TracePanel({ entry }: { entry: CallEntry }) {
   });
 
   if (!entry.has_trace) {
+    // An in-flight call cannot predate capture — with capture on its request
+    // is persisted at dispatch, so a missing row means capture is off (or the
+    // row has not landed yet, a moment after dispatch).
     return (
       <div className={styles.traceNote}>
-        No captured payload — capture is off, or this call predates it.
+        {entry.pending
+          ? 'No captured payload — capture is off for this key.'
+          : 'No captured payload — capture is off, or this call predates it.'}
       </div>
     );
   }
@@ -49,11 +54,30 @@ export function TracePanel({ entry }: { entry: CallEntry }) {
     );
   }
 
+  // A request-only capture (persisted at dispatch) reads as an empty response
+  // side: no body, no headers, no content type. While the call is in flight
+  // that means "not yet", not "the vendor sent nothing" — say so.
+  const resp = trace.data.response;
+  const responsePending =
+    entry.pending &&
+    !resp.body &&
+    !resp.content_type &&
+    Object.keys(resp.headers).length === 0;
+
   return (
     <div className={styles.tracePanel}>
       <div className={styles.traceGrid}>
         <TraceSidePane title="Request" side={trace.data.request} />
-        <TraceSidePane title="Response" side={trace.data.response} />
+        {responsePending ? (
+          <div className={styles.traceSide}>
+            <div className={styles.traceSideHead}>Response</div>
+            <div className={styles.traceNote}>
+              Response pending — the call is still in flight.
+            </div>
+          </div>
+        ) : (
+          <TraceSidePane title="Response" side={resp} />
+        )}
       </div>
     </div>
   );

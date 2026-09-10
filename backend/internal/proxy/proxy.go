@@ -291,6 +291,19 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Capture the request side NOW, before the gate wait and the dial, so a call
+	// that is in flight — queued for a provider slot, or hung waiting on the
+	// vendor — is as inspectable as a finished one. The body is already buffered
+	// for routing; this only persists it, one extra queued write per captured
+	// call. The finalize path's INSERT OR REPLACE overwrites this row with the
+	// full request+response pair. A call that never gets a response (client gone
+	// at the gate, build/transport failure) keeps the request-only row: the
+	// request really was dispatched, so it stays captured. Placed after the
+	// denials above so a refusal never pays the double write.
+	if capture {
+		h.captureRequest(callID, r, body)
+	}
+
 	// 6. Forward exactly one attempt — no per-call retry or failover. songguo is
 	// a transparent gateway: it forwards the request to the selected upstream and
 	// surfaces whatever the vendor returns — success OR failure (429, 5xx, a
@@ -1138,6 +1151,22 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		}
 		h.savePayload(id, r, reqBody, resp, respBody, func() { h.parse.submit(job) })
 	}
+}
+
+// captureRequest queues the request side of the payload at dispatch time; the
+// response side lands at finalize via savePayload (INSERT OR REPLACE keyed by
+// call id, so the full row simply overwrites this one). Submitted by the
+// request goroutine after createCall's op, so the ledger's single writer
+// applies it after the parent row exists — the raw table's FOREIGN KEY onto
+// calls(id) is never seen.
+func (h *handler) captureRequest(callID string, r *http.Request, reqBody []byte) {
+	h.ledger.Submit(ledger.Op{Kind: ledger.KindPayload, CallID: callID, Payload: &store.Payload{
+		CallID:         callID,
+		ReqHeaders:     redactHeaders(r.Header),
+		ReqBody:        reqBody,
+		ReqContentType: r.Header.Get("Content-Type"),
+		CreatedAt:      h.now(),
+	}})
 }
 
 // savePayload queues the redacted request/response payload for the served

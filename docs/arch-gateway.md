@@ -152,7 +152,8 @@ Gateway-originated denials (unmatched `404`, scope `403`, budget `402`, rate
 `429`) and upstream build/transport failures (`502`) still produce a finalized
 `calls` row — they are outcomes, and the ledger records outcomes. Where a
 served or synthesized response exists and capture is on, the matching `raw` row
-is written too.
+carries it too; a forwarded attempt that dies at the transport layer keeps the
+request-only row written at dispatch (see "`raw` capture" below).
 
 Recorded is not the same as graded. Budget (`402`) and rate (`429`) denials are
 limits the operator configured, so they are counted in every census — the error
@@ -202,6 +203,13 @@ the call id. It is:
 - **Byte-identical** to what crossed the wire. For streams, the bytes are tee'd
   to the client and to an in-memory buffer simultaneously and flushed per chunk,
   so capture never buffers the client's stream.
+- **Written in two stages** — the request side is persisted at dispatch (before
+  the concurrency-gate wait and the dial), so a call still in flight shows what
+  was sent; finalize overwrites the row with the full request+response pair
+  (INSERT OR REPLACE keyed by call id). A call that never gets a response —
+  client gone at the gate, build/transport failure — keeps the request-only row:
+  the request really was dispatched, and what we tried to send a dead provider
+  is exactly what an operator debugging it wants.
 - **Short-lived** — pruned at 7 days, independently of and earlier than the
   90-day `calls` prune.
 
