@@ -145,18 +145,18 @@ func report(before, after []byte, gen catalog.Catalog, skips []modelsdev.Skip) {
 // rate renders a cost compactly for the change table: the token pair when there
 // is one, else whichever media axis the model prices.
 //
-// Tiers are named even though their rates are not shown. Without that, a model
-// that gained or lost a context bracket prints an identical before and after and
-// the table reads as though nothing changed — which is exactly the row an
-// operator most needs to notice, since a bracket silently doubles the bill on
-// long requests.
+// Tiers and schedules are named even though their rates are not shown. Without
+// that, a model that gained or lost a context bracket or a peak window prints an
+// identical before and after and the table reads as though nothing changed —
+// which is exactly the row an operator most needs to notice, since either one
+// silently doubles the bill for part of the traffic.
 func rate(c catalog.Cost) string {
 	if c.Tokens() {
 		s := fmt.Sprintf("%g / %g", c.Input, c.Output)
 		if c.CacheRead != 0 {
 			s += fmt.Sprintf(" (cr %g)", c.CacheRead)
 		}
-		return s + tierNote(c)
+		return s + tierNote(c) + peakNote(c)
 	}
 	for _, a := range []struct {
 		name string
@@ -166,7 +166,35 @@ func rate(c catalog.Cost) string {
 			return fmt.Sprintf("%g /%s", a.v, a.name)
 		}
 	}
-	return "unpriced" + tierNote(c)
+	return "unpriced" + tierNote(c) + peakNote(c)
+}
+
+// peakNote summarizes a cost's time-of-day brackets, e.g. "  +peak 2x/2 windows".
+//
+// The multiple is what an operator is actually deciding on, so it is computed
+// rather than left for them to divide: a "+peak" with no number says a schedule
+// exists but not whether it matters.
+func peakNote(c catalog.Cost) string {
+	if len(c.Schedules) == 0 {
+		return ""
+	}
+	windows := 0
+	mult := 0.0
+	base := max(c.Input, c.Output)
+	for _, s := range c.Schedules {
+		windows += len(s.When)
+		if base > 0 {
+			mult = max(mult, max(s.Input, s.Output)/base)
+		}
+	}
+	plural := "s"
+	if windows == 1 {
+		plural = ""
+	}
+	if mult == 0 {
+		return fmt.Sprintf("  +peak %d window%s", windows, plural)
+	}
+	return fmt.Sprintf("  +peak %gx/%d window%s", mult, windows, plural)
 }
 
 // tierNote summarizes a cost's context brackets, e.g. " +2 tiers >32k,>256k".

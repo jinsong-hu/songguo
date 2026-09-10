@@ -3,6 +3,8 @@
 package pricing
 
 import (
+	"time"
+
 	"github.com/songguo/songguo/internal/catalog"
 	"github.com/songguo/songguo/internal/wire"
 )
@@ -31,14 +33,24 @@ import (
 // Token axes are per 1M tokens (models.dev's basis); the media axes are per
 // single unit (the basis vendors publish). See catalog.Cost.
 //
-// # Context tiers
+// # Conditional rates
 //
-// Token rates are resolved against the request's prompt size first: vendors
-// charge more once a prompt crosses a threshold, and the raised rate applies to
-// the whole request rather than only the tokens past it. Taking the base rate
-// regardless under-bills long agent contexts by the tier multiple — 2x on the
-// gpt-5.6 family above 272k — which is the same class of error as a stale price,
-// pointed the other way. See catalog.Cost.At.
+// Token rates are resolved before anything is summed, because a vendor's rate is
+// not always a single number. It can depend on the request's prompt size (a
+// context tier: 2x on the gpt-5.6 family above 272k, applied to the whole request
+// rather than only the tokens past the threshold) or on the clock (DeepSeek
+// doubles during weekday business hours). Taking the base rate regardless is the
+// same class of error as a stale price, pointed the other way. See
+// catalog.Cost.Resolve.
+//
+// # at is the request's START
+//
+// A scheduled rate needs an instant, and the one that matters is when the vendor
+// accepted the request — that is what the vendor prices against. A stream running
+// across a peak boundary therefore bills wholly at the rate in force when it was
+// sent, which is both what the vendor does and the only choice under which two
+// identical requests cannot cost different amounts because one answer took
+// longer.
 //
 // The three input-side token fields are disjoint — fresh + cache-read +
 // cache-write is the total input — so no clamping is needed. Fresh input bills
@@ -46,10 +58,11 @@ import (
 // discount is published, since "no cached rate" means "no discount", not "free".
 // Cache writes bill at CacheWrite, falling back to Input the same way.
 // ThinkingTokens are a subset of OutputTokens and are not priced separately.
-func Cost(c catalog.Cost, n wire.Normalized) float64 {
-	// Tier first: a vendor prices the whole request at the bracket its PROMPT
-	// falls into, so the rates below may already be the raised ones.
-	c = c.At(promptTokens(n))
+func Cost(c catalog.Cost, n wire.Normalized, at time.Time) float64 {
+	// Resolve first: a vendor prices the whole request at the bracket its PROMPT
+	// falls into and at the rate its clock was showing, so the rates below may
+	// already be the raised ones.
+	c = c.Resolve(promptTokens(n), at)
 	total := tokenCost(c, n) / 1e6
 	total += c.Character * n.Chars
 	total += c.Second * n.Seconds

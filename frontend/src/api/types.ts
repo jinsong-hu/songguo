@@ -930,6 +930,12 @@ export interface Cost {
    * marginal rate on the excess — and only the highest crossed bracket applies.
    */
   tiers?: CostTier[];
+  /**
+   * Peak-hour brackets: vendors raise token rates on a recurring weekly clock.
+   * DeepSeek charges double on Beijing weekday business hours. A cost is
+   * conditional on size or on time, never both — see catalog.Cost.Resolve.
+   */
+  schedules?: CostSchedule[];
 }
 
 /** Token rates that apply once a request's prompt exceeds `tier.size` tokens. */
@@ -941,9 +947,36 @@ export interface CostTier {
   tier: { type: string; size: number };
 }
 
+/** Token rates that apply while the clock is inside any of `when`. */
+export interface CostSchedule {
+  input?: number;
+  output?: number;
+  cache_read?: number;
+  cache_write?: number;
+  when: CostWindow[];
+}
+
+/**
+ * A recurring stretch of wall-clock time, in the vendor's own terms: `start` and
+ * `end` are "HH:MM" in `offset`'s zone, and the interval is half-open so two
+ * adjacent windows meet without overlapping.
+ */
+export interface CostWindow {
+  /** Only "weekly" exists. */
+  type: string;
+  /** Fixed UTC offset the clock times are stated in, "+08:00"; absent = UTC. */
+  offset?: string;
+  /** "mon".."sun". */
+  days: string[];
+  start: string;
+  end: string;
+}
+
 export interface CatalogModel {
   id: string;
   name?: string;
+  /** Why this entry reads the way it does — a retired id, a pinned rate, a dated repricing. */
+  note?: string;
   family?: string;
   attachment?: boolean;
   reasoning?: boolean;

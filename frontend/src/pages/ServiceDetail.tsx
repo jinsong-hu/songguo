@@ -17,7 +17,14 @@ import { Skeleton } from '../components/Skeleton';
 import { useToast } from '../components/Toast';
 import { useFetch } from '../lib/useFetch';
 import { useSession } from '../lib/sessionContext';
-import { contextLabel, indexCatalog, tierLabel, MODALITY_LABEL, type CatalogInfo } from '../lib/catalogIndex';
+import {
+  contextLabel,
+  indexCatalog,
+  peakLabel,
+  tierLabel,
+  MODALITY_LABEL,
+  type CatalogInfo,
+} from '../lib/catalogIndex';
 import { BrandIcon, ModelIcon, modelMeta, providerBrand } from '../lib/modelBrand';
 import styles from './ServiceDetail.module.css';
 
@@ -233,6 +240,11 @@ function Hero({ model, info }: { model: string; info?: CatalogInfo }) {
   if (cost) {
     const tiers = tierLabel(cost);
     if (tiers) facts.push(['Long context', tiers]);
+    // Same problem on the other axis: the rates above are the OFF-PEAK ones, so
+    // without this the page states a number DeepSeek charges for two thirds of
+    // the working week and is double for the rest.
+    const peak = peakLabel(cost);
+    if (peak) facts.push(['Peak hours', peak]);
   }
   // Media axes: models.dev has no field for these, so they only ever come from
   // the hand-maintained half of the catalog (Volcengine speech and video).

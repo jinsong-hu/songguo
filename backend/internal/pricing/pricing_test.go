@@ -3,6 +3,7 @@ package pricing
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/songguo/songguo/internal/catalog"
 	"github.com/songguo/songguo/internal/wire"
@@ -10,6 +11,38 @@ import (
 
 func approx(a, b float64) bool {
 	return math.Abs(a-b) < 1e-9
+}
+
+// anyTime is the instant for costs that declare no schedule, which is all of
+// them below except the peak tests. Cost still requires one — a clock the caller
+// cannot forget to pass is the point of making it a parameter — but for a cost
+// with no time-dependent rate the value cannot change the answer.
+var anyTime = time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+
+// deepseekFlash is DeepSeek's published Flash rate, kept in one place so every
+// test below reads against the same rule: base is off-peak, and 高峰时段 —
+// Beijing Mon-Fri 09:00-12:00 and 14:00-18:00 — is double on every axis.
+// See https://api-docs.deepseek.com/quick_start/pricing/
+func deepseekFlash() catalog.Cost {
+	peak := []catalog.Window{
+		{Type: catalog.WindowWeekly, Offset: "+08:00", Days: []string{"mon", "tue", "wed", "thu", "fri"}, Start: "09:00", End: "12:00"},
+		{Type: catalog.WindowWeekly, Offset: "+08:00", Days: []string{"mon", "tue", "wed", "thu", "fri"}, Start: "14:00", End: "18:00"},
+	}
+	return catalog.Cost{
+		Input: 0.15, Output: 0.6, CacheRead: 0.003,
+		Schedules: []catalog.CostSchedule{
+			{Input: 0.3, Output: 1.2, CacheRead: 0.006, When: peak},
+		},
+	}
+}
+
+// beijing builds an instant from Beijing wall-clock, because that is how DeepSeek
+// states the rule. Writing these as UTC would mean shifting every expectation by
+// eight hours in your head to check it against the vendor's page.
+//
+// September 2026: the 7th is a Monday, so 7-11 are Mon-Fri and 12-13 the weekend.
+func beijing(day, hour, minute, sec int) time.Time {
+	return time.Date(2026, 9, day, hour, minute, sec, 0, time.FixedZone("CST", 8*3600))
 }
 
 func TestCost(t *testing.T) {
@@ -123,7 +156,7 @@ func TestCost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Cost(tt.cost, tt.norm)
+			got := Cost(tt.cost, tt.norm, anyTime)
 			if !approx(got, tt.want) {
 				t.Errorf("Cost() = %v, want %v", got, tt.want)
 			}
@@ -141,7 +174,7 @@ func TestCostAxesAreAdditive(t *testing.T) {
 		Seconds: 60, Chars: 1_000,
 	}
 	want := 3*1 + 15*2 + 0.001*60 + 0.00002*1000
-	if got := Cost(c, n); !approx(got, want) {
+	if got := Cost(c, n, anyTime); !approx(got, want) {
 		t.Errorf("Cost() = %v, want %v (every declared axis contributes)", got, want)
 	}
 }
@@ -152,13 +185,13 @@ func TestCostDeepSeekRealWorld(t *testing.T) {
 	cost := catalog.Cost{Input: 0.14, Output: 0.28, CacheRead: 0.0028}
 	// Disjoint: 10k fresh input + 90k cache reads.
 	norm := wire.Normalized{InputTokens: 10_000, CachedInputTokens: 90_000, OutputTokens: 5_000}
-	got := Cost(cost, norm)
+	got := Cost(cost, norm, anyTime)
 	want := (10_000*0.14 + 90_000*0.0028 + 5_000*0.28) / 1e6
 	if !approx(got, want) {
 		t.Errorf("Cost() = %v, want %v", got, want)
 	}
 	// Sanity: ignoring the cache discount would overcharge ~8x on input.
-	full := Cost(catalog.Cost{Input: 0.14, Output: 0.28}, norm)
+	full := Cost(catalog.Cost{Input: 0.14, Output: 0.28}, norm, anyTime)
 	if full <= got {
 		t.Errorf("expected discount: full %v should exceed discounted %v", full, got)
 	}
@@ -203,7 +236,7 @@ func TestCostBillingInvariance(t *testing.T) {
 			CacheCreationTokens: c.cacheCreate,
 			OutputTokens:        c.output,
 		}
-		got := Cost(cost, disjoint)
+		got := Cost(cost, disjoint, anyTime)
 		want := oldFolded(cost, c.fresh+c.cacheRead+c.cacheCreate, c.cacheRead, c.output)
 		if !approx(got, want) {
 			t.Errorf("shape %+v: Cost() = %v, folded model = %v", c, got, want)
@@ -263,7 +296,7 @@ func TestCostContextTiers(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := Cost(luna, tt.norm); !approx(got, tt.want) {
+			if got := Cost(luna, tt.norm, anyTime); !approx(got, tt.want) {
 				t.Errorf("Cost() = %v, want %v", got, tt.want)
 			}
 		})
@@ -290,7 +323,7 @@ func TestCostPicksHighestCrossedTier(t *testing.T) {
 	for _, tc := range cases {
 		n := wire.Normalized{InputTokens: tc.prompt}
 		want := tc.prompt / 1e6 * tc.in
-		if got := Cost(c, n); !approx(got, want) {
+		if got := Cost(c, n, anyTime); !approx(got, want) {
 			t.Errorf("prompt %v: Cost() = %v, want %v (rate %v)", tc.prompt, got, want, tc.in)
 		}
 	}
@@ -308,7 +341,7 @@ func TestCostTierKeepsUnstatedAxesAtBase(t *testing.T) {
 	}
 	n := wire.Normalized{InputTokens: 1_000_000, CachedInputTokens: 1_000_000}
 	want := 1*2 + 1*0.1 // input at the tier rate, cache reads at the base rate
-	if got := Cost(c, n); !approx(got, want) {
+	if got := Cost(c, n, anyTime); !approx(got, want) {
 		t.Errorf("Cost() = %v, want %v (an unstated tier axis must keep its base rate)", got, want)
 	}
 }
@@ -324,7 +357,7 @@ func TestCostIgnoresUnknownTierType(t *testing.T) {
 		}},
 	}
 	n := wire.Normalized{InputTokens: 1_000_000}
-	if got := Cost(c, n); !approx(got, 1) {
+	if got := Cost(c, n, anyTime); !approx(got, 1) {
 		t.Errorf("Cost() = %v, want the base 1 (an unknown tier type must not apply)", got)
 	}
 }
@@ -339,7 +372,142 @@ func TestCostTiersDoNotDisturbMediaAxes(t *testing.T) {
 		}},
 	}
 	n := wire.Normalized{Seconds: 60}
-	if got := Cost(c, n); !approx(got, 0.06) {
+	if got := Cost(c, n, anyTime); !approx(got, 0.06) {
 		t.Errorf("Cost() = %v, want 0.06", got)
+	}
+}
+
+// TestCostPeakWindows is the whole feature in one table: the same call, priced
+// against DeepSeek's published clock. Before schedules existed a single rate had
+// to stand in for both halves of the week, so whichever number was in the
+// catalogue was wrong by 2x for the other half.
+func TestCostPeakWindows(t *testing.T) {
+	c := deepseekFlash()
+	// 1M fresh input + 1M output. Off-peak: 0.15 + 0.6 = 0.75. Peak: double.
+	n := wire.Normalized{InputTokens: 1_000_000, OutputTokens: 1_000_000}
+
+	tests := []struct {
+		name string
+		at   time.Time
+		want float64
+	}{
+		{"monday mid-morning is peak", beijing(7, 10, 30, 0), 1.5},
+		{"monday mid-afternoon is peak", beijing(7, 15, 0, 0), 1.5},
+		{"the lunch gap between the two windows is off-peak", beijing(7, 13, 0, 0), 0.75},
+		{"before the working day is off-peak", beijing(7, 8, 59, 0), 0.75},
+		{"after the working day is off-peak", beijing(7, 18, 0, 0), 0.75},
+		{"the small hours are off-peak", beijing(9, 3, 0, 0), 0.75},
+		{"friday is still a weekday", beijing(11, 9, 0, 0), 1.5},
+		{"saturday business hours are off-peak", beijing(12, 10, 30, 0), 0.75},
+		{"sunday business hours are off-peak", beijing(13, 15, 0, 0), 0.75},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Cost(c, n, tt.at); !approx(got, tt.want) {
+				t.Errorf("Cost() at %s = %v, want %v", tt.at.Format(time.RFC3339), got, tt.want)
+			}
+		})
+	}
+}
+
+// A window is half-open, so the two DeepSeek publishes can be written as the
+// vendor writes them (09:00-12:00, 14:00-18:00) without 12:00 belonging to both
+// or to neither. The seconds matter: 11:59:59 is still inside the morning peak.
+func TestCostPeakBoundaryIsHalfOpen(t *testing.T) {
+	c := deepseekFlash()
+	n := wire.Normalized{InputTokens: 1_000_000}
+
+	tests := []struct {
+		name string
+		at   time.Time
+		want float64
+	}{
+		{"the opening instant is inside", beijing(7, 9, 0, 0), 0.3},
+		{"one second before close is inside", beijing(7, 11, 59, 59), 0.3},
+		{"the closing instant is outside", beijing(7, 12, 0, 0), 0.15},
+		{"one second before open is outside", beijing(7, 8, 59, 59), 0.15},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Cost(c, n, tt.at); !approx(got, tt.want) {
+				t.Errorf("Cost() at %s = %v, want %v", tt.at.Format(time.RFC3339), got, tt.want)
+			}
+		})
+	}
+}
+
+// The window carries its own offset, so the answer must not depend on the
+// caller's zone — a gateway in UTC and one in Shanghai bill the same request
+// identically. This is the property that lets the catalogue be written in the
+// vendor's wall-clock instead of translated into UTC by hand.
+func TestCostPeakIsZoneIndependent(t *testing.T) {
+	c := deepseekFlash()
+	n := wire.Normalized{InputTokens: 1_000_000}
+
+	// One instant: Monday 10:30 Beijing == 02:30 UTC == Sunday 21:30 in New York.
+	at := beijing(7, 10, 30, 0)
+	for _, loc := range []*time.Location{time.UTC, time.FixedZone("CST", 8*3600), time.FixedZone("EDT", -4*3600)} {
+		if got := Cost(c, n, at.In(loc)); !approx(got, 0.3) {
+			t.Errorf("Cost() rendered in %s = %v, want the peak 0.3", loc, got)
+		}
+	}
+}
+
+// A schedule states only the axes that change, exactly as a tier does; an axis it
+// omits keeps the base rate rather than dropping to free.
+func TestCostScheduleKeepsUnstatedAxesAtBase(t *testing.T) {
+	c := catalog.Cost{
+		Input: 1, Output: 4,
+		Schedules: []catalog.CostSchedule{{
+			Output: 8, // input unstated
+			When: []catalog.Window{{
+				Type: catalog.WindowWeekly, Offset: "+08:00",
+				Days: []string{"mon"}, Start: "09:00", End: "12:00",
+			}},
+		}},
+	}
+	n := wire.Normalized{InputTokens: 1_000_000, OutputTokens: 1_000_000}
+	if got := Cost(c, n, beijing(7, 10, 0, 0)); !approx(got, 1+8) {
+		t.Errorf("Cost() = %v, want 9 — an unstated schedule axis must keep its base rate", got)
+	}
+}
+
+// An unknown window type must not match. It cannot reach here from the embedded
+// catalogue (Window.Validate rejects it at load), so this pins the behaviour of
+// the matcher itself: refuse, rather than fall through to some default weekly
+// reading of fields it does not understand.
+func TestCostIgnoresUnknownWindowType(t *testing.T) {
+	c := catalog.Cost{
+		Input: 1,
+		Schedules: []catalog.CostSchedule{{
+			Input: 99,
+			When: []catalog.Window{{
+				Type: "lunar", Offset: "+08:00",
+				Days: []string{"mon"}, Start: "00:00", End: "23:59",
+			}},
+		}},
+	}
+	n := wire.Normalized{InputTokens: 1_000_000}
+	if got := Cost(c, n, beijing(7, 10, 0, 0)); !approx(got, 1) {
+		t.Errorf("Cost() = %v, want the base 1 (an unknown window type must not apply)", got)
+	}
+}
+
+// Media axes are priced per single unit and no vendor schedules them, so a
+// schedule must leave them alone — the same guarantee tiers already carry.
+func TestCostSchedulesDoNotDisturbMediaAxes(t *testing.T) {
+	c := catalog.Cost{
+		Second: 0.001,
+		Schedules: []catalog.CostSchedule{{
+			Input: 99,
+			When: []catalog.Window{{
+				Type: catalog.WindowWeekly, Offset: "+08:00",
+				Days: []string{"mon"}, Start: "09:00", End: "12:00",
+			}},
+		}},
+	}
+	n := wire.Normalized{Seconds: 60}
+	if got := Cost(c, n, beijing(7, 10, 0, 0)); !approx(got, 0.06) {
+		t.Errorf("Cost() = %v, want 0.06 — a peak window must not touch a per-second rate", got)
 	}
 }

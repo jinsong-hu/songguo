@@ -30,10 +30,15 @@ package catalog
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"regexp"
+	"slices"
+	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 //go:embed models.json
@@ -82,10 +87,18 @@ type Endpoint struct {
 	Models   []string `json:"models,omitempty"`
 }
 
-// Model is one model's descriptive metadata and price, in models.dev's shape.
+// Model is one model's descriptive metadata and price, in models.dev's shape,
+// plus Note — songguo's own, with no models.dev counterpart.
 type Model struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name,omitempty"`
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+	// Note is why this entry is written the way it is: a retired id still
+	// accepted under another model, a rate pinned against a stale upstream, a
+	// dated repricing someone has to come back for. It is rendered beside the
+	// model in the provider editor rather than kept as a comment nothing reads,
+	// because the operator looking at a surprising rate is exactly who needs it.
+	// Only the hand-written catalogue sets it; a generated entry never does.
+	Note        string     `json:"note,omitempty"`
 	Family      string     `json:"family,omitempty"`
 	Attachment  bool       `json:"attachment,omitempty"`
 	Reasoning   bool       `json:"reasoning,omitempty"`
@@ -145,8 +158,20 @@ type Cost struct {
 	// Tiers raises the token rates for large requests. Vendors charge more once
 	// a prompt crosses a context threshold — gpt-5.6-luna doubles above 272k —
 	// and ignoring that under-bills exactly the long agent contexts songguo is
-	// built to route. See At.
+	// built to route. See Resolve.
 	Tiers []CostTier `json:"tiers,omitempty" yaml:"tiers"`
+
+	// Schedules raises the token rates during the vendor's published peak hours.
+	// DeepSeek charges double on weekday business hours, which no static rate can
+	// express: pick either number and you are wrong for part of every week.
+	//
+	// Unlike every other field here this one is songguo's alone and can only ever
+	// come from the hand-written half of the catalogue. models.dev models no time
+	// axis at all — across its 213 providers a `cost` object carries only input,
+	// output, cache_read, cache_write, reasoning, input_audio, output_audio,
+	// context_over_200k and tiers, and all 349 tiers upstream are type "context".
+	// So there is nothing to sync and nothing a refresh can overwrite. See Resolve.
+	Schedules []CostSchedule `json:"schedules,omitempty" yaml:"schedules"`
 }
 
 // CostTier is the token rates that apply once a request crosses Tier.Size. The
@@ -178,7 +203,217 @@ type TierBound struct {
 // how large the request's input is.
 const TierContext = "context"
 
-// At resolves the rates for a request whose input is contextTokens long.
+// CostSchedule is the token rates that apply while the clock is inside any of
+// its windows. It mirrors CostTier deliberately — same four axes, same rule that
+// an axis it omits keeps the base rate — so the two conditional forms read the
+// same way and neither needs its own mental model.
+//
+// One rate set, several windows: a vendor that raises prices twice a day states
+// one schedule with two windows rather than two schedules repeating the same
+// numbers. DeepSeek's peak is 09:00-12:00 and 14:00-18:00, which is exactly this
+// shape.
+type CostSchedule struct {
+	Input      float64  `json:"input,omitempty" yaml:"input"`
+	Output     float64  `json:"output,omitempty" yaml:"output"`
+	CacheRead  float64  `json:"cache_read,omitempty" yaml:"cache_read"`
+	CacheWrite float64  `json:"cache_write,omitempty" yaml:"cache_write"`
+	When       []Window `json:"when" yaml:"when"`
+}
+
+// Window is a recurring stretch of wall-clock time, in the vendor's own terms.
+//
+// # Why an offset and not a timezone name
+//
+// Vendors publish these rules in their local time — DeepSeek says "北京时间周一至
+// 周五 9:00-12:00". Beijing has no DST, so a fixed offset reproduces that rule
+// exactly while keeping the file readable as the vendor wrote it; rewriting the
+// hours into UTC would be equally correct and would lose the ability to check the
+// file against the vendor's page at a glance. It also means pricing never depends
+// on tzdata being present in the runtime image.
+//
+// A vendor whose peak hours observe DST cannot be expressed this way, and must
+// not be faked with an offset that is right for half the year. That is what Type
+// is for: a new kind of window gets a new type and its own matcher.
+type Window struct {
+	// Type selects how the window is interpreted. WindowWeekly is the only one.
+	Type string `json:"type" yaml:"type"`
+	// Offset is the fixed UTC offset the clock times below are stated in,
+	// "+08:00" style. Empty or "Z" means UTC.
+	Offset string `json:"offset,omitempty" yaml:"offset"`
+	// Days are the weekdays the window applies on, "mon".."sun".
+	Days []string `json:"days" yaml:"days"`
+	// Start and End are "HH:MM" in Offset's zone. The interval is HALF-OPEN:
+	// 09:00-12:00 includes 11:59:59 and excludes 12:00:00, so two adjacent
+	// windows can meet without overlapping and no instant is priced twice.
+	Start string `json:"start" yaml:"start"`
+	End   string `json:"end" yaml:"end"`
+}
+
+// WindowWeekly is a window that repeats on the same weekdays every week. It is
+// the only shape any vendor songguo maps publishes.
+const WindowWeekly = "weekly"
+
+// weekdays maps the day names a window may use onto Go's. Lowercase three-letter
+// names only: a single spelling means Validate can reject a typo outright rather
+// than quietly matching nothing, which would under-bill in silence.
+var weekdays = map[string]time.Weekday{
+	"sun": time.Sunday, "mon": time.Monday, "tue": time.Tuesday, "wed": time.Wednesday,
+	"thu": time.Thursday, "fri": time.Friday, "sat": time.Saturday,
+}
+
+// Validate reports what is wrong with a window, or nil.
+//
+// Every window in the catalogue is checked at load (see Load), and the checking
+// is STRICT — an unusable window is an error, where an unrecognized TierBound
+// type is merely ignored. The asymmetry is deliberate and worth stating, because
+// the two look like the same situation and are not:
+//
+//   - A tier arrives from models.dev, which can add a bracket type any day
+//     without telling us. Ignoring one we do not understand bills at the base
+//     rate, which is wrong but bounded, and beats failing to boot over an
+//     upstream edit nobody here made.
+//   - A window can only come from catalog.json, which is ours. There is no
+//     upstream that can surprise us, so an unusable window is a typo in a file we
+//     wrote — and the failure mode of ignoring it is billing every peak hour at
+//     the off-peak rate, silently, forever. Refusing to load is strictly better
+//     than that, and it surfaces at build and test time rather than to an
+//     operator.
+func (w Window) Validate() error {
+	if w.Type != WindowWeekly {
+		return fmt.Errorf("unknown window type %q (only %q exists)", w.Type, WindowWeekly)
+	}
+	if _, ok := w.location(); !ok {
+		return fmt.Errorf("offset %q is not a ±HH:MM UTC offset", w.Offset)
+	}
+	if len(w.Days) == 0 {
+		return errors.New("window names no days")
+	}
+	for _, d := range w.Days {
+		if _, ok := weekdays[d]; !ok {
+			return fmt.Errorf("unknown day %q (want mon..sun)", d)
+		}
+	}
+	start, ok := parseClock(w.Start)
+	if !ok {
+		return fmt.Errorf("start %q is not HH:MM", w.Start)
+	}
+	end, ok := parseClock(w.End)
+	if !ok {
+		return fmt.Errorf("end %q is not HH:MM", w.End)
+	}
+	// A window that wraps midnight is refused rather than interpreted. "fri
+	// 22:00-02:00" has no obvious answer for whether Saturday 01:00 is inside it
+	// — the day list could mean the day it starts or the day it covers — and
+	// guessing would misprice four hours a week in whichever direction we picked.
+	// Two windows say it unambiguously, so the file can always express it.
+	if end <= start {
+		return fmt.Errorf("end %q is not after start %q (a window may not wrap midnight; write two windows)", w.End, w.Start)
+	}
+	return nil
+}
+
+// Contains reports whether t falls inside the window. A window that does not
+// Validate contains nothing — the load-time check is what makes that unreachable
+// rather than a silent under-bill.
+func (w Window) Contains(t time.Time) bool {
+	if w.Type != WindowWeekly {
+		return false
+	}
+	loc, ok := w.location()
+	if !ok {
+		return false
+	}
+	local := t.In(loc)
+	onDay := false
+	for _, d := range w.Days {
+		if wd, known := weekdays[d]; known && wd == local.Weekday() {
+			onDay = true
+			break
+		}
+	}
+	if !onDay {
+		return false
+	}
+	start, ok := parseClock(w.Start)
+	if !ok {
+		return false
+	}
+	end, ok := parseClock(w.End)
+	if !ok {
+		return false
+	}
+	// Minutes since local midnight. Truncating seconds away is what makes the
+	// half-open bound behave: 11:59:59 lands on 719 and is inside 09:00-12:00,
+	// 12:00:00 lands on 720 and is not.
+	mins := local.Hour()*60 + local.Minute()
+	return mins >= start && mins < end
+}
+
+// location resolves Offset to a fixed zone. Empty and "Z" are UTC.
+func (w Window) location() (*time.Location, bool) {
+	s := w.Offset
+	if s == "" || s == "Z" {
+		return time.UTC, true
+	}
+	if len(s) != 6 || s[3] != ':' || (s[0] != '+' && s[0] != '-') {
+		return nil, false
+	}
+	h, err := strconv.Atoi(s[1:3])
+	if err != nil || h > 23 {
+		return nil, false
+	}
+	m, err := strconv.Atoi(s[4:6])
+	if err != nil || m > 59 {
+		return nil, false
+	}
+	secs := h*3600 + m*60
+	if s[0] == '-' {
+		secs = -secs
+	}
+	return time.FixedZone(s, secs), true
+}
+
+// parseClock turns "HH:MM" into minutes since midnight.
+func parseClock(s string) (int, bool) {
+	if len(s) != 5 || s[2] != ':' {
+		return 0, false
+	}
+	h, err := strconv.Atoi(s[:2])
+	if err != nil || h > 23 {
+		return 0, false
+	}
+	m, err := strconv.Atoi(s[3:])
+	if err != nil || m > 59 {
+		return 0, false
+	}
+	return h*60 + m, true
+}
+
+// Resolve reduces a cost to the plain rate table that applies to one request:
+// the one whose prompt is contextTokens long, sent at instant at.
+//
+// The result carries neither tiers nor schedules, so it is a flat set of rates
+// that pricing.Cost can simply sum.
+//
+// # A cost may be conditional on size or on time, never both
+//
+// Tiers and Schedules both state ABSOLUTE rates, so applying one after the other
+// would mean the second silently overwrote the first, and there is no published
+// evidence about which way a vendor would intend that to compose — no vendor
+// songguo maps declares both. Load and config.validatePrices reject a cost
+// carrying both, which is what makes the branch below a choice between two
+// exclusive cases rather than a precedence rule quietly deciding money.
+//
+// Schedules are tried first purely so this function stays total if a cost ever
+// reaches it unvalidated; it is not a ranking, and it is unreachable.
+func (c Cost) Resolve(contextTokens float64, at time.Time) Cost {
+	if len(c.Schedules) > 0 {
+		return c.atSchedule(at)
+	}
+	return c.atTier(contextTokens)
+}
+
+// atTier resolves the rates for a request whose input is contextTokens long.
 //
 // A vendor prices the WHOLE request at the bracket its prompt falls into — it is
 // not marginal, so crossing 272k does not mean "the first 272k stay cheap". The
@@ -189,9 +424,8 @@ const TierContext = "context"
 // depending on an ordering nobody guarantees would silently misprice if it ever
 // changed, and picking the maximum explicitly costs one comparison.
 //
-// The returned cost carries no tiers, so it is a plain rate table that can be
-// summed. Media axes are untouched — every tier upstream carries token rates.
-func (c Cost) At(contextTokens float64) Cost {
+// Media axes are untouched — every tier upstream carries token rates.
+func (c Cost) atTier(contextTokens float64) Cost {
 	best := -1
 	for i, t := range c.Tiers {
 		if t.Tier.Type != TierContext || contextTokens <= float64(t.Tier.Size) {
@@ -201,25 +435,63 @@ func (c Cost) At(contextTokens float64) Cost {
 			best = i
 		}
 	}
-	out := c
-	out.Tiers = nil
+	out := c.flat()
 	if best < 0 {
 		return out
 	}
 	t := c.Tiers[best]
-	if t.Input != 0 {
-		out.Input = t.Input
-	}
-	if t.Output != 0 {
-		out.Output = t.Output
-	}
-	if t.CacheRead != 0 {
-		out.CacheRead = t.CacheRead
-	}
-	if t.CacheWrite != 0 {
-		out.CacheWrite = t.CacheWrite
+	out.override(t.Input, t.Output, t.CacheRead, t.CacheWrite)
+	return out
+}
+
+// atSchedule resolves the rates in force at instant at.
+//
+// The FIRST matching schedule wins. Windows are half-open so two that meet do
+// not overlap, and a vendor publishes one peak rate rather than a stack of them;
+// taking the first keeps the answer independent of map iteration or file order,
+// which a "highest wins" rule would not be if two schedules ever tied.
+//
+// No match is the ordinary case — off-peak is most of the week — and it means
+// the base rates stand, exactly as an uncrossed tier does.
+func (c Cost) atSchedule(at time.Time) Cost {
+	out := c.flat()
+	for _, s := range c.Schedules {
+		for _, w := range s.When {
+			if w.Contains(at) {
+				out.override(s.Input, s.Output, s.CacheRead, s.CacheWrite)
+				return out
+			}
+		}
 	}
 	return out
+}
+
+// flat is the cost with its conditional tables dropped, leaving the base rates.
+func (c Cost) flat() Cost {
+	out := c
+	out.Tiers = nil
+	out.Schedules = nil
+	return out
+}
+
+// override applies the axes a tier or schedule states, leaving the ones it omits
+// at the base rate. Zero means "unstated": both forms state only what changes,
+// and reading a missing axis as "unchanged" changes only what the vendor said
+// changed. A vendor that genuinely drops an axis to free in a bracket cannot be
+// expressed, and none does.
+func (c *Cost) override(input, output, cacheRead, cacheWrite float64) {
+	if input != 0 {
+		c.Input = input
+	}
+	if output != 0 {
+		c.Output = output
+	}
+	if cacheRead != 0 {
+		c.CacheRead = cacheRead
+	}
+	if cacheWrite != 0 {
+		c.CacheWrite = cacheWrite
+	}
 }
 
 // Equal compares two costs. Cost holds a slice, so == does not apply to it; the
@@ -230,7 +502,7 @@ func (c Cost) Equal(o Cost) bool {
 		c.CacheRead != o.CacheRead || c.CacheWrite != o.CacheWrite ||
 		c.Character != o.Character || c.Second != o.Second ||
 		c.Image != o.Image || c.Call != o.Call ||
-		len(c.Tiers) != len(o.Tiers) {
+		len(c.Tiers) != len(o.Tiers) || len(c.Schedules) != len(o.Schedules) {
 		return false
 	}
 	for i := range c.Tiers {
@@ -238,7 +510,42 @@ func (c Cost) Equal(o Cost) bool {
 			return false
 		}
 	}
+	for i := range c.Schedules {
+		if !c.Schedules[i].equal(o.Schedules[i]) {
+			return false
+		}
+	}
 	return true
+}
+
+// equal compares two schedules. CostSchedule holds a window slice and Window
+// holds a day slice, so neither is comparable with ==; the axes are spelled out
+// here for the same reason Cost.Equal spells its own out, so adding one without
+// updating this fails a test instead of silently comparing less.
+//
+// This is what keeps internal/pricefeed honest: a refresh reports a rate as
+// changed by comparing costs, so a schedule the comparison could not see would
+// make a peak-rate edit look like no change at all.
+func (s CostSchedule) equal(o CostSchedule) bool {
+	if s.Input != o.Input || s.Output != o.Output ||
+		s.CacheRead != o.CacheRead || s.CacheWrite != o.CacheWrite ||
+		len(s.When) != len(o.When) {
+		return false
+	}
+	for i := range s.When {
+		if !s.When[i].equal(o.When[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (w Window) equal(o Window) bool {
+	if w.Type != o.Type || w.Offset != o.Offset ||
+		w.Start != o.Start || w.End != o.End || len(w.Days) != len(o.Days) {
+		return false
+	}
+	return slices.Equal(w.Days, o.Days)
 }
 
 // Zero reports whether a cost declares no rate at all, i.e. would always meter
@@ -259,6 +566,12 @@ func (c Cost) Tokens() bool {
 // The hand-maintained file wins: a model present in both keeps its hand-written
 // cost, so pinning a rate the generator would overwrite is a matter of adding it
 // to catalog.json.
+//
+// The merged result is validated, not just parsed. A cost that JSON accepts can
+// still be unusable — a window nothing will ever match, or both conditional
+// tables at once — and the whole point of a rate table is that nobody looks at it
+// again once it is right. Catching that here means a bad edit fails the build;
+// the alternative is discovering it in a month of quietly wrong invoices.
 func Load() (Catalog, error) {
 	gen, err := parse(generated, "models.json")
 	if err != nil {
@@ -268,7 +581,57 @@ func Load() (Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
-	return merge(gen, man), nil
+	out := merge(gen, man)
+	if err := out.validate(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// validate checks every cost the catalogue declares. It reports the FIRST
+// problem: these are typos in a file we own, fixed one at a time, and a single
+// precise message beats a list.
+func (c Catalog) validate() error {
+	for _, pid := range sortedKeys(c) {
+		p := c[pid]
+		for _, mid := range sortedKeys(p.Models) {
+			if err := ValidateCost(p.Models[mid].Cost); err != nil {
+				return fmt.Errorf("catalog: %s/%s: %w", pid, mid, err)
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateCost reports what makes a cost unusable, or nil. Exported because
+// config runs the same check over the rates that reach it from the store, so an
+// operator's row and a catalogue entry are held to one standard.
+func ValidateCost(c Cost) error {
+	// See Resolve: both forms state absolute rates, so a cost declaring both has
+	// no defined meaning rather than a debatable one.
+	if len(c.Tiers) > 0 && len(c.Schedules) > 0 {
+		return errors.New("declares both context tiers and time schedules; a rate may be conditional on size or on time, not both")
+	}
+	for i, s := range c.Schedules {
+		if len(s.When) == 0 {
+			return fmt.Errorf("schedule %d applies to no window", i)
+		}
+		for j, w := range s.When {
+			if err := w.Validate(); err != nil {
+				return fmt.Errorf("schedule %d window %d: %w", i, j, err)
+			}
+		}
+	}
+	return nil
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
 }
 
 // Manual returns just the hand-maintained half — catalog.json, before the

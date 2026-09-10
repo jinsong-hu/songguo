@@ -292,6 +292,67 @@ Four rules, each of which is a way to get this wrong:
 ignored rather than guessed at, so a new kind of bracket bills at the base rate
 until it is implemented.
 
+#### Time-of-day rates
+
+Some vendors charge more by the clock rather than by the request. DeepSeek bills
+**double** during 高峰时段 — Beijing Mon–Fri 09:00–12:00 and 14:00–18:00 — on
+every axis. No static rate can express that: pick either number and you are wrong
+for part of every working week, by 2x.
+
+```json
+"cost": {
+  "input": 0.15, "output": 0.6, "cache_read": 0.003,
+  "schedules": [
+    { "input": 0.3, "output": 1.2, "cache_read": 0.006,
+      "when": [
+        { "type": "weekly", "offset": "+08:00",
+          "days": ["mon","tue","wed","thu","fri"], "start": "09:00", "end": "12:00" },
+        { "type": "weekly", "offset": "+08:00",
+          "days": ["mon","tue","wed","thu","fri"], "start": "14:00", "end": "18:00" }
+      ] }
+  ]
+}
+```
+
+The shape mirrors a context tier — same four axes, same rule that an omitted axis
+keeps the base rate — so the two conditional forms need one mental model, not two.
+What differs:
+
+- **The base is OFF-PEAK, and the schedule raises.** Peak is ~35 hours of 168, so
+  the base is the ordinary case, matching how a tier states the un-bracketed rate.
+- **The window carries the vendor's own offset, not a timezone name.** Beijing has
+  no DST, so `+08:00` reproduces DeepSeek's rule exactly while keeping the file
+  checkable against the vendor's page at a glance. It also means pricing never
+  depends on tzdata being in the runtime image. A vendor whose peak hours observe
+  DST cannot be faked with an offset that is right for half the year — that needs
+  a new `type` and its own matcher.
+- **Windows are half-open.** `09:00–12:00` includes 11:59:59 and excludes 12:00:00,
+  so two adjacent windows meet without any instant being priced twice.
+- **The instant is the request's START.** A stream running across a boundary bills
+  wholly at the rate in force when it was sent — what the vendor does, and the only
+  choice under which two identical requests cannot cost different amounts because
+  one answer took longer.
+- **A cost may be conditional on size or on time, never both.** Both forms state
+  absolute rates, so applying one after the other would mean the second silently
+  overwrote the first, and no vendor publishes both to tell us which way it should
+  compose. `catalog.ValidateCost` rejects the combination.
+
+Validation here is **strict**, where an unrecognized `tier.type` is merely ignored.
+The asymmetry is the point: a tier arrives from models.dev, which can add a bracket
+type any day without telling us, so ignoring one bills at the base rate and beats
+failing to boot over an upstream edit. A window can only come from `catalog.json`,
+which is ours — there is no upstream that can surprise us, so an unusable window is
+a typo in a file we wrote, and the cost of ignoring it is billing every peak hour
+at the off-peak rate, silently, until someone reads an invoice. A misspelled day,
+an offset that is a timezone name, a window that wraps midnight: all refused at
+load.
+
+**models.dev supplies none of this.** Across its 213 providers a `cost` object
+carries only `input`, `output`, `cache_read`, `cache_write`, `reasoning`,
+`input_audio`, `output_audio`, `context_over_200k` and `tiers`. There is no time
+concept to sync, which makes peak rates permanently a `catalog.json` matter — and
+means a refresh can never overwrite one.
+
 ### Half the catalog's prices are generated, and the files say which half
 
 `internal/catalog` embeds two files with two owners:
@@ -343,15 +404,36 @@ Resolution order — the ordering is the whole design:
 | | source | why it is where it is |
 |---|---|---|
 | 1 | the operator's row, when marked `price_override` | a rate someone typed wins outright |
-| 2 | the price feed (`feed`) | current, so a stale seed self-corrects |
-| 3 | the embedded catalog (`catalog`) | the offline floor and first-boot seed |
-| 4 | the operator's row as-is, else unpriced | |
+| 2 | a pin in `catalog.json`, for this provider (`pinned`) | so does a rate someone typed here |
+| 3 | the price feed, for this provider (`feed`) | current, so a stale seed self-corrects |
+| 4 | the embedded catalog, for this provider (`catalog`) | the offline floor and first-boot seed |
+| 5 | the feed, then the catalog, under **any** provider | a guess, for rows with no `catalog_id` |
+| 6 | the operator's row as-is, else unpriced | |
 
-A rate hand-pinned in `catalog.json` gets **no rule of its own**, because it
-cannot collide: `modelsdev.Generate` skips every model the hand-written file
-defines and the feed is built from `Generate`, so a pinned model never reaches
-the feed to be overtaken by it. That invariant is held by a test
-(`TestGenerateNeverEmitsAPinnedModel`) rather than by an extra layer here.
+Two of these placements are load-bearing and both were once wrong.
+
+**A pin is read, not inferred.** It is tempting to give it no rule of its own:
+`modelsdev.Generate` skips every model the hand-written file prices, so a pin
+works by removing the model from the feed. That holds while the store is in step
+with the catalogue and fails on the one deploy that matters — the release that
+*introduces* the pin, when `feed_prices` still holds the row written before it.
+Consulting the feed first found that row, and the pin did nothing, at the rate it
+existed to replace. Worse, the refresh that would clear it only walks the models
+it just generated, so a model that *left* the set was invisible to the change
+counter and no rebuild was triggered; and if the fetch failed the row survived
+indefinitely. So `effectivePrice` reads `catalog.Manual()` directly, at row 2.
+Nothing is lost by winning early: `Generate` never emits a pinned model, so the
+feed can hold nothing fresher for it than the row the pin replaced.
+
+**An exact match beats a guess.** The any-provider steps match on a model id with
+no vendor to narrow by, so they sit below every lookup that had a `catalog_id`.
+Ordering them above the catalog had the same shape of failure as the one above:
+a pin removed the model from its own provider's feed, so the guess went hunting
+across every other list, and models.dev's `azure` entry — which carries
+`deepseek-v4-flash` at 0.19/0.51 and DeepSeek's Pro line at Azure's markup — won
+it. In both cases *pinning a rate made it more likely to bill at someone else's
+number*. `TestPinBeatsAStaleFeedRow` and `TestCatalogPinBeatsRehostFeed` are the
+guards.
 
 An automatic rate change is safe here for one specific reason: **cost is
 computed at call time and persisted to `calls.cost`**. A refresh can only affect

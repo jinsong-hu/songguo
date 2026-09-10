@@ -251,3 +251,173 @@ func TestSpeechModelsPriceOnTheirOwnAxes(t *testing.T) {
 		}
 	}
 }
+
+// weeklyPeak is the window shape DeepSeek publishes, for the tests below.
+func weeklyPeak(start, end string) Window {
+	return Window{
+		Type: WindowWeekly, Offset: "+08:00",
+		Days: []string{"mon", "tue", "wed", "thu", "fri"}, Start: start, End: end,
+	}
+}
+
+// TestValidateCostRejectsUnusableSchedules is the guard that makes the strictness
+// in Window.Validate worth having. Every case here is valid JSON that would
+// otherwise load fine and then quietly match nothing — which does not fail, it
+// bills every peak hour at the off-peak rate for as long as nobody checks.
+func TestValidateCostRejectsUnusableSchedules(t *testing.T) {
+	ok := weeklyPeak("09:00", "12:00")
+
+	tests := []struct {
+		name string
+		cost Cost
+	}{
+		{
+			// See Resolve: both forms state absolute rates, so a cost carrying
+			// both has no defined rate rather than a debatable one.
+			name: "tiers and schedules together",
+			cost: Cost{
+				Input:     1,
+				Tiers:     []CostTier{{Input: 2, Tier: TierBound{Type: TierContext, Size: 200000}}},
+				Schedules: []CostSchedule{{Input: 3, When: []Window{ok}}},
+			},
+		},
+		{
+			name: "schedule with no window",
+			cost: Cost{Input: 1, Schedules: []CostSchedule{{Input: 2}}},
+		},
+		{
+			name: "unknown window type",
+			cost: Cost{Input: 1, Schedules: []CostSchedule{{Input: 2, When: []Window{
+				{Type: "monthly", Offset: "+08:00", Days: []string{"mon"}, Start: "09:00", End: "12:00"},
+			}}}},
+		},
+		{
+			name: "offset is a timezone name",
+			cost: Cost{Input: 1, Schedules: []CostSchedule{{Input: 2, When: []Window{
+				{Type: WindowWeekly, Offset: "Asia/Shanghai", Days: []string{"mon"}, Start: "09:00", End: "12:00"},
+			}}}},
+		},
+		{
+			name: "misspelled day",
+			cost: Cost{Input: 1, Schedules: []CostSchedule{{Input: 2, When: []Window{
+				{Type: WindowWeekly, Offset: "+08:00", Days: []string{"monday"}, Start: "09:00", End: "12:00"},
+			}}}},
+		},
+		{
+			name: "no days at all",
+			cost: Cost{Input: 1, Schedules: []CostSchedule{{Input: 2, When: []Window{
+				{Type: WindowWeekly, Offset: "+08:00", Start: "09:00", End: "12:00"},
+			}}}},
+		},
+		{
+			name: "clock is not HH:MM",
+			cost: Cost{Input: 1, Schedules: []CostSchedule{{Input: 2, When: []Window{
+				{Type: WindowWeekly, Offset: "+08:00", Days: []string{"mon"}, Start: "9:00", End: "12:00"},
+			}}}},
+		},
+		{
+			// A wrapping window is refused rather than interpreted: whether the
+			// day list means the day it starts or the day it covers has no
+			// obvious answer, and either guess misprices hours a week.
+			name: "window wraps midnight",
+			cost: Cost{Input: 1, Schedules: []CostSchedule{{Input: 2, When: []Window{
+				{Type: WindowWeekly, Offset: "+08:00", Days: []string{"fri"}, Start: "22:00", End: "02:00"},
+			}}}},
+		},
+		{
+			name: "window is empty",
+			cost: Cost{Input: 1, Schedules: []CostSchedule{{Input: 2, When: []Window{
+				{Type: WindowWeekly, Offset: "+08:00", Days: []string{"mon"}, Start: "09:00", End: "09:00"},
+			}}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateCost(tt.cost); err == nil {
+				t.Error("ValidateCost accepted a cost that can never price correctly")
+			}
+		})
+	}
+
+	// The shape the catalogue actually uses must pass, or the guard above is just
+	// rejecting everything.
+	good := Cost{Input: 0.15, Output: 0.6, Schedules: []CostSchedule{
+		{Input: 0.3, Output: 1.2, When: []Window{weeklyPeak("09:00", "12:00"), weeklyPeak("14:00", "18:00")}},
+	}}
+	if err := ValidateCost(good); err != nil {
+		t.Errorf("ValidateCost rejected DeepSeek's real shape: %v", err)
+	}
+}
+
+// TestDeepSeekPeakIsDoubleOffPeak ties the JSON to the vendor's own words. Every
+// DeepSeek axis doubles at peak — the pricing page states it outright ("空闲时段
+// 价格为高峰时段价格的一半") — so a hand edit that updates the base and forgets
+// the schedule, or the reverse, is caught here rather than by an invoice.
+func TestDeepSeekPeakIsDoubleOffPeak(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	p, ok := c["deepseek"]
+	if !ok {
+		t.Fatal("deepseek missing from the catalog")
+	}
+	if len(p.Models) == 0 {
+		t.Fatal("deepseek declares no models; its rates must be pinned, not generated")
+	}
+	for mid, m := range p.Models {
+		if len(m.Cost.Schedules) != 1 {
+			t.Errorf("%s has %d schedules, want exactly the one peak block", mid, len(m.Cost.Schedules))
+			continue
+		}
+		s := m.Cost.Schedules[0]
+		if len(s.When) != 2 {
+			t.Errorf("%s peak covers %d windows, want 2 (09:00-12:00 and 14:00-18:00)", mid, len(s.When))
+		}
+		for _, axis := range []struct {
+			name       string
+			base, peak float64
+		}{
+			{"input", m.Cost.Input, s.Input},
+			{"output", m.Cost.Output, s.Output},
+			{"cache_read", m.Cost.CacheRead, s.CacheRead},
+		} {
+			if axis.base == 0 || axis.peak == 0 {
+				t.Errorf("%s: %s is unpriced (base %v, peak %v)", mid, axis.name, axis.base, axis.peak)
+				continue
+			}
+			if got := axis.peak / axis.base; got < 1.999 || got > 2.001 {
+				t.Errorf("%s: peak %s is %vx the off-peak rate, want 2x (%v vs %v)",
+					mid, axis.name, got, axis.peak, axis.base)
+			}
+		}
+	}
+}
+
+// The retired ids DeepSeek still accepts must stay priced. They are served by
+// V4.1 Flash and billed at Flash price, so a service still pointing at one meters
+// correctly — dropping them would strand it on the provider-ceiling fallback.
+func TestDeepSeekRetiredAliasesPriceAsFlash(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	models := c["deepseek"].Models
+	flash, ok := models["deepseek-flash"]
+	if !ok {
+		t.Fatal("deepseek-flash missing; it is the id DeepSeek's API now takes")
+	}
+	for _, alias := range []string{"deepseek-v4-flash", "deepseek-v4-flash-vision-exp"} {
+		m, ok := models[alias]
+		if !ok {
+			t.Errorf("%s is missing; DeepSeek still accepts it and bills it at Flash price", alias)
+			continue
+		}
+		if !m.Cost.Equal(flash.Cost) {
+			t.Errorf("%s costs %+v, want deepseek-flash's %+v", alias, m.Cost, flash.Cost)
+		}
+		if m.Note == "" {
+			t.Errorf("%s carries no note; a retired id that still bills needs to say so", alias)
+		}
+	}
+}

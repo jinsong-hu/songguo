@@ -14,6 +14,7 @@ import { Skeleton } from './Skeleton';
 import { useFetch } from '../lib/useFetch';
 import { BrandIcon, providerBrand } from '../lib/modelBrand';
 import { wireName, wireServesModels, wireIsUtilityToggle, wireUtilityNote } from '../lib/wires';
+import { peakLabel } from '../lib/catalogIndex';
 import {
   buildPriceIndex,
   buildProvider,
@@ -557,7 +558,8 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
           write&quot; are the rates for cache-hit and cache-write input tokens; leave either at
           0 to charge the full input rate. Models billed per character, second or call keep
           those rates from the catalog and are not editable here. Add or remove models from
-          the API cards above.
+          the API cards above. A model with peak hours shows its off-peak rate here — editing
+          any figure overrides the whole table, peak rates included.
         </span>
         {activeModels.length === 0 ? (
           <span className="muted" style={{ fontSize: 12.5 }}>
@@ -575,10 +577,29 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
             </div>
             {activeModels.map((id) => {
               const p = priceFor(id);
+              // Two things the four number boxes cannot say for themselves: that
+              // the rate beside them only holds off-peak, and why a hand-pinned
+              // entry reads the way it does (a retired id, a dated repricing).
+              // Both are read-only — the catalog owns them, and an override
+              // replaces the whole cost anyway.
+              const peak = peakLabel(p.cost);
+              const note = catalogVendor?.models[id]?.note;
               return (
                 <div key={id} className={styles.modelRow}>
                   <span className="mono" style={{ fontSize: 12.5, wordBreak: 'break-all' }}>
                     {id}
+                    {peak && (
+                      // wordBreak back to normal: the parent breaks anywhere so a
+                      // long model id can wrap, which would otherwise split a
+                      // clock time down the middle ("1" / "4:00–18:00").
+                      <span
+                        className={cards.hint}
+                        style={{ display: 'block', wordBreak: 'normal' }}
+                        title={note || undefined}
+                      >
+                        off-peak · peak {peak}
+                      </span>
+                    )}
                   </span>
                   <input
                     className="input"

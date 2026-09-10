@@ -93,10 +93,27 @@ func PriceMetersZero(p Price) bool { return p.Cost.Zero() }
 // 1M and the media axes are per single unit, so a score is not comparable across
 // those groups — which is why fallbackPrice draws candidates from the models
 // sharing an endpoint rather than from the provider at large.
+//
+// # The score is the WORST the cost can charge, not its base
+//
+// A scheduled peak rate is a real rate the model bills at, so it counts. Ranking
+// on the base alone would let a rate that only appears at 09:00 on a Monday slip
+// past PriceRateImplausible entirely — the bound would be checking a number the
+// vendor never charges — and would rank a peak-priced model below a flat one it
+// is twice as expensive as for a third of the working week.
+//
+// Tiers are deliberately NOT included, and the difference is which number the
+// caller can control. A tier applies only to a prompt over a threshold, so its
+// rate is conditional on the request; a schedule applies to every request inside
+// its window, so from the caller's seat it simply IS the rate at that moment.
 func PriceRank(p Price) float64 {
 	c := p.Cost
 	if c.Tokens() {
-		return max(c.Input, c.Output)
+		rank := max(c.Input, c.Output)
+		for _, s := range c.Schedules {
+			rank = max(rank, s.Input, s.Output)
+		}
+		return rank
 	}
 	return max(c.Character, c.Second, c.Image, c.Call)
 }
@@ -357,10 +374,31 @@ func validateServedModels(who string, models []string) []error {
 func validatePrices(who string, prices map[string]Price) []error {
 	var problems []error
 	for _, model := range SortedKeys(prices) {
-		for _, a := range AxesOf(prices[model].Cost) {
+		cost := prices[model].Cost
+		for _, a := range AxesOf(cost) {
 			if a.Rate < 0 {
 				problems = append(problems, fmt.Errorf("%s: price for model %q has a negative %s rate (%g)", who, model, a.Name, a.Rate))
 			}
+		}
+		// A scheduled rate is charged as literally as a base one, so it is held
+		// to the same rule — a negative peak rate would credit money on every
+		// call inside the window.
+		for i, s := range cost.Schedules {
+			for _, a := range scheduleAxes(s) {
+				if a.Rate < 0 {
+					problems = append(problems, fmt.Errorf("%s: price for model %q has a negative %s rate (%g) in schedule %d", who, model, a.Name, a.Rate, i))
+				}
+			}
+		}
+		// An unusable schedule is fatal here for the same reason a negative rate
+		// is: there is no reading of it that merely bills unusually. A cost
+		// declaring both conditional forms has no defined rate at all, and a
+		// window that can never match silently bills every peak hour at the
+		// off-peak rate. catalog.Load already refuses both in the embedded file;
+		// this is the same check over the rates that reach config from the store,
+		// so a hand-edited row is held to the standard the catalogue is.
+		if err := catalog.ValidateCost(cost); err != nil {
+			problems = append(problems, fmt.Errorf("%s: price for model %q: %w", who, model, err))
 		}
 	}
 	return problems
@@ -375,12 +413,27 @@ type Axis struct {
 // AxesOf lists every rate a cost declares, in a stable order. It is the single
 // place that enumerates the axes: adding a metered quantity means a field on
 // catalog.Cost, a term in pricing.Cost, and a line here.
+//
+// It lists the BASE rates only. A schedule's rates are not another axis — they
+// are the same four token axes under a condition — so they are walked separately
+// by the callers that need them (scheduleAxes) rather than flattened in here,
+// where a negative-rate message could not say which schedule it came from.
 func AxesOf(c catalog.Cost) []Axis {
 	return []Axis{
 		{"input", c.Input}, {"output", c.Output},
 		{"cache_read", c.CacheRead}, {"cache_write", c.CacheWrite},
 		{"character", c.Character}, {"second", c.Second},
 		{"image", c.Image}, {"call", c.Call},
+	}
+}
+
+// scheduleAxes lists the rates one schedule states. Only the token axes exist:
+// a vendor that raises prices by the clock does it on tokens, and no media wire
+// songguo maps publishes a peak rate.
+func scheduleAxes(s catalog.CostSchedule) []Axis {
+	return []Axis{
+		{"input", s.Input}, {"output", s.Output},
+		{"cache_read", s.CacheRead}, {"cache_write", s.CacheWrite},
 	}
 }
 

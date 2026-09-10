@@ -532,7 +532,10 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 		// no rate to reason from: bill $0 and say so.
 		if snap := h.snapshot(); snap != nil {
 			if price, ok := snap.PriceFor(vendorName, billingModel); ok {
-				cost = pricing.Cost(price.Cost, ext.Norm)
+				// The session's start, matching the HTTP path: a realtime session
+				// bills at the rate in force when it was opened, not when the
+				// caller happened to hang up. See pricing.Cost.
+				cost = pricing.Cost(price.Cost, ext.Norm, sessionStart)
 			} else {
 				h.logger.Warn("no price entry for model under this vendor; metering $0",
 					"vendor", vendorName, "model", billingModel)
