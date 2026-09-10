@@ -138,7 +138,261 @@
     "id": "deepseek",
     "name": "DeepSeek",
     "doc": "https://deepseek.com",
-    "models": {},
+    "models": {
+      "deepseek-flash": {
+        "id": "deepseek-flash",
+        "name": "DeepSeek V4.1 Flash",
+        "family": "deepseek-flash",
+        "note": "Rates pinned from https://api-docs.deepseek.com/quick_start/pricing/ — models.dev's deepseek list is stale, and peak pricing has no models.dev field at all. Base is off-peak; the schedule is 高峰时段, Beijing Mon-Fri 09:00-12:00 and 14:00-18:00, double on every axis.",
+        "attachment": true,
+        "reasoning": true,
+        "tool_call": true,
+        "temperature": true,
+        "release_date": "2026-09-10",
+        "last_updated": "2026-09-10",
+        "open_weights": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 384000
+        },
+        "cost": {
+          "input": 0.15,
+          "output": 0.6,
+          "cache_read": 0.003,
+          "schedules": [
+            {
+              "input": 0.3,
+              "output": 1.2,
+              "cache_read": 0.006,
+              "when": [
+                {
+                  "type": "weekly",
+                  "offset": "+08:00",
+                  "days": [
+                    "mon",
+                    "tue",
+                    "wed",
+                    "thu",
+                    "fri"
+                  ],
+                  "start": "09:00",
+                  "end": "12:00"
+                },
+                {
+                  "type": "weekly",
+                  "offset": "+08:00",
+                  "days": [
+                    "mon",
+                    "tue",
+                    "wed",
+                    "thu",
+                    "fri"
+                  ],
+                  "start": "14:00",
+                  "end": "18:00"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "deepseek-v4-flash": {
+        "id": "deepseek-v4-flash",
+        "name": "DeepSeek V4 Flash (retired alias)",
+        "family": "deepseek-flash",
+        "note": "Retired as a model, still accepted as a name: DeepSeek serves it from V4.1 Flash and bills it at Flash price. Priced here rather than dropped because existing services still route it.",
+        "reasoning": true,
+        "tool_call": true,
+        "temperature": true,
+        "open_weights": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 384000
+        },
+        "cost": {
+          "input": 0.15,
+          "output": 0.6,
+          "cache_read": 0.003,
+          "schedules": [
+            {
+              "input": 0.3,
+              "output": 1.2,
+              "cache_read": 0.006,
+              "when": [
+                {
+                  "type": "weekly",
+                  "offset": "+08:00",
+                  "days": [
+                    "mon",
+                    "tue",
+                    "wed",
+                    "thu",
+                    "fri"
+                  ],
+                  "start": "09:00",
+                  "end": "12:00"
+                },
+                {
+                  "type": "weekly",
+                  "offset": "+08:00",
+                  "days": [
+                    "mon",
+                    "tue",
+                    "wed",
+                    "thu",
+                    "fri"
+                  ],
+                  "start": "14:00",
+                  "end": "18:00"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "deepseek-v4-flash-vision-exp": {
+        "id": "deepseek-v4-flash-vision-exp",
+        "name": "DeepSeek V4 Flash Vision (retired alias)",
+        "family": "deepseek-flash",
+        "note": "Retired alongside deepseek-v4-flash and billed at Flash price. Not offered on any endpoint; priced only so a service still pointing at it meters correctly.",
+        "attachment": true,
+        "reasoning": true,
+        "tool_call": true,
+        "temperature": true,
+        "open_weights": true,
+        "modalities": {
+          "input": [
+            "text",
+            "image"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 384000
+        },
+        "cost": {
+          "input": 0.15,
+          "output": 0.6,
+          "cache_read": 0.003,
+          "schedules": [
+            {
+              "input": 0.3,
+              "output": 1.2,
+              "cache_read": 0.006,
+              "when": [
+                {
+                  "type": "weekly",
+                  "offset": "+08:00",
+                  "days": [
+                    "mon",
+                    "tue",
+                    "wed",
+                    "thu",
+                    "fri"
+                  ],
+                  "start": "09:00",
+                  "end": "12:00"
+                },
+                {
+                  "type": "weekly",
+                  "offset": "+08:00",
+                  "days": [
+                    "mon",
+                    "tue",
+                    "wed",
+                    "thu",
+                    "fri"
+                  ],
+                  "start": "14:00",
+                  "end": "18:00"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "deepseek-v4-pro": {
+        "id": "deepseek-v4-pro",
+        "name": "DeepSeek V4 Pro",
+        "family": "deepseek-pro",
+        "note": "REPRICE ON 2026-09-14: from 12:00 Beijing that day DeepSeek routes deepseek-v4-pro to V4.1 Flash and bills it at Flash price, until a V4.1 Pro ships. Until then these are its own rates. Not expressible as a schedule — that is a weekly clock, not a one-way cutover — so it needs a hand edit.",
+        "reasoning": true,
+        "tool_call": true,
+        "temperature": true,
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 1000000,
+          "output": 384000
+        },
+        "cost": {
+          "input": 0.66,
+          "output": 1.98,
+          "cache_read": 0.022,
+          "schedules": [
+            {
+              "input": 1.32,
+              "output": 3.96,
+              "cache_read": 0.044,
+              "when": [
+                {
+                  "type": "weekly",
+                  "offset": "+08:00",
+                  "days": [
+                    "mon",
+                    "tue",
+                    "wed",
+                    "thu",
+                    "fri"
+                  ],
+                  "start": "09:00",
+                  "end": "12:00"
+                },
+                {
+                  "type": "weekly",
+                  "offset": "+08:00",
+                  "days": [
+                    "mon",
+                    "tue",
+                    "wed",
+                    "thu",
+                    "fri"
+                  ],
+                  "start": "14:00",
+                  "end": "18:00"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
     "quirks": {
       "cache_tokens": "deepseek"
     },
@@ -150,6 +404,7 @@
         "docs": "https://api-docs.deepseek.com",
         "note": "Context caching is automatic; cache hits are billed at the cached_input rate (reported via prompt_cache_hit_tokens).",
         "models": [
+          "deepseek-flash",
           "deepseek-v4-flash",
           "deepseek-v4-pro"
         ]
@@ -166,6 +421,7 @@
         "docs": "https://api-docs.deepseek.com/guides/anthropic_api",
         "note": "Same models, Anthropic wire format (for Claude Code and Anthropic SDKs). Claude model aliases map server-side to DeepSeek models.",
         "models": [
+          "deepseek-flash",
           "deepseek-v4-flash",
           "deepseek-v4-pro"
         ]
