@@ -313,6 +313,8 @@ func (s *Store) CallsNeedingFingerprint(limit int) ([]UnfingerprintedCall, error
 // skipped. This changes only what the backfill will pick up again, never what
 // the reader trusts.
 func (s *Store) MarkFingerprintUnavailable(callID string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	if callID == "" {
 		return nil
 	}

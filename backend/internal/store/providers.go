@@ -311,6 +311,8 @@ func scanProvider(sc interface{ Scan(...any) error }) (Provider, error) {
 // CreateProvider inserts a provider plus its models and endpoints in one
 // transaction and returns the assembled row.
 func (s *Store) CreateProvider(np NewProvider) (Provider, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	id, err := randID()
 	if err != nil {
 		return Provider{}, err
@@ -353,6 +355,8 @@ func (s *Store) CreateProvider(np NewProvider) (Provider, error) {
 // UpdateProvider applies the non-nil scalar fields and, when Models or Endpoints
 // is non-nil, replaces that set. It returns the updated provider.
 func (s *Store) UpdateProvider(id string, upd ProviderUpdate) (Provider, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return Provider{}, fmt.Errorf("store: begin: %w", err)
@@ -464,6 +468,8 @@ func nullableID(id string) any {
 
 // DeleteProvider removes a provider; its models and wires cascade.
 func (s *Store) DeleteProvider(id string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	res, err := s.db.Exec(`DELETE FROM providers WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("store: delete provider: %w", err)
@@ -552,6 +558,8 @@ func (s *Store) UpdateProviderModelRouting(
 	weightOverride *int,
 	setWeight bool,
 ) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)

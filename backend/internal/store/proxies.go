@@ -102,6 +102,8 @@ func (s *Store) GetProxy(id string) (Proxy, error) {
 }
 
 func (s *Store) CreateProxy(np NewProxy) (Proxy, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	id, err := randID()
 	if err != nil {
 		return Proxy{}, err
@@ -119,6 +121,8 @@ func (s *Store) CreateProxy(np NewProxy) (Proxy, error) {
 }
 
 func (s *Store) UpdateProxy(id string, upd ProxyUpdate) (Proxy, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	var (
 		sets []string
 		args []any
@@ -172,6 +176,8 @@ func (s *Store) UpdateProxy(id string, upd ProxyUpdate) (Proxy, error) {
 // DeleteProxy refuses to remove an assigned proxy through the foreign key.
 // The API checks ProviderCount first to return a useful conflict message.
 func (s *Store) DeleteProxy(id string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	res, err := s.db.Exec(`DELETE FROM proxies WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("store: delete proxy: %w", err)

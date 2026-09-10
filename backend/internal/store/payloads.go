@@ -38,6 +38,8 @@ type SessionRequest struct {
 // call_id). It is safe to call concurrently: all work goes through the shared
 // *sql.DB which serializes writes.
 func (s *Store) SavePayload(p Payload) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	reqHeaders, err := marshalStringMap(p.ReqHeaders)
 	if err != nil {
 		return fmt.Errorf("store: encode req headers: %w", err)

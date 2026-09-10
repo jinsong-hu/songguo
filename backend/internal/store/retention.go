@@ -43,10 +43,19 @@ import (
 // > The visible symptom was an operator getting "internal error" when adding a
 // > provider. TestPruneQueriesAreIndexBacked is the regression guard.
 
-// pruneBatch is how many rows one DELETE removes before releasing the write
-// lock. Large enough that pruning stays cheap per statement, small enough that
-// a proxied request never waits long behind it.
-const pruneBatch = 2000
+// pruneBatch is how many metadata rows one DELETE removes before releasing the
+// write lock. raw gets its own much smaller batch because one captured body can
+// be megabytes: deleting only a few hundred production rows held the writer for
+// 15–25 seconds even with the cutoff index present.
+const (
+	pruneBatch    = 2000
+	pruneRawBatch = 16
+
+	// A full batch means more work is immediately available. Pause after
+	// releasing writeMu so a queued ledger/spend/config write acquires the gate
+	// before retention starts the next transaction.
+	pruneYield = time.Millisecond
+)
 
 // pruneStmt builds the batched delete for one prune tier. It exists as its own
 // function so TestPruneQueriesAreIndexBacked can run EXPLAIN QUERY PLAN over the
@@ -65,7 +74,7 @@ func pruneStmt(table, tsCol string) string {
 // pruneOlderThan deletes rows of table whose tsCol predates the cutoff, a batch
 // at a time, and returns the total removed. It stops early — returning what it
 // has already deleted, plus ctx.Err() — when the caller cancels.
-func (s *Store) pruneOlderThan(ctx context.Context, table, tsCol string, before time.Time) (int64, error) {
+func (s *Store) pruneOlderThan(ctx context.Context, table, tsCol string, before time.Time, batch int) (int64, error) {
 	stmt := pruneStmt(table, tsCol)
 
 	var total int64
@@ -73,7 +82,9 @@ func (s *Store) pruneOlderThan(ctx context.Context, table, tsCol string, before 
 		if err := ctx.Err(); err != nil {
 			return total, err
 		}
-		res, err := s.db.ExecContext(ctx, stmt, before.UnixMilli(), pruneBatch)
+		s.writeMu.Lock()
+		res, err := s.db.ExecContext(ctx, stmt, before.UnixMilli(), batch)
+		s.writeMu.Unlock()
 		if err != nil {
 			return total, fmt.Errorf("store: prune %s: %w", table, err)
 		}
@@ -84,8 +95,17 @@ func (s *Store) pruneOlderThan(ctx context.Context, table, tsCol string, before 
 		}
 		total += n
 		// A short batch means the last matching row is gone.
-		if n < pruneBatch {
+		if n < int64(batch) {
 			return total, nil
+		}
+		t := time.NewTimer(pruneYield)
+		select {
+		case <-ctx.Done():
+			if !t.Stop() {
+				<-t.C
+			}
+			return total, ctx.Err()
+		case <-t.C:
 		}
 	}
 }
@@ -94,7 +114,7 @@ func (s *Store) pruneOlderThan(ctx context.Context, table, tsCol string, before 
 // the cutoff, by capture time. The shortest-lived tier — bodies are large and
 // only needed for recent debugging/parse. Returns rows deleted.
 func (s *Store) PruneRaw(ctx context.Context, before time.Time) (int64, error) {
-	return s.pruneOlderThan(ctx, "raw", "created_at", before)
+	return s.pruneOlderThan(ctx, "raw", "created_at", before, pruneRawBatch)
 }
 
 // PruneCalls deletes call-level stats rows older than the cutoff, by start time
@@ -106,7 +126,7 @@ func (s *Store) PruneRaw(ctx context.Context, before time.Time) (int64, error) {
 // takes up to three child rows with it, one of them holding the captured bodies
 // — which is the main reason the batching above exists.
 func (s *Store) PruneCalls(ctx context.Context, before time.Time) (int64, error) {
-	return s.pruneOlderThan(ctx, "calls", "ts", before)
+	return s.pruneOlderThan(ctx, "calls", "ts", before, pruneBatch)
 }
 
 // PruneSessions deletes materialized session rollups whose last activity is
@@ -114,5 +134,5 @@ func (s *Store) PruneCalls(ctx context.Context, before time.Time) (int64, error)
 // docs/arch-insights.md), this is final: an aged-out session is gone, not
 // rebuilt. Returns rows deleted.
 func (s *Store) PruneSessions(ctx context.Context, before time.Time) (int64, error) {
-	return s.pruneOlderThan(ctx, "sessions", "last_ts", before)
+	return s.pruneOlderThan(ctx, "sessions", "last_ts", before, pruneBatch)
 }

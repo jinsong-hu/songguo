@@ -15,6 +15,8 @@ import (
 // call_id). Written off the hot path after the client response is sent; callers
 // log failures rather than surfacing them. Safe to call concurrently.
 func (s *Store) SaveComposition(callID string, c compose.Composition) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	sources, err := json.Marshal(c.Sources)
 	if err != nil {
 		return fmt.Errorf("store: marshal composition: %w", err)

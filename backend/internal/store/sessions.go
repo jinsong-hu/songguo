@@ -29,6 +29,8 @@ import (
 // A utility call still extends the time bounds and can carry the latest status,
 // since it is a real call on the session's timeline.
 func (s *Store) UpsertSessionCall(e calls.Entry, title string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	if e.SessionID == "" {
 		return nil // session-less traffic lives only in calls
 	}

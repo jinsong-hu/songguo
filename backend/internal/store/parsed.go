@@ -21,6 +21,8 @@ type ParsedCall struct {
 // written off the hot path by the async parse pipeline; callers log failures
 // rather than surfacing them. Safe to call concurrently (shared *sql.DB).
 func (s *Store) SaveParsedCall(p ParsedCall) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	created := p.CreatedAt
 	if created.IsZero() {
 		created = time.Now()
@@ -55,6 +57,8 @@ func (s *Store) SaveParsedCall(p ParsedCall) error {
 // nothing about the parse package's shapes, exactly as SaveParsedCall does with
 // its opaque Data blob.
 func (s *Store) SaveMessageFingerprint(callID string, count int, head, tail []byte) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	if callID == "" || count <= 0 {
 		return nil
 	}
