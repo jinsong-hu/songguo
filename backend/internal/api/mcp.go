@@ -255,8 +255,11 @@ type providersOut struct {
 	Providers []providerView `json:"providers"`
 }
 
+// mcpListProviders asks for the ledger aggregate the SPA does not: an operator
+// asking an agent "how have my providers been doing" wants exactly those
+// numbers, and a tool call is not a page load — it can afford the scan.
 func (a *api) mcpListProviders(_ context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, providersOut, error) {
-	v, err := a.providersData()
+	v, err := a.providersData(true)
 	if err != nil {
 		return nil, providersOut{}, err
 	}
@@ -279,8 +282,10 @@ type servicesOut struct {
 	Services []serviceView `json:"services"`
 }
 
+// mcpListServices likewise opts into the per-model aggregate its tool
+// description promises; see mcpListProviders.
 func (a *api) mcpListServices(_ context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, servicesOut, error) {
-	v, err := a.servicesData(true)
+	v, err := a.servicesData(true, true)
 	if err != nil {
 		return nil, servicesOut{}, err
 	}

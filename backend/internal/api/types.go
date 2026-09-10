@@ -622,6 +622,11 @@ type vendorStatsView struct {
 // in-memory state and is predictive ("this vendor is demoted, so the next
 // request will go elsewhere"). A vendor with one error months ago reads
 // stats.healthy=false while routing has it perfectly live.
+//
+// Which is why Stats is also the expensive half and Routing the free one: the
+// ledger aggregate scans `calls`, the router answers from memory. Stats is
+// therefore ABSENT unless asked for (see wantCallStats), and this endpoint is
+// polled on a timer by the dashboard — Routing and Capacity are what it reads.
 type vendorView struct {
 	Name         string               `json:"name"`
 	Origin       string               `json:"origin"`
@@ -631,7 +636,7 @@ type vendorView struct {
 	Weight       int                  `json:"weight"`
 	Credential   credentialView       `json:"credential"`
 	Prices       map[string]priceView `json:"prices"`
-	Stats        vendorStatsView      `json:"stats"`
+	Stats        *vendorStatsView     `json:"stats,omitempty"`
 	Routing      *routingStateView    `json:"routing,omitempty"`
 	Capacity     capacityView         `json:"capacity"`
 }
@@ -672,10 +677,40 @@ type capacityView struct {
 	Waiting int `json:"waiting"`
 }
 
+// newVendorStatsView maps one vendor's ledger aggregate into its view.
+//
+// hasStat false means the ledger held no rows for this vendor, which is not the
+// same as a failure: nothing has gone wrong where nothing has been tried, so
+// Healthy stays true. That is a different fact again from stats being ABSENT
+// from a response, which means nobody ran the aggregate — see wantCallStats.
+//
+// Shared by the vendor and the provider views: a provider's stats block IS its
+// vendor's, looked up by name, and the two had drifted into identical copies.
+func newVendorStatsView(stat store.VendorStat, hasStat bool) vendorStatsView {
+	sv := vendorStatsView{Healthy: true} // no traffic => healthy.
+	if !hasStat {
+		return sv
+	}
+	sv.Requests = stat.Requests
+	sv.Rated = stat.Rated
+	sv.Denied = stat.Denied
+	sv.Errors = stat.Errors
+	sv.AvgLatencyMS = stat.AvgLatency
+	sv.LastStatus = stat.LastStatus
+	// Over Rated: a refusal never reached this vendor, and leaving those in
+	// the denominator quietly diluted its error rate toward zero.
+	if stat.Rated > 0 {
+		sv.ErrorRate = float64(stat.Errors) / float64(stat.Rated)
+	}
+	sv.Healthy = stat.Errors == 0
+	return sv
+}
+
 // newVendorView builds a vendor view from config plus computed stats. The raw
 // api_key is intentionally dropped; only a masked preview is emitted. rs is the
 // vendor's live routing state, or nil when the router has no entry for it.
-func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool, rs *router.VendorState, occ concurrency.State) vendorView {
+// stats is nil when the caller did not ask for the ledger aggregate.
+func newVendorView(v config.Vendor, stats *vendorStatsView, rs *router.VendorState, occ concurrency.State) vendorView {
 	models := v.ServedModels
 	if models == nil {
 		models = []string{}
@@ -691,22 +726,6 @@ func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool, rs *rou
 	endpoints := v.Endpoints
 	if endpoints == nil {
 		endpoints = map[string]string{}
-	}
-
-	sv := vendorStatsView{Healthy: true} // no traffic => healthy.
-	if hasStat {
-		sv.Requests = stat.Requests
-		sv.Rated = stat.Rated
-		sv.Denied = stat.Denied
-		sv.Errors = stat.Errors
-		sv.AvgLatencyMS = stat.AvgLatency
-		sv.LastStatus = stat.LastStatus
-		// Over Rated: a refusal never reached this vendor, and leaving those in
-		// the denominator quietly diluted its error rate toward zero.
-		if stat.Rated > 0 {
-			sv.ErrorRate = float64(stat.Errors) / float64(stat.Rated)
-		}
-		sv.Healthy = stat.Errors == 0
 	}
 
 	capacity := capacityView{
@@ -739,7 +758,7 @@ func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool, rs *rou
 		Weight:       v.Weight,
 		Credential:   cred,
 		Prices:       prices,
-		Stats:        sv,
+		Stats:        stats,
 		Routing:      routing,
 		Capacity:     capacity,
 	}

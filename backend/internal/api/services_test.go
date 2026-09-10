@@ -28,7 +28,7 @@ func TestServicesDataIncludesConfiguredRoutesForAdmin(t *testing.T) {
 	}
 
 	a := newAPI(Deps{Store: s})
-	admin, err := a.servicesData(true)
+	admin, err := a.servicesData(true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestServicesDataIncludesConfiguredRoutesForAdmin(t *testing.T) {
 		t.Fatalf("admin route = %+v", route)
 	}
 
-	user, err := a.servicesData(false)
+	user, err := a.servicesData(false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestProviderWeightZeroThroughAPI(t *testing.T) {
 		t.Fatalf("override to -1 err = %v, want 400", err)
 	}
 
-	services, err := a.servicesData(true)
+	services, err := a.servicesData(true, false)
 	if err != nil {
 		t.Fatal(err)
 	}

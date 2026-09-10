@@ -61,10 +61,16 @@ type providerView struct {
 	Models    []providerModelView `json:"models"`
 	CreatedAt string              `json:"created_at"`
 	UpdatedAt string              `json:"updated_at"`
-	Stats     vendorStatsView     `json:"stats"`
+	// Stats is absent unless the caller asked for the ledger aggregate — see
+	// wantCallStats. The single-provider routes never carried real numbers here
+	// (they passed an empty stat and got a "healthy" placeholder); they now say
+	// so by omission instead.
+	Stats *vendorStatsView `json:"stats,omitempty"`
 }
 
-func newProviderView(pvd store.Provider, stat store.VendorStat, hasStat bool, routing *providerRoutingView, cap capacityView) providerView {
+// newProviderView assembles the provider view. stats is nil when the caller did
+// not ask for the ledger aggregate.
+func newProviderView(pvd store.Provider, stats *vendorStatsView, routing *providerRoutingView, cap capacityView) providerView {
 	masked := ""
 	if pvd.APIKey != "" {
 		masked = maskKey(pvd.APIKey)
@@ -76,22 +82,6 @@ func newProviderView(pvd store.Provider, stat store.VendorStat, hasStat bool, ro
 	endpoints := make([]providerEndpointView, 0, len(pvd.Endpoints))
 	for _, ep := range pvd.Endpoints {
 		endpoints = append(endpoints, providerEndpointView{Wire: ep.Wire, Endpoint: ep.Endpoint, Adapter: ep.Adapter})
-	}
-
-	sv := vendorStatsView{Healthy: true}
-	if hasStat {
-		sv.Requests = stat.Requests
-		sv.Rated = stat.Rated
-		sv.Denied = stat.Denied
-		sv.Errors = stat.Errors
-		sv.AvgLatencyMS = stat.AvgLatency
-		sv.LastStatus = stat.LastStatus
-		// Over Rated: a refusal never reached this provider, and leaving those in
-		// the denominator quietly diluted its error rate toward zero.
-		if stat.Rated > 0 {
-			sv.ErrorRate = float64(stat.Errors) / float64(stat.Rated)
-		}
-		sv.Healthy = stat.Errors == 0
 	}
 
 	return providerView{
@@ -113,7 +103,7 @@ func newProviderView(pvd store.Provider, stat store.VendorStat, hasStat bool, ro
 		Models:         models,
 		CreatedAt:      pvd.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:      pvd.UpdatedAt.UTC().Format(time.RFC3339),
-		Stats:          sv,
+		Stats:          stats,
 	}
 }
 
@@ -167,11 +157,12 @@ type patchProviderReq struct {
 
 // --- handlers ---
 
-// handleListProviders returns all configured providers (keys masked) with stats.
+// handleListProviders returns all configured providers (keys masked), with the
+// ledger aggregate only when asked (`?stats=1`).
 // A consumer key gets a sanitized view: identity and wire/model shape only, with
 // upstream endpoint URLs, key preview, pricing, quirks and stats stripped.
 func (a *api) handleListProviders(w http.ResponseWriter, r *http.Request) {
-	views, err := a.providersData()
+	views, err := a.providersData(wantCallStats(r))
 	if err != nil {
 		a.writeDataErr(w, "list providers", err)
 		return
@@ -199,7 +190,10 @@ func sanitizeProvidersForUser(in []providerView) []providerView {
 		p.MaxConcurrency = 0
 		p.Routing = nil
 		p.Capacity = capacityView{}
-		p.Stats = vendorStatsView{Healthy: true}
+		// Dropped rather than zeroed: a zeroed block would tell a consumer
+		// "0 requests, healthy", which is a claim about the ledger rather than a
+		// redaction of it.
+		p.Stats = nil
 		eps := make([]providerEndpointView, 0, len(p.Endpoints))
 		for _, ep := range p.Endpoints {
 			eps = append(eps, providerEndpointView{Wire: ep.Wire, Adapter: ep.Adapter})
@@ -233,21 +227,33 @@ type providerRoutingView struct {
 	Sessions int `json:"sessions"`
 }
 
-// providersData returns all configured providers (keys masked) with per-vendor
-// stats.
-func (a *api) providersData() ([]providerView, error) {
+// providersData returns all configured providers (keys masked), optionally with
+// the per-vendor ledger aggregate.
+//
+// withStats is off for the SPA and on for MCP. The provider list itself is three
+// small config tables; VendorStats is a lifetime scan of `calls` plus a
+// MAX(ts)-per-vendor self-join, which is the whole cost of this endpoint.
+func (a *api) providersData(withStats bool) ([]providerView, error) {
 	pvds, err := a.store.ListProviders()
 	if err != nil {
 		return nil, err
 	}
-	stats, err := a.store.VendorStats(nil, nil)
-	if err != nil {
-		return nil, err
+	var stats map[string]store.VendorStat
+	if withStats {
+		stats, err = a.store.VendorStats(nil, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 	views := make([]providerView, 0, len(pvds))
 	for _, pvd := range pvds {
-		st, ok := stats[pvd.Name]
-		views = append(views, newProviderView(pvd, st, ok, a.providerRouting(pvd.ID), a.providerCapacity(pvd)))
+		var sv *vendorStatsView
+		if withStats {
+			st, ok := stats[pvd.Name]
+			v := newVendorStatsView(st, ok)
+			sv = &v
+		}
+		views = append(views, newProviderView(pvd, sv, a.providerRouting(pvd.ID), a.providerCapacity(pvd)))
 	}
 	return views, nil
 }
@@ -272,7 +278,7 @@ func (a *api) getProviderData(id string) (providerView, error) {
 		}
 		return providerView{}, err
 	}
-	return newProviderView(pvd, store.VendorStat{}, false, a.providerRouting(pvd.ID), a.providerCapacity(pvd)), nil
+	return newProviderView(pvd, nil, a.providerRouting(pvd.ID), a.providerCapacity(pvd)), nil
 }
 
 // handleCreateProvider creates a provider from a JSON body and reloads the config.
@@ -336,7 +342,7 @@ func (a *api) createProviderData(req createProviderReq) (providerView, error) {
 		return providerView{}, err
 	}
 	a.reloadAfterWrite()
-	return newProviderView(pvd, store.VendorStat{}, false, a.providerRouting(pvd.ID), a.providerCapacity(pvd)), nil
+	return newProviderView(pvd, nil, a.providerRouting(pvd.ID), a.providerCapacity(pvd)), nil
 }
 
 // handlePatchProvider applies a subset of fields and reloads the config.
@@ -420,7 +426,7 @@ func (a *api) updateProviderData(id string, req patchProviderReq) (providerView,
 		return providerView{}, err
 	}
 	a.reloadAfterWrite()
-	return newProviderView(pvd, store.VendorStat{}, false, a.providerRouting(pvd.ID), a.providerCapacity(pvd)), nil
+	return newProviderView(pvd, nil, a.providerRouting(pvd.ID), a.providerCapacity(pvd)), nil
 }
 
 // handleDeleteProvider removes a provider and reloads the config.

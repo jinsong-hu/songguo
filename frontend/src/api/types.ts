@@ -675,7 +675,13 @@ export interface Vendor {
   weight: number;
   credential: Credential;
   prices: Record<string, Price>;
-  stats: VendorStats;
+  /**
+   * Absent unless the request asked with `?stats=1`. Computing it scans the
+   * whole call ledger, and this endpoint is polled on a timer for `routing` and
+   * `capacity`, which are in-memory and free. Absent means nobody ran the
+   * aggregate — it does not mean zero.
+   */
+  stats?: VendorStats;
   routing?: RoutingState;
   capacity: Capacity;
 }
@@ -729,7 +735,8 @@ export interface ServiceStats {
 export interface Service {
   model: string;
   providers: ServiceProvider[];
-  stats: ServiceStats;
+  /** Absent unless the request asked with `?stats=1`; see Vendor.stats. */
+  stats?: ServiceStats;
 }
 
 // --- Providers (SQLite-backed upstream config) ---
@@ -808,7 +815,12 @@ export interface Provider {
   models: ProviderModel[];
   created_at: string;
   updated_at: string;
-  stats: VendorStats;
+  /**
+   * Absent unless the request asked with `?stats=1`; see Vendor.stats. Also
+   * always absent for a consumer key, which is a redaction rather than a
+   * measurement — which is exactly why it is dropped and not zeroed.
+   */
+  stats?: VendorStats;
 }
 
 export interface CreateProviderBody {

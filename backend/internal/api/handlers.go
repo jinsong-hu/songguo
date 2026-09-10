@@ -45,6 +45,31 @@ func parseUnixTime(r *http.Request, key string) (*time.Time, bool) {
 	return &t, true
 }
 
+// wantCallStats reports whether the caller asked a config endpoint to also
+// aggregate the call ledger (`?stats=1`).
+//
+// It defaults to OFF because the aggregate is charged to a page that mostly
+// does not want it. /api/services, /api/providers and /api/vendors exist to
+// describe CONFIGURATION — what is declared, what routing will do next — and
+// every one of them answers from small tables in single-digit milliseconds. The
+// lifetime `calls` aggregate bolted onto each response costs 0.7-5.6 s in
+// production, because `calls` is ~105 MB of rows smeared across a >120 GB file
+// on a box with too little RAM to cache it. The SPA renders none of it, and
+// /api/vendors is POLLED on a timer, so the dashboard paid that scan on a loop
+// for a field nothing displayed.
+//
+// Opt-in rather than deleted: the MCP tools do describe provider/model health
+// from these views, and an operator asking "how has this provider been doing"
+// is a fair question for the endpoint that lists providers. It just cannot be
+// the default, because the common caller is a config page that will discard it.
+func wantCallStats(r *http.Request) bool {
+	switch r.URL.Query().Get("stats") {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
+}
+
 // parseIntDefault returns the int value of a query param, or def if missing or
 // unparseable.
 func parseIntDefault(r *http.Request, key string, def int) int {
@@ -2048,10 +2073,17 @@ func (a *api) handleListVendors(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []vendorView{})
 		return
 	}
-	stats, err := a.store.VendorStats(nil, nil)
-	if err != nil {
-		a.serverError(w, "vendor stats", err)
-		return
+	// The dashboard polls this endpoint on a timer for routing and capacity —
+	// both in-memory — so the ledger aggregate stays off unless asked for.
+	withStats := wantCallStats(r)
+	var stats map[string]store.VendorStat
+	if withStats {
+		var err error
+		stats, err = a.store.VendorStats(nil, nil)
+		if err != nil {
+			a.serverError(w, "vendor stats", err)
+			return
+		}
 	}
 	// Live routing state, keyed by vendor name. The router only holds entries
 	// for vendors it has an opinion about; the rest are live by default and get
@@ -2074,13 +2106,18 @@ func (a *api) handleListVendors(w http.ResponseWriter, r *http.Request) {
 	vendors := snap.Vendors()
 	views := make([]vendorView, 0, len(vendors))
 	for _, v := range vendors {
-		st, ok := stats[v.Name]
+		var sv *vendorStatsView
+		if withStats {
+			st, ok := stats[v.Name]
+			s := newVendorStatsView(st, ok)
+			sv = &s
+		}
 		var rs *router.VendorState
 		if s, found := routing[v.Name]; found {
 			rs = &s
 		}
 		occ := occupancy[v.Credential.ID]
-		views = append(views, newVendorView(v, st, ok, rs, occ))
+		views = append(views, newVendorView(v, sv, rs, occ))
 	}
 	writeJSON(w, http.StatusOK, views)
 }

@@ -861,7 +861,8 @@ func TestVendorsNeverLeakAPIKey(t *testing.T) {
 	}
 	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
 
-	rec := do(h, "GET", "/api/vendors", "secret", nil)
+	// ?stats=1: the ledger aggregate is opt-in and this test is about it.
+	rec := do(h, "GET", "/api/vendors?stats=1", "secret", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("vendors: code = %d", rec.Code)
 	}
@@ -896,6 +897,9 @@ func TestVendorsNeverLeakAPIKey(t *testing.T) {
 		t.Errorf("masked_key = %q, want prefix %q", mk, rawAPIKey[:3])
 	}
 	// Stats: 2 requests, 1 error, error_rate 0.5, last status 500 => unhealthy.
+	if openai.Stats == nil {
+		t.Fatal("openai stats missing despite ?stats=1")
+	}
 	if openai.Stats.Requests != 2 || openai.Stats.Errors != 1 {
 		t.Errorf("openai stats = %+v, want 2 req / 1 err", openai.Stats)
 	}
@@ -915,6 +919,9 @@ func TestVendorsNeverLeakAPIKey(t *testing.T) {
 	}
 	if ds == nil {
 		t.Fatal("deepseek vendor missing")
+	}
+	if ds.Stats == nil {
+		t.Fatal("deepseek stats missing despite ?stats=1")
 	}
 	if !ds.Stats.Healthy {
 		t.Error("deepseek (no traffic) should be healthy")

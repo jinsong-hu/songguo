@@ -49,18 +49,49 @@ served **without** auth — it describes shapes only and carries no secrets.
 | `GET /api/calls/{id}/trace` | Captured request/response payload for a call (when capture is enabled for that user). Covers gateway-denied calls too — an unmatched `404`, scope `403`, budget `402`, or rate-limit `429` saves the request plus the synthesized error body, so a rejected request is as inspectable as a forwarded one. (Upstream transport/build `502` failures record a row but no payload — there is no served response to pair.) |
 | `GET /api/users` · `POST /api/users` | List / create users (keys). Create returns the plaintext key once. |
 | `PATCH /api/users/{id}` · `POST /api/users/{id}/revoke` | Update / revoke a user. |
-| `GET /api/providers` · `POST /api/providers` | List / create upstream providers. New providers use direct access. |
+| `GET /api/providers` · `POST /api/providers` | List / create upstream providers. New providers use direct access. Add `?stats=1` for the ledger aggregate — see below. |
 | `GET /api/providers/{id}` · `PATCH` · `DELETE` | Get / update / delete a provider. `PATCH proxy_id` selects a stored proxy; `""` means Direct. |
 | `POST /api/providers/{id}/test` | Probe a provider host for reachability. |
 | `GET /api/proxies` · `POST /api/proxies` | List / create reusable HTTPS or SOCKS5 outbound proxies. Passwords are never returned. |
 | `PATCH /api/proxies/{id}` · `DELETE` | Update / delete a proxy. Assigned proxies cannot be deleted until their providers are set to Direct or another proxy. |
 | `POST /api/proxies/{id}/test` | Probe an origin through the proxy. Dials an assigned provider's origin, or a default vendor origin when none is assigned; sends no credential, and reports the `target` it used. |
-| `GET /api/services` | Auto-derived, model-centric services (each model → the providers behind it). |
+| `GET /api/services` | Auto-derived, model-centric services (each model → the providers behind it). Add `?stats=1` for the ledger aggregate — see below. |
 | `PATCH /api/services/routing/{provider_id}` | Override priority/weight or enable/disable one provider within a model service. `weight: 0` parks it for this model (no share of its tier, still pinnable); `inherit_weight` clears the override. |
-| `GET /api/vendors` · `POST /api/vendors/{name}/test` | List snapshot vendors / probe one. |
+| `GET /api/vendors` · `POST /api/vendors/{name}/test` | List snapshot vendors / probe one. Add `?stats=1` for the ledger aggregate — see below. |
 | `GET /api/catalog` · `GET /api/wires` | Provider presets / registered wire names. |
 | `GET /api/settings` | Read runtime settings. |
 | `GET /api/pricing` | Flattened per-provider model prices. |
+
+### `?stats=1`: the ledger aggregate is opt-in
+
+`/api/services`, `/api/providers` and `/api/vendors` describe **configuration** —
+what is declared, and what routing will do next. Each of them can also carry a
+`stats` block summarizing that model's or vendor's history in the call ledger,
+and **it is only computed when the request asks for it** with `?stats=1`.
+
+It is opt-in because the two halves differ in cost by three orders of magnitude:
+the configuration comes from small tables in single-digit milliseconds, while the
+aggregate scans every row of `calls` — which in production is a few hundred
+megabytes of rows scattered through a database two orders of magnitude larger,
+costing seconds per call. `/api/vendors` in particular is polled on a timer by
+the dashboard, for `routing` and `capacity`, which are in-memory and free.
+
+When it is not requested the key is **absent, not zeroed**. A zeroed block would
+read as "0 requests, no errors, healthy" — a claim about the ledger that nobody
+made. The same distinction as `rated = 0` below: no data is not a score of zero.
+
+Two cases where `stats` is absent no matter what:
+
+- **Consumer keys** never receive it on `/api/providers` (a redaction, so again
+  dropped rather than zeroed).
+- **The single-provider routes** (`GET/POST/PATCH /api/providers/{id}`) never
+  carried real numbers here; they previously emitted a "healthy" placeholder.
+
+Conversely, when stats *are* requested a model or vendor with no ledger rows gets
+a **zeroed** block — there the zero is the answer.
+
+The MCP tools `list_providers` and `list_services` always opt in: their whole
+job is to answer "how has this been doing", and a tool call is not a page load.
 
 ### `requests` counts, `rated` grades
 

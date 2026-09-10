@@ -42,7 +42,12 @@ type serviceStatsView struct {
 type serviceView struct {
 	Model     string                `json:"model"`
 	Providers []serviceProviderView `json:"providers"`
-	Stats     serviceStatsView      `json:"stats"`
+	// Stats is ABSENT unless the caller asked for it (see wantCallStats), not
+	// zeroed. A zero-valued block would read as "0 requests, no errors", which
+	// is a statement about the ledger we did not make — the same reason a call
+	// with no verdict is in neither side of a success rate. Absent says the only
+	// true thing: nobody asked.
+	Stats *serviceStatsView `json:"stats,omitempty"`
 }
 
 // handleListServices returns the model-centric service list. Operators see
@@ -51,7 +56,7 @@ type serviceView struct {
 // currently route.
 func (a *api) handleListServices(w http.ResponseWriter, r *http.Request) {
 	includeDisabled := roleFrom(r) != roleUser
-	views, err := a.servicesData(includeDisabled)
+	views, err := a.servicesData(includeDisabled, wantCallStats(r))
 	if err != nil {
 		a.writeDataErr(w, "model stats", err)
 		return
@@ -80,7 +85,11 @@ func filterServicesByScope(views []serviceView, scope []string) []serviceView {
 // servicesData derives services from provider model declarations. The provider
 // row supplies default routing; nullable model overrides replace those defaults.
 // includeDisabled keeps unavailable relationships visible for operator config.
-func (a *api) servicesData(includeDisabled bool) ([]serviceView, error) {
+//
+// withStats adds the per-model ledger aggregate. It is a separate switch because
+// the derivation above reads three small config tables while the aggregate scans
+// every row of `calls`, so the two differ in cost by three orders of magnitude.
+func (a *api) servicesData(includeDisabled, withStats bool) ([]serviceView, error) {
 	providers, err := a.store.ListProviders()
 	if err != nil {
 		return nil, err
@@ -130,9 +139,12 @@ func (a *api) servicesData(includeDisabled bool) ([]serviceView, error) {
 		}
 	}
 
-	modelStats, err := a.store.ModelStats(nil, nil)
-	if err != nil {
-		return nil, err
+	var modelStats map[string]store.ModelStat
+	if withStats {
+		modelStats, err = a.store.ModelStats(nil, nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	models := make([]string, 0, len(modelProviders))
@@ -150,13 +162,19 @@ func (a *api) servicesData(includeDisabled bool) ([]serviceView, error) {
 			}
 			return providers[i].Name < providers[j].Name
 		})
-		stats := serviceStatsView{}
-		if stat, ok := modelStats[model]; ok {
-			stats.Requests = stat.Requests
-			stats.Rated = stat.Rated
-			stats.Denied = stat.Denied
-			stats.Errors = stat.Errors
-			stats.AvgLatencyMS = stat.AvgLatency
+		// A model with no rows in the ledger still gets a zeroed block when stats
+		// were asked for: there the zero is an answer ("we looked, there was
+		// nothing"), which is exactly what absent must not be taken to mean.
+		var stats *serviceStatsView
+		if withStats {
+			stats = &serviceStatsView{}
+			if stat, ok := modelStats[model]; ok {
+				stats.Requests = stat.Requests
+				stats.Rated = stat.Rated
+				stats.Denied = stat.Denied
+				stats.Errors = stat.Errors
+				stats.AvgLatencyMS = stat.AvgLatency
+			}
 		}
 		views = append(views, serviceView{Model: model, Providers: providers, Stats: stats})
 	}
