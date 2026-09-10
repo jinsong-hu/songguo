@@ -209,6 +209,58 @@ func TestRefreshReloadsOnlyOnChange(t *testing.T) {
 	}
 }
 
+// TestRefreshReloadsWhenAModelLeavesTheSet covers the change the "only on
+// change" rule could not see. A model can leave the generated set — an upstream
+// retires it, or, the case that costs money, its rate becomes hand-pinned and
+// Generate starts skipping it. Either way its row is dropped from the store, and
+// that is a change to what the gateway will bill.
+//
+// The counting loop only walks what was just generated, so a departure never
+// touched `moved`. On the deploy that introduces a pin — the one deploy where it
+// matters — the refresh dropped the row, reported "changed 0", skipped the
+// reload, and left the running snapshot serving the rate the pin replaced.
+func TestRefreshReloadsWhenAModelLeavesTheSet(t *testing.T) {
+	st := openTestStore(t)
+	reloads := 0
+	fd := New(st, quietLogger(), time.Hour, func() error { reloads++; return nil })
+	f := &stubFetcher{providers: upstream(catalog.Cost{Input: 0.2, Output: 1.2})}
+	fd.fetcher = f
+
+	fd.refresh(context.Background())
+	if reloads != 1 {
+		t.Fatalf("reloads = %d after the first refresh, want 1", reloads)
+	}
+	before, err := st.ListFeedPrices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, was := before["openai"]["gpt-5.6-luna"]; !was {
+		t.Fatal("the model was never stored; this test is not exercising a drop")
+	}
+
+	// Quote a different model at a rate that was never stored, so gpt-5.6-luna
+	// simply disappears. Nothing that remains was rewritten, which means the only
+	// evidence of a change is the disappearance itself.
+	f.providers = map[string]catalog.Provider{
+		"openai": {ID: "openai", Name: "OpenAI", Models: map[string]catalog.Model{
+			"gpt-5.6-sol": {ID: "gpt-5.6-sol", Cost: catalog.Cost{Input: 1, Output: 5}},
+		}},
+	}
+	reloads = 0
+	fd.refresh(context.Background())
+
+	after, err := st.ListFeedPrices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, still := after["openai"]["gpt-5.6-luna"]; still {
+		t.Fatal("the departed model is still stored; this test is not exercising a drop")
+	}
+	if reloads == 0 {
+		t.Error("no rebuild after a rate was dropped — the snapshot would keep billing the superseded number")
+	}
+}
+
 // Run refreshes immediately rather than waiting a full interval: a gateway that
 // has been down for a month must come back current.
 func TestRunRefreshesOnStart(t *testing.T) {

@@ -25,7 +25,12 @@
 // # What it will not do
 //
 //   - Overwrite a hand-pinned rate. catalog.json wins over the feed exactly as
-//     it wins over the generated models.json (see configsvc.effectivePrice).
+//     it wins over the generated models.json — and it wins because
+//     configsvc.effectivePrice reads the hand-written file FIRST, not merely
+//     because Generate declines to emit the model. The difference is the deploy
+//     that introduces a pin, when the store still holds the row from before it:
+//     resting on the absence left that row in charge, at the rate the pin exists
+//     to replace.
 //   - Overwrite an operator's price_override. That is checked first and never
 //     consults the feed at all.
 //   - Invent a rate for a model the feed does not carry, which is every
@@ -163,6 +168,15 @@ func (f *Feed) refresh(ctx context.Context) {
 			prices = append(prices, store.FeedPrice{ProviderID: pid, Model: mid, Cost: cost, FetchedAt: at})
 		}
 	}
+	// A model that LEFT the set is a change too, and the loop above cannot see
+	// it — that loop only walks what was just generated. The case that matters is
+	// a rate becoming hand-pinned: Generate then skips the model, ReplaceFeedPrices
+	// drops its row below, and configsvc has to rebuild for the pin to reach
+	// traffic. Counting only rewrites left moved at zero on exactly the deploy
+	// that introduces a pin, so the reload was skipped and the gateway kept
+	// billing the superseded rate until some unrelated config write happened.
+	dropped := countDropped(previous, generated)
+	moved += dropped
 
 	if len(prices) == 0 {
 		f.logger.Warn("price feed: upstream quoted nothing; keeping the last known good prices",
@@ -174,7 +188,8 @@ func (f *Feed) refresh(ctx context.Context) {
 		return
 	}
 
-	f.logger.Info("price feed refreshed", "models", len(prices), "changed", moved, "rejected", rejected)
+	f.logger.Info("price feed refreshed",
+		"models", len(prices), "changed", moved, "dropped", dropped, "rejected", rejected)
 	if moved == 0 || f.reload == nil {
 		return
 	}
@@ -183,6 +198,25 @@ func (f *Feed) refresh(ctx context.Context) {
 	if err := f.reload(); err != nil {
 		f.logger.Error("price feed: stored new prices but the config reload failed", "err", err)
 	}
+}
+
+// countDropped reports how many stored rates the new snapshot no longer carries.
+//
+// It counts rather than logs each one: the ordinary reason a model disappears is
+// that an upstream retired it, which is not news, and the reason that IS news —
+// a rate becoming hand-pinned — is already visible in the diff of catalog.json
+// that caused it. What matters here is only that the number is non-zero, so the
+// config rebuild happens.
+func countDropped(previous map[string]map[string]store.FeedPrice, generated catalog.Catalog) int {
+	n := 0
+	for pid, models := range previous {
+		for mid := range models {
+			if _, ok := generated[pid].Models[mid]; !ok {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // report logs one rate change. A large move is worth an operator's attention —

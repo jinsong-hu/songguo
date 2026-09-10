@@ -637,6 +637,141 @@ func TestAnyProviderPrefersTheMakerOverAReseller(t *testing.T) {
 	}
 }
 
+// TestCatalogPinBeatsRehostFeed guards the one ordering rule that makes a
+// hand-pinned rate mean anything: for a provider that NAMES its catalog id, the
+// catalog is consulted before either any-provider guess.
+//
+// The failure it replaces was self-inflicted and invisible. Pinning a rate in
+// catalog.json makes modelsdev.Generate skip that model, so the pin REMOVES it
+// from its own provider's feed — which is the point, since that is how the feed
+// stops overwriting it. But the any-provider feed lookup used to run next, and
+// it matches on a model id with no provider to narrow by. models.dev's azure
+// list carries deepseek-v4-flash at 0.19/0.51, so the pin handed the model to
+// Azure's markup: the act of pinning a rate was what caused another vendor's
+// rate to win.
+//
+// The scenario below is exactly that, with the pin modelled the way a pin
+// actually presents itself — present in the catalog, absent from its own
+// provider's feed.
+func TestCatalogPinBeatsRehostFeed(t *testing.T) {
+	src := priceSources{
+		feed: map[string]map[string]store.FeedPrice{
+			// A re-host that lists the model. Note there is NO deepseek entry:
+			// that absence IS the pin (Generate skipped it).
+			"azure-openai": {"deepseek-v4-flash": {Cost: catalog.Cost{Input: 0.19, Output: 0.51}}},
+		},
+		catalog: catalog.Catalog{
+			"deepseek": {ID: "deepseek", Models: map[string]catalog.Model{
+				"deepseek-v4-flash": {ID: "deepseek-v4-flash", Cost: catalog.Cost{Input: 0.15, Output: 0.6}},
+			}},
+		},
+	}
+
+	got := effectivePrice("deepseek", store.ProviderModel{Model: "deepseek-v4-flash"}, src)
+	if got.Cost.Input != 0.15 || got.Cost.Output != 0.6 {
+		t.Errorf("pinned rate = %+v, want the catalog's own 0.15/0.6 — a pin must outrank another vendor's list", got.Cost)
+	}
+	if got.Source != config.PriceSourceCatalog {
+		t.Errorf("source = %q, want %q", got.Source, config.PriceSourceCatalog)
+	}
+
+	// The unpinned case must NOT have moved: its own provider's feed still wins
+	// over the embedded catalog, which is what makes a stale rate self-correct.
+	src.feed["deepseek"] = map[string]store.FeedPrice{
+		"deepseek-v4-flash": {Cost: catalog.Cost{Input: 0.14, Output: 0.28}},
+	}
+	got = effectivePrice("deepseek", store.ProviderModel{Model: "deepseek-v4-flash"}, src)
+	if got.Cost.Input != 0.14 || got.Cost.Output != 0.28 {
+		t.Errorf("unpinned rate = %+v, want the feed's 0.14/0.28 — the refresh must still beat the embedded floor", got.Cost)
+	}
+	if got.Source != config.PriceSourceFeed {
+		t.Errorf("source = %q, want %q", got.Source, config.PriceSourceFeed)
+	}
+}
+
+// TestPinBeatsAStaleFeedRow is the deploy this whole mechanism has to survive:
+// the release that INTRODUCES a pin, when the store still holds the feed row
+// written before it existed.
+//
+// Pinning works by removing the model from the generated set, so the pin's
+// effect on the feed is an absence — and an absence takes a successful refresh
+// to appear in the store. Until then the old row is right there, under the
+// model's own provider, and a lookup that trusts the feed first finds it. The
+// pin does nothing, at the rate it exists to replace, while catalog.json shows
+// the new number.
+//
+// Reading the hand-written file first is what makes the pin hold from the first
+// request after boot, with no refresh, no network, and no second restart.
+func TestPinBeatsAStaleFeedRow(t *testing.T) {
+	// The two halves are DISTINCT maps, as they are in production: `pinned` is
+	// catalog.Manual and `catalog` is Load's merge of manual over generated. A
+	// generated-only model appears in the second and not the first, which is the
+	// whole distinction this test turns on.
+	src := priceSources{
+		pinned: catalog.Catalog{
+			"deepseek": {ID: "deepseek", Models: map[string]catalog.Model{
+				"deepseek-v4-flash": {ID: "deepseek-v4-flash", Cost: catalog.Cost{Input: 0.15, Output: 0.6}},
+			}},
+		},
+		catalog: catalog.Catalog{
+			"deepseek": {ID: "deepseek", Models: map[string]catalog.Model{
+				"deepseek-v4-flash": {ID: "deepseek-v4-flash", Cost: catalog.Cost{Input: 0.15, Output: 0.6}},
+				// Generated, never hand-written: the seed a refresh may correct.
+				"deepseek-generated": {ID: "deepseek-generated", Cost: catalog.Cost{Input: 1, Output: 2}},
+			}},
+		},
+		// Written by the last refresh BEFORE the pin shipped. Generate would not
+		// emit the pinned row today, but nothing has deleted it yet.
+		feed: map[string]map[string]store.FeedPrice{
+			"deepseek": {
+				"deepseek-v4-flash":  {Cost: catalog.Cost{Input: 0.14, Output: 0.28}},
+				"deepseek-generated": {Cost: catalog.Cost{Input: 9, Output: 9}},
+			},
+		},
+	}
+
+	got := effectivePrice("deepseek", store.ProviderModel{Model: "deepseek-v4-flash"}, src)
+	if got.Cost.Input != 0.15 || got.Cost.Output != 0.6 {
+		t.Errorf("rate = %+v, want the pinned 0.15/0.6 — a stale feed row must not outlive the pin that replaced it", got.Cost)
+	}
+	if got.Source != config.PriceSourceCatalog {
+		t.Errorf("source = %q, want %q", got.Source, config.PriceSourceCatalog)
+	}
+
+	// The model that is NOT pinned must still take the feed, or this fix would
+	// have quietly turned the embedded catalog into the source of truth and
+	// stopped every rate self-correcting — which is what the daily refresh is for.
+	got = effectivePrice("deepseek", store.ProviderModel{Model: "deepseek-generated"}, src)
+	if got.Source != config.PriceSourceFeed || got.Cost.Input != 9 {
+		t.Errorf("unpinned rate = %+v (%s), want the feed's 9 — the refresh must still win where nothing was pinned", got.Cost, got.Source)
+	}
+}
+
+// A provider that names no catalog id has nothing to narrow by, so it still
+// reaches the any-provider steps — moving the catalog ahead of them must not
+// take the daily refresh away from the rows that depend on it most (see
+// TestFeedReachesProvidersWithNoCatalogID for why that mattered on a real box).
+func TestNoCatalogIDStillReachesTheFeedFirst(t *testing.T) {
+	src := priceSources{
+		feed: map[string]map[string]store.FeedPrice{
+			"openai": {"gpt-5.6-sol": {Cost: catalog.Cost{Input: 4, Output: 20}}},
+		},
+		catalog: catalog.Catalog{
+			"openai": {ID: "openai", Models: map[string]catalog.Model{
+				"gpt-5.6-sol": {ID: "gpt-5.6-sol", Cost: catalog.Cost{Input: 1, Output: 5}},
+			}},
+		},
+	}
+
+	got := effectivePrice("", store.ProviderModel{Model: "gpt-5.6-sol"}, src)
+	if got.Cost.Input != 4 || got.Cost.Output != 20 {
+		t.Errorf("price = %+v, want the feed's 4/20", got.Cost)
+	}
+	if got.Source != config.PriceSourceFeed {
+		t.Errorf("source = %q, want %q", got.Source, config.PriceSourceFeed)
+	}
+}
+
 // An operator types the dotted spelling a client sends; models.dev keys some
 // models with dashes. Before canonical matching the two never met, so the model
 // resolved as unpriced and the fallback pass lent it a sibling's rate.
@@ -901,9 +1036,12 @@ func TestTiersReachTheSnapshot(t *testing.T) {
 
 	// And they actually bill: a prompt over the threshold must cost more than
 	// the same prompt priced at the base rate.
+	// One instant for both, so the only thing that differs is the prompt size.
+	// gpt-5.4 carries no schedule, so the value cannot affect either number.
+	at := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	tier := got.Cost.Tiers[0].Tier.Size
-	over := pricing.Cost(got.Cost, wire.Normalized{InputTokens: float64(tier) + 1})
-	under := pricing.Cost(got.Cost, wire.Normalized{InputTokens: float64(tier)})
+	over := pricing.Cost(got.Cost, wire.Normalized{InputTokens: float64(tier) + 1}, at)
+	under := pricing.Cost(got.Cost, wire.Normalized{InputTokens: float64(tier)}, at)
 	if over <= under {
 		t.Errorf("a prompt over the %d-token bracket cost %v, not more than %v just under it", tier, over, under)
 	}

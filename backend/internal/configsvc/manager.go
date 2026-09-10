@@ -87,6 +87,13 @@ func (m *Manager) build() (*config.Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configsvc: load catalog: %w", err)
 	}
+	// The hand-written half on its own. Load merges it into cat, which is what
+	// most lookups want, but the merge is exactly what destroys the "was this
+	// pinned?" signal — see priceSources.pinned.
+	pinned, err := catalog.Manual()
+	if err != nil {
+		return nil, fmt.Errorf("configsvc: load pinned catalog: %w", err)
+	}
 	// A missing or unreadable feed is not fatal: the embedded catalog is the
 	// floor, and metering must never depend on a refresh having happened.
 	feed, err := m.store.ListFeedPrices()
@@ -94,7 +101,7 @@ func (m *Manager) build() (*config.Snapshot, error) {
 		m.logger.Warn("cannot read refreshed prices; falling back to the embedded catalog", "err", err)
 		feed = nil
 	}
-	prices := priceSources{feed: feed, catalog: cat}
+	prices := priceSources{feed: feed, catalog: cat, pinned: pinned}
 	cfg := config.Config{}
 	for _, pvd := range providers {
 		if !pvd.Enabled {
@@ -283,9 +290,10 @@ func vendorsFromProvider(pvd store.Provider, outboundProxy *config.Proxy, prices
 	return vendors
 }
 
-// priceSources is where a published rate can come from. Two places, not a
-// merged one, because the feed is current and the catalog is a seed and a
-// reader needs to be told which a number came from.
+// priceSources is where a published rate can come from. Kept as separate places
+// rather than one merged map, because the feed is current, the catalog is a seed
+// and a pin is a deliberate override — and a reader needs to be told which a
+// number came from.
 type priceSources struct {
 	// feed is the last successful price refresh, keyed [provider][model]. Empty
 	// until one lands, which is the normal state on a fresh or offline install.
@@ -293,39 +301,87 @@ type priceSources struct {
 	// catalog is the embedded catalog, generated and hand-written already merged:
 	// the floor, always present.
 	catalog catalog.Catalog
+	// pinned is the hand-written half ALONE (catalog.Manual), which is the only
+	// way to tell a rate someone typed on purpose from one a sync produced. The
+	// merged catalog cannot answer that question: merge() folds both into one
+	// map, so by the time you are looking at it every model appears equally
+	// authored. See effectivePrice for why the distinction has to survive.
+	pinned catalog.Catalog
 }
 
 // effectivePrice resolves one model's rate from, in order:
 //
 //  1. the operator's own row, when they marked it price_override;
-//  2. the price feed for this provider's catalog id, which is why a stale rate
+//  2. a rate hand-pinned in catalog.json for THIS provider's catalog id;
+//  3. the price feed for THIS provider's catalog id, which is why a stale rate
 //     self-corrects;
-//  3. the feed under ANY provider, for a row that names no catalog id;
-//  4. the embedded catalog, same two steps — the offline floor and first-boot
-//     seed, used until a refresh lands;
-//  5. the operator's row as-is, else unpriced (pass 2 may lend it a fallback).
+//  4. the embedded catalog for THIS provider's catalog id — the offline floor
+//     and the first-boot seed;
+//  5. the feed under ANY provider, then the catalog under any provider, for a
+//     row that names no catalog id;
+//  6. the operator's row as-is, else unpriced (pass 2 may lend it a fallback).
 //
-// Steps 3 and 5 are why most operators get a current rate at all. A provider
-// added from the "Custom" tile carries no catalog id, and until the feed grew an
+// Step 5 is why most operators get a current rate at all. A provider added from
+// the "Custom" tile carries no catalog id, and until the feed grew an
 // any-provider step those rows could reach only the EMBEDDED catalog — so the
 // daily refresh, which is the entire point of internal/pricefeed, did nothing
 // for them. On the deployment this was found in, that was 11 of 13 providers,
 // billing a build-time snapshot while the correct number sat unread in the
 // feed_prices table.
 //
-// A rate hand-pinned in catalog.json needs no rule of its own: modelsdev.Generate
-// skips every model the hand-written file defines, and the feed is built from
-// Generate, so a pinned model can never appear in the feed to be overtaken by it.
-// TestGenerateNeverEmitsAPinnedModel is what keeps that true.
+// # A pin is stated, not merely left over — so it is checked FIRST
+//
+// modelsdev.Generate skips every model catalog.json prices, so a pin works by
+// REMOVING the model from its own provider's feed. That is elegant while the
+// feed is in step with the catalogue and quietly wrong the moment it is not: a
+// feed_prices row written BEFORE the pin existed is still sitting in the store
+// on the deploy that introduces the pin, and a lookup that consults the feed
+// first will find it. The pin then does nothing, at the old rate, with the new
+// number visible in catalog.json looking authoritative.
+//
+// That is not a startup race that settles on its own, either. The refresh that
+// would clear the row only walks the models it just generated, so a model that
+// LEFT the set is invisible to it (pricefeed counts removals for exactly this
+// reason). And if the fetch fails — no network, models.dev down — the stale rows
+// survive untouched and the pin never applies at all.
+//
+// So the pin is not inferred from an absence; it is read from the hand-written
+// file directly. src.pinned is catalog.Manual, which is the only source that can
+// distinguish "someone typed this" from "a sync produced this".
+//
+// # Exact beats a guess
+//
+// Both any-provider steps are GUESSES: they match on a model id alone, with
+// nothing to say which vendor's list the answer should come from. So they run
+// after every lookup that had a catalog id to narrow with — an exact match on
+// the provider the operator actually named is an answer, and no guess should
+// outrank it.
+//
+// This used to be the other way round, and pinning was again what broke: with
+// the model gone from its own provider's feed, the any-provider step went
+// looking for the id across every other list. models.dev's "azure" list carries
+// deepseek-v4-flash at 0.19/0.51 and deepseek-v4-pro at Azure's markup;
+// azure-openai sorts last (see rehosts) but last still wins when every maker
+// ahead of it misses. Both defects had the same shape — pinning a rate made it
+// MORE likely to bill at somebody else's number.
+//
+// Nothing here changes for an unpinned model: it is not in src.pinned, so step 3
+// still hits first and the feed still beats the embedded catalog. Nor does a pin
+// lose anything by winning early — Generate never emits a pinned model, so the
+// feed can hold nothing fresher for it than the row the pin replaced.
+// TestCatalogPinBeatsRehostFeed and TestPinBeatsAStaleFeedRow are the guards.
 func effectivePrice(catalogID string, m store.ProviderModel, src priceSources) config.Price {
 	if !m.PriceOverride {
+		if p, ok := catalogModelPrice(src.pinned, catalogID, m.Model); ok {
+			return p
+		}
 		if p, ok := feedPrice(src.feed, catalogID, m.Model); ok {
 			return p
 		}
-		if p, ok := feedAnyModelPrice(src.feed, m.Model); ok {
+		if p, ok := catalogModelPrice(src.catalog, catalogID, m.Model); ok {
 			return p
 		}
-		if p, ok := catalogModelPrice(src.catalog, catalogID, m.Model); ok {
+		if p, ok := feedAnyModelPrice(src.feed, m.Model); ok {
 			return p
 		}
 		if p, ok := catalogAnyModelPrice(src.catalog, m.Model); ok {
