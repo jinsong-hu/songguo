@@ -27,9 +27,17 @@ import {
 const CHART_CLS = 'aspect-auto h-full w-full';
 
 /**
- * Time-to-first-token and output throughput over time. Reuses the usage series
- * endpoint, which carries per-key ttft/tps maps alongside the token sums, with
- * its own independent breakdown selector.
+ * Time-to-first-token and output throughput over time, on OpenRouter's
+ * definition: TTFT is the wait for the first token, throughput counts only the
+ * generation that follows it, and both are reported as the median (p50) over
+ * the bucket's calls — never a mean, which one buffering relay's flush can move
+ * by orders of magnitude. Reuses the usage series endpoint, which carries
+ * per-key ttft/tps maps alongside the token sums, with its own independent
+ * breakdown selector.
+ *
+ * Those two maps are sparse. A key with no streamed call in a bucket is absent,
+ * and stays absent here as `null` — `connectNulls` bridges the gap, so an idle
+ * hour joins the measurements on either side instead of diving to 0.
  */
 export function PerformanceSection({
   scope,
@@ -52,15 +60,15 @@ export function PerformanceSection({
     const data = series.data;
     const ks = data?.models ?? [];
     const bucket = data?.bucket ?? scope.bucket;
-    const ttftRows: Record<string, number | string>[] = [];
-    const tpsRows: Record<string, number | string>[] = [];
+    const ttftRows: Record<string, number | string | null>[] = [];
+    const tpsRows: Record<string, number | string | null>[] = [];
     for (const p of data?.points ?? []) {
       const label = bucketLabel(p.ts, bucket);
-      const ttft: Record<string, number | string> = { label };
-      const tps: Record<string, number | string> = { label };
+      const ttft: Record<string, number | string | null> = { label };
+      const tps: Record<string, number | string | null> = { label };
       for (const k of ks) {
-        ttft[k] = p.ttft[k] ?? 0;
-        tps[k] = p.tps[k] ?? 0;
+        ttft[k] = p.ttft[k] ?? null;
+        tps[k] = p.tps[k] ?? null;
       }
       ttftRows.push(ttft);
       tpsRows.push(tps);
@@ -93,7 +101,7 @@ export function PerformanceSection({
         }
       />
       <div className={styles.grid2}>
-        <Panel title="Avg TTFT">
+        <Panel title="TTFT (p50)">
           <Frame r={series} height={styles.chartXs} empty={empty}>
             <ChartContainer config={config} className={CHART_CLS}>
               <LineChart data={ttftPoints} margin={{ top: 6, right: 8, left: -8, bottom: 0 }}>
@@ -109,7 +117,7 @@ export function PerformanceSection({
             </ChartContainer>
           </Frame>
         </Panel>
-        <Panel title="Avg throughput">
+        <Panel title="Throughput (p50)">
           <Frame r={series} height={styles.chartXs} empty={empty}>
             <ChartContainer config={config} className={CHART_CLS}>
               <LineChart data={tpsPoints} margin={{ top: 6, right: 8, left: -8, bottom: 0 }}>

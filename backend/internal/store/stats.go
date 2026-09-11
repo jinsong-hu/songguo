@@ -786,8 +786,12 @@ var ErrTooManyBuckets = errors.New("store: too many buckets")
 
 // SeriesPoint is one bucket of the usage timeseries: the bucket start (UTC) and
 // the cost/request/error/token totals for rows whose ts falls in that bucket.
-// Performance averages exclude rows where the corresponding streaming timing is
+// Performance figures exclude rows where the corresponding streaming timing is
 // unavailable (stored as zero).
+//
+// TTFTMSP50 and OutputTokensSecP50 are medians over the bucket's per-call
+// values, matching OverviewStats and OpenRouter's definition of latency and
+// throughput. Both are 0 when the bucket has no qualifying call.
 type SeriesPoint struct {
 	Bucket              time.Time
 	Cost                float64
@@ -801,8 +805,8 @@ type SeriesPoint struct {
 	CacheCreationTokens float64
 	ThinkingTokens      float64
 	AvgLatencyMS        float64
-	AvgTTFTMS           float64
-	AvgOutputTokensSec  float64
+	TTFTMSP50           float64
+	OutputTokensSecP50  float64
 }
 
 // UsageSeries returns cost/request/error totals grouped into fixed time buckets
@@ -811,6 +815,10 @@ type SeriesPoint struct {
 // with zeroes) so the chart has no holes. Bucket timestamps are in UTC.
 //
 // An "error" is any row whose status is 0 (transport failure) or >= 400.
+//
+// It runs two queries: the totals, which SQLite can aggregate, and the raw
+// per-call TTFT/generation samples, which it cannot — see the median note on
+// SeriesPoint.
 func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]SeriesPoint, error) {
 	if bucket <= 0 {
 		return nil, fmt.Errorf("store: usage series: bucket must be positive")
@@ -848,12 +856,7 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 		        COALESCE(SUM(cache_read_input_tokens), 0),
 		        COALESCE(SUM(cache_creation_input_tokens), 0),
 		        COALESCE(SUM(thinking_tokens), 0),
-		        COALESCE(AVG(CASE WHEN `+sqlRated+` THEN latency_ms END), 0),
-		        COALESCE(AVG(CASE WHEN ttft_ms > 0 THEN ttft_ms END), 0),
-		        COALESCE(AVG(CASE
-		          WHEN generation_ms > 0 AND output_tokens > 0
-		          THEN output_tokens * 1000.0 / generation_ms
-		        END), 0)
+		        COALESCE(AVG(CASE WHEN `+sqlRated+` THEN latency_ms END), 0)
 		   FROM calls
 		  WHERE ts >= ? AND ts < ?
 		  GROUP BY bucket_start`,
@@ -865,19 +868,17 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 	defer rows.Close()
 
 	type agg struct {
-		cost         float64
-		requests     int
-		rated        int
-		denied       int
-		errors       int
-		inTokens     float64
-		outTokens    float64
-		cacheTok     float64
-		cacheCreate  float64
-		thinkingTok  float64
-		avgLat       float64
-		avgTTFT      float64
-		avgOutputTPS float64
+		cost        float64
+		requests    int
+		rated       int
+		denied      int
+		errors      int
+		inTokens    float64
+		outTokens   float64
+		cacheTok    float64
+		cacheCreate float64
+		thinkingTok float64
+		avgLat      float64
 	}
 	byBucket := make(map[int64]agg)
 	for rows.Next() {
@@ -887,13 +888,53 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 		)
 		if err := rows.Scan(&bucketStart, &a.cost, &a.requests, &a.rated, &a.denied, &a.errors,
 			&a.inTokens, &a.outTokens, &a.cacheTok, &a.cacheCreate, &a.thinkingTok,
-			&a.avgLat, &a.avgTTFT, &a.avgOutputTPS); err != nil {
+			&a.avgLat); err != nil {
 			return nil, fmt.Errorf("store: scan usage series: %w", err)
 		}
 		byBucket[bucketStart] = a
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: usage series: %w", err)
+	}
+
+	// TTFT and throughput are medians, and a median cannot be computed from a
+	// sum: the rows have to come back one per call. The WHERE clause is the old
+	// CASE guard hoisted up, so only rows that contribute a sample cross the
+	// wire — a non-streamed call, a refusal, or a failure that produced no
+	// output stays in SQLite. idx_calls_ts covers the range scan.
+	perfRows, err := s.db.Query(
+		`SELECT (ts / ?) * ? AS bucket_start, ttft_ms, generation_ms, output_tokens
+		   FROM calls
+		  WHERE ts >= ? AND ts < ?
+		    AND (ttft_ms > 0 OR (generation_ms > 0 AND output_tokens > 0))`,
+		bucketMs, bucketMs, sinceMs, untilMs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: usage series performance: %w", err)
+	}
+	defer perfRows.Close()
+
+	ttftSamples := make(map[int64][]int64)
+	tpsSamples := make(map[int64][]float64)
+	for perfRows.Next() {
+		var (
+			bucketStart  int64
+			ttft         int64
+			generation   int64
+			outputTokens float64
+		)
+		if err := perfRows.Scan(&bucketStart, &ttft, &generation, &outputTokens); err != nil {
+			return nil, fmt.Errorf("store: scan usage series performance: %w", err)
+		}
+		if ttft > 0 {
+			ttftSamples[bucketStart] = append(ttftSamples[bucketStart], ttft)
+		}
+		if generation > 0 && outputTokens > 0 {
+			tpsSamples[bucketStart] = append(tpsSamples[bucketStart], outputTokens*1000/float64(generation))
+		}
+	}
+	if err := perfRows.Err(); err != nil {
+		return nil, fmt.Errorf("store: usage series performance: %w", err)
 	}
 
 	out := make([]SeriesPoint, 0, count)
@@ -912,9 +953,9 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 			p.CacheCreationTokens = a.cacheCreate
 			p.ThinkingTokens = a.thinkingTok
 			p.AvgLatencyMS = a.avgLat
-			p.AvgTTFTMS = a.avgTTFT
-			p.AvgOutputTokensSec = a.avgOutputTPS
 		}
+		p.TTFTMSP50 = float64(percentileNearestRank(ttftSamples[bs], 50))
+		p.OutputTokensSecP50 = percentileNearestRankFloat(tpsSamples[bs], 50)
 		out = append(out, p)
 	}
 	return out, nil
@@ -929,15 +970,20 @@ const otherModelKey = "Other"
 
 // TokensByModelBucket is one time bucket of the tokens-by-model series: the
 // bucket start (UTC), the total cost over the bucket, total tokens
-// (input+output) per model, cost per model, and per-model average TTFT and
-// output throughput. Only the top models are kept as distinct keys; the
-// remaining models are aggregated under "Other". Tokens, CostByModel,
-// TTFTByModel, and TPSByModel all carry the same key set.
+// (input+output) per model, cost per model, and per-model TTFT and output
+// throughput. Only the top models are kept as distinct keys; the remaining
+// models are aggregated under "Other".
 //
-// TTFTByModel is the mean time-to-first-token (ms) over calls that reported a
-// TTFT; TPSByModel is the mean output tokens/sec over calls that generated
-// output — both per-call averages, matching UsageSeries. A key with no
-// qualifying calls in the bucket reports 0.
+// TTFTByModel is the median time-to-first-token (ms) over calls that reported a
+// TTFT; TPSByModel is the median output tokens/sec over calls that generated
+// output — OpenRouter's definition of latency and throughput, matching
+// OverviewStats and UsageSeries.
+//
+// Tokens and CostByModel carry the full key set, gap-filled with 0. TTFT and
+// TPS are sparse: a key with no qualifying call in the bucket is **absent**
+// rather than 0, because a 0 there would be read as a measured zero — a real
+// TTFT of 0 ms, a real throughput of 0 tok/s — and drawn as one. Callers render
+// an absent key as a gap.
 type TokensByModelBucket struct {
 	Bucket      time.Time
 	Cost        float64
@@ -956,6 +1002,11 @@ type TokensByModelBucket struct {
 // slice is that key set, ordered descending by total tokens with "Other" (when
 // present) last. Bucket timestamps are UTC. Empty key values are reported as
 // "unknown". An unrecognized dimension returns ErrBadDimension.
+//
+// It runs two queries. The first aggregates tokens and cost, which also decides
+// the top-N set. The second pulls raw per-call TTFT/generation samples, which a
+// GROUP BY cannot produce: the reported figures are medians, and a median does
+// not fold from a sum (see TokensByModelBucket).
 func (s *Store) TokensByModelSeries(sc Scope, dim BreakdownDimension, since, until time.Time, bucket time.Duration) ([]string, []TokensByModelBucket, error) {
 	col, ok := breakdownColumn(dim)
 	if !ok {
@@ -987,11 +1038,7 @@ func (s *Store) TokensByModelSeries(sc Scope, dim BreakdownDimension, since, unt
 		fmt.Sprintf(`SELECT (ts / ?) * ? AS bucket_start,
 		        %s,
 		        COALESCE(SUM(input_tokens + cache_read_input_tokens + cache_creation_input_tokens + output_tokens), 0),
-		        COALESCE(SUM(cost), 0),
-		        COALESCE(SUM(CASE WHEN ttft_ms > 0 THEN ttft_ms END), 0),
-		        COUNT(CASE WHEN ttft_ms > 0 THEN 1 END),
-		        COALESCE(SUM(CASE WHEN generation_ms > 0 AND output_tokens > 0 THEN output_tokens * 1000.0 / generation_ms END), 0),
-		        COUNT(CASE WHEN generation_ms > 0 AND output_tokens > 0 THEN 1 END)
+		        COALESCE(SUM(cost), 0)
 		   FROM calls
 		  WHERE ts >= ? AND ts < ?%s
 		  GROUP BY bucket_start, %s`, col, scopeSQL, col),
@@ -1002,17 +1049,11 @@ func (s *Store) TokensByModelSeries(sc Scope, dim BreakdownDimension, since, unt
 	}
 	defer rows.Close()
 
-	// ttftSum/ttftN and tpsSum/tpsN are the numerator/denominator of each key's
-	// per-call average, kept unreduced so they fold correctly into "Other".
 	type cell struct {
-		bucket  int64
-		model   string
-		tokens  float64
-		cost    float64
-		ttftSum float64
-		ttftN   int64
-		tpsSum  float64
-		tpsN    int64
+		bucket int64
+		model  string
+		tokens float64
+		cost   float64
 	}
 	var cells []cell
 	modelTotals := make(map[string]float64)
@@ -1022,7 +1063,7 @@ func (s *Store) TokensByModelSeries(sc Scope, dim BreakdownDimension, since, unt
 			b int64
 			c cell
 		)
-		if err := rows.Scan(&b, &c.model, &c.tokens, &c.cost, &c.ttftSum, &c.ttftN, &c.tpsSum, &c.tpsN); err != nil {
+		if err := rows.Scan(&b, &c.model, &c.tokens, &c.cost); err != nil {
 			return nil, nil, fmt.Errorf("store: scan tokens by model series: %w", err)
 		}
 		if c.model == "" {
@@ -1061,41 +1102,80 @@ func (s *Store) TokensByModelSeries(sc Scope, dim BreakdownDimension, since, unt
 	hasOther := len(ranked) > len(models)
 
 	// Fold each cell into its bucket, remapping non-top models to "Other".
-	// Tokens, cost, and the TTFT/TPS sum+count pairs are folded in parallel so
-	// they share the same key set. Averages are deferred to emit time so the
-	// "Other" group averages across all its folded calls.
 	perBucket := make(map[int64]map[string]float64)
 	perBucketCost := make(map[int64]map[string]float64)
-	perBucketTTFTSum := make(map[int64]map[string]float64)
-	perBucketTTFTN := make(map[int64]map[string]int64)
-	perBucketTPSSum := make(map[int64]map[string]float64)
-	perBucketTPSN := make(map[int64]map[string]int64)
 	ensureF := func(m map[int64]map[string]float64, b int64) map[string]float64 {
 		if m[b] == nil {
 			m[b] = make(map[string]float64)
 		}
 		return m[b]
 	}
-	ensureI := func(m map[int64]map[string]int64, b int64) map[string]int64 {
-		if m[b] == nil {
-			m[b] = make(map[string]int64)
+	foldKey := func(model string) string {
+		if !top[model] {
+			return otherModelKey
 		}
-		return m[b]
+		return model
 	}
 	for _, c := range cells {
-		key := c.model
-		if !top[key] {
-			key = otherModelKey
-		}
+		key := foldKey(c.model)
 		ensureF(perBucket, c.bucket)[key] += c.tokens
 		ensureF(perBucketCost, c.bucket)[key] += c.cost
-		ensureF(perBucketTTFTSum, c.bucket)[key] += c.ttftSum
-		ensureI(perBucketTTFTN, c.bucket)[key] += c.ttftN
-		ensureF(perBucketTPSSum, c.bucket)[key] += c.tpsSum
-		ensureI(perBucketTPSN, c.bucket)[key] += c.tpsN
 	}
 	if hasOther {
 		models = append(models, otherModelKey)
+	}
+
+	// Query B: the raw per-call samples behind the two medians. The WHERE
+	// clause is the old CASE guard hoisted up, so a non-streamed call, a
+	// refusal, or a failure that produced no output never leaves SQLite;
+	// idx_calls_ts covers the range scan. Samples are kept unreduced and folded
+	// by the same top-N remapping as the sums — which matters more here than it
+	// did for the averages, because a median does not fold at all: "Other"'s
+	// median has to be taken over its members' calls, never over their medians.
+	perfRows, err := s.db.Query(
+		fmt.Sprintf(`SELECT (ts / ?) * ? AS bucket_start, %s, ttft_ms, generation_ms, output_tokens
+		   FROM calls
+		  WHERE ts >= ? AND ts < ?%s
+		    AND (ttft_ms > 0 OR (generation_ms > 0 AND output_tokens > 0))`, col, scopeSQL),
+		append([]any{bucketMs, bucketMs, sinceMs, untilMs}, scopeArgs...)...,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("store: tokens by model series performance: %w", err)
+	}
+	defer perfRows.Close()
+
+	perBucketTTFT := make(map[int64]map[string][]int64)
+	perBucketTPS := make(map[int64]map[string][]float64)
+	for perfRows.Next() {
+		var (
+			b            int64
+			model        string
+			ttft         int64
+			generation   int64
+			outputTokens float64
+		)
+		if err := perfRows.Scan(&b, &model, &ttft, &generation, &outputTokens); err != nil {
+			return nil, nil, fmt.Errorf("store: scan tokens by model series performance: %w", err)
+		}
+		if model == "" {
+			model = "unknown"
+		}
+		key := foldKey(model)
+		if ttft > 0 {
+			if perBucketTTFT[b] == nil {
+				perBucketTTFT[b] = make(map[string][]int64)
+			}
+			perBucketTTFT[b][key] = append(perBucketTTFT[b][key], ttft)
+		}
+		if generation > 0 && outputTokens > 0 {
+			if perBucketTPS[b] == nil {
+				perBucketTPS[b] = make(map[string][]float64)
+			}
+			perBucketTPS[b][key] = append(perBucketTPS[b][key], outputTokens*1000/float64(generation))
+		}
+	}
+	if err := perfRows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("store: tokens by model series performance: %w", err)
 	}
 
 	out := make([]TokensByModelBucket, 0, count)
@@ -1103,13 +1183,9 @@ func (s *Store) TokensByModelSeries(sc Scope, dim BreakdownDimension, since, unt
 		bs := startMs + i*bucketMs
 		tokens := make(map[string]float64, len(models))
 		costByModel := make(map[string]float64, len(models))
-		ttftByModel := make(map[string]float64, len(models))
-		tpsByModel := make(map[string]float64, len(models))
 		for _, m := range models {
 			tokens[m] = 0
 			costByModel[m] = 0
-			ttftByModel[m] = 0
-			tpsByModel[m] = 0
 		}
 		for m, v := range perBucket[bs] {
 			tokens[m] += v
@@ -1117,15 +1193,16 @@ func (s *Store) TokensByModelSeries(sc Scope, dim BreakdownDimension, since, unt
 		for m, v := range perBucketCost[bs] {
 			costByModel[m] += v
 		}
-		for m, n := range perBucketTTFTN[bs] {
-			if n > 0 {
-				ttftByModel[m] = perBucketTTFTSum[bs][m] / float64(n)
-			}
+		// TTFT/TPS are deliberately not pre-filled: a key only appears when it
+		// has at least one sample in this bucket, so an idle key is a gap
+		// rather than a measured zero.
+		ttftByModel := make(map[string]float64, len(perBucketTTFT[bs]))
+		for m, samples := range perBucketTTFT[bs] {
+			ttftByModel[m] = float64(percentileNearestRank(samples, 50))
 		}
-		for m, n := range perBucketTPSN[bs] {
-			if n > 0 {
-				tpsByModel[m] = perBucketTPSSum[bs][m] / float64(n)
-			}
+		tpsByModel := make(map[string]float64, len(perBucketTPS[bs]))
+		for m, samples := range perBucketTPS[bs] {
+			tpsByModel[m] = percentileNearestRankFloat(samples, 50)
 		}
 		out = append(out, TokensByModelBucket{
 			Bucket:      time.UnixMilli(bs).UTC(),

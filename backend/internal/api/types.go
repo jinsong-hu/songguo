@@ -310,8 +310,8 @@ type seriesPoint struct {
 	CacheCreationTokens float64 `json:"cache_creation_input_tokens"`
 	ThinkingTokens      float64 `json:"thinking_tokens"`
 	AvgLatencyMS        float64 `json:"avg_latency_ms"`
-	AvgTTFTMS           float64 `json:"avg_ttft_ms"`
-	AvgOutputTPS        float64 `json:"avg_output_tokens_per_second"`
+	TTFTMSP50           float64 `json:"ttft_ms_p50"`
+	OutputTPSP50        float64 `json:"output_tokens_per_second_p50"`
 }
 
 func outputTokensPerSecond(tokens float64, generationMS int64) float64 {
@@ -329,8 +329,13 @@ type usageSeriesView struct {
 
 // tokensByModelPoint is one bucket in the GET /api/usage/tokens-by-model
 // response: total cost, total tokens (input+output) keyed by model, cost keyed
-// by model, and per-model average TTFT (ms) and output throughput (tokens/sec).
-// All four maps carry the same key set.
+// by model, and per-model median (p50) TTFT (ms) and output throughput
+// (tokens/sec).
+//
+// Tokens and Costs carry the full key set, gap-filled with 0. TTFT and TPS are
+// sparse — a key with no streamed call in the bucket is omitted from the JSON
+// object rather than sent as 0, so the client draws a gap instead of a measured
+// zero.
 type tokensByModelPoint struct {
 	TS     string             `json:"ts"`
 	Cost   float64            `json:"cost"`

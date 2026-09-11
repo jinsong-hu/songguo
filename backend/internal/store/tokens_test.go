@@ -43,16 +43,17 @@ func TestTokenTotalsAndSeries(t *testing.T) {
 	if !approx(pts[0].AvgLatencyMS, 10) {
 		t.Errorf("hour0 avg latency = %v, want 10", pts[0].AvgLatencyMS)
 	}
-	if !approx(pts[0].AvgTTFTMS, 5) || !approx(pts[0].AvgOutputTokensSec, 20) {
+	// One row per bucket, so the median is that row's value.
+	if !approx(pts[0].TTFTMSP50, 5) || !approx(pts[0].OutputTokensSecP50, 20) {
 		t.Errorf("hour0 performance = %+v, want TTFT 5 / output TPS 20", pts[0])
 	}
 	if !approx(pts[1].InputTokens, 50) || !approx(pts[1].AvgLatencyMS, 30) {
 		t.Errorf("hour1 = %+v", pts[1])
 	}
-	if !approx(pts[1].AvgTTFTMS, 15) || !approx(pts[1].AvgOutputTokensSec, 10) {
+	if !approx(pts[1].TTFTMSP50, 15) || !approx(pts[1].OutputTokensSecP50, 10) {
 		t.Errorf("hour1 performance = %+v, want TTFT 15 / output TPS 10", pts[1])
 	}
-	if pts[2].InputTokens != 0 || pts[2].AvgLatencyMS != 0 || pts[2].AvgTTFTMS != 0 || pts[2].AvgOutputTokensSec != 0 {
+	if pts[2].InputTokens != 0 || pts[2].AvgLatencyMS != 0 || pts[2].TTFTMSP50 != 0 || pts[2].OutputTokensSecP50 != 0 {
 		t.Errorf("hour2 (gap) = %+v, want zero", pts[2])
 	}
 }

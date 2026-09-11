@@ -396,8 +396,8 @@ func (a *api) usageSeriesData(since, until time.Time, bucketRaw string) (usageSe
 			CacheCreationTokens: p.CacheCreationTokens,
 			ThinkingTokens:      p.ThinkingTokens,
 			AvgLatencyMS:        p.AvgLatencyMS,
-			AvgTTFTMS:           p.AvgTTFTMS,
-			AvgOutputTPS:        p.AvgOutputTokensSec,
+			TTFTMSP50:           p.TTFTMSP50,
+			OutputTPSP50:        p.OutputTokensSecP50,
 		})
 	}
 

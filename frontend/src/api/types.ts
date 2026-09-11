@@ -107,8 +107,10 @@ export interface SeriesPoint {
   /** Reasoning/thinking tokens (subset of output_tokens). */
   thinking_tokens: number;
   avg_latency_ms: number;
-  avg_ttft_ms: number;
-  avg_output_tokens_per_second: number;
+  /** Median time-to-first-token (ms) over the bucket's streamed calls. */
+  ttft_ms_p50: number;
+  /** Median output throughput (tokens/sec), excluding TTFT. */
+  output_tokens_per_second_p50: number;
 }
 
 export interface UsageSeries {
@@ -121,10 +123,16 @@ export interface TokensByModelPoint {
   cost: number;
   tokens: Record<string, number>;
   costs: Record<string, number>;
-  /** Per-key average time-to-first-token (ms). Same key set as `tokens`. */
-  ttft: Record<string, number>;
-  /** Per-key average output throughput (tokens/sec). Same key set as `tokens`. */
-  tps: Record<string, number>;
+  /**
+   * Per-key median time-to-first-token (ms). Sparse: a key with no streamed
+   * call in this bucket is absent, which is a gap, not a measured 0.
+   */
+  ttft: Record<string, number | undefined>;
+  /**
+   * Per-key median output throughput (tokens/sec), excluding TTFT. Sparse in
+   * the same way as `ttft`.
+   */
+  tps: Record<string, number | undefined>;
 }
 
 // Dimension the Usage stacked charts group their series by. "vendor" is
