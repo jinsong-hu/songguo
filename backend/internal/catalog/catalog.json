@@ -410,6 +410,16 @@
         ]
       },
       {
+        "wire": "openai/responses",
+        "endpoint": "https://api.deepseek.com/responses",
+        "adapter": "openai-compatible",
+        "docs": "https://api-docs.deepseek.com/guides/responses_api",
+        "note": "OpenAI Responses format, added for Codex. Stateless — store/previous_response_id unsupported, unknown params silently ignored. Usage uses the standard input_tokens_details.cached_tokens, not the chat wire's prompt_cache_hit_tokens.",
+        "models": [
+          "deepseek-flash"
+        ]
+      },
+      {
         "wire": "openai/models",
         "endpoint": "https://api.deepseek.com",
         "adapter": "openai-compatible"

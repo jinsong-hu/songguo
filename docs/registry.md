@@ -128,7 +128,7 @@ One row per wire. **Endpoint** = the native path the consumer calls; **bold** ma
 | `POST /v1`**`/chat/completions`** | `openai/chat` | OpenAI, Azure, DeepSeek, MiniMax, … | exact `model` |
 | `POST /v1`**`/completions`** | `openai/completions` | OpenAI (legacy), … | exact `model` |
 | `POST /v1`**`/embeddings`** | `openai/embeddings` | OpenAI, Azure, … | exact `model` |
-| `POST /v1`**`/responses`** | `openai/responses` | OpenAI | exact `model` |
+| `POST /v1`**`/responses`** | `openai/responses` | OpenAI, DeepSeek, … | exact `model` |
 | `POST /v1`**`/images/generations`** | `openai/images-generate` | OpenAI, Volcengine Ark, … | exact `model` |
 | `POST /v1`**`/images/edits`** | `openai/images-edit` | OpenAI (multipart), Volcengine Ark (JSON, same URL as generation) | exact `model` |
 | `GET /v1`**`/models`** | `openai/models` | any OpenAI-compatible | header · default |
