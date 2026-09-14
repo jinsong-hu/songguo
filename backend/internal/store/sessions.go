@@ -50,8 +50,10 @@ func (s *Store) UpsertSessionCall(e calls.Entry, title string) error {
 	if isErrorStatus(e.Status, e.Err) {
 		isErr = 1
 	}
+	// Any non-main agent marks fan-out. Not ParentAgentID: Claude Code sends no
+	// parent header for a subagent spawned by the main loop, only for nested ones.
 	hasSub := 0
-	if e.ParentAgentID != "" {
+	if e.AgentID != "" {
 		hasSub = 1
 	}
 

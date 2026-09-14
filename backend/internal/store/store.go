@@ -652,7 +652,7 @@ func (s *Store) backfillSessions() error {
 			(SELECT l.status FROM calls l
 			  WHERE l.session_id = c.session_id
 			  ORDER BY COALESCE(l.ts_end, l.ts) DESC, l.id DESC LIMIT 1),
-			MAX(CASE WHEN c.parent_agent_id != '' THEN 1 ELSE 0 END),
+			MAX(CASE WHEN c.agent_id != '' THEN 1 ELSE 0 END),
 			SUM(CASE WHEN c.entrypoint != '' AND c.entrypoint != 'main' THEN 1 ELSE 0 END),
 			COALESCE(SUM(CASE WHEN c.entrypoint != '' AND c.entrypoint != 'main' THEN c.input_tokens ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN c.entrypoint != '' AND c.entrypoint != 'main' THEN c.output_tokens ELSE 0 END), 0),

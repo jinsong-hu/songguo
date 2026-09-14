@@ -37,7 +37,7 @@ type SessionStats struct {
 	Pending int
 
 	// WithSubagents counts sessions that spawned at least one subagent (any call
-	// carried a non-empty parent_agent_id) when the client exposes agent-tree
+	// carried a non-empty agent_id) when the client exposes agent-tree
 	// headers.
 	WithSubagents int
 

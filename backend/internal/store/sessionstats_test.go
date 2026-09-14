@@ -19,7 +19,7 @@ func TestSessionStats(t *testing.T) {
 		{TS: base.Add(0 * time.Minute), Model: "m", Vendor: "v", Status: 200, InputTokens: 10, OutputTokens: 5, SessionID: "sess-done"},
 		{TS: base.Add(1 * time.Minute), Model: "m", Vendor: "v", Status: 500, InputTokens: 10, OutputTokens: 5, SessionID: "sess-done"},
 		{TS: base.Add(2 * time.Minute), Model: "m", Vendor: "v", Status: 200, InputTokens: 10, OutputTokens: 5, SessionID: "sess-done",
-			AgentID: "sub", ParentAgentID: "root"}, // spawned a subagent
+			AgentID: "sub"}, // a subagent spawned by the main loop carries no parent id
 		// sess-cut: 1 turn, ends on status 0 (client abort) → interrupted.
 		{TS: base.Add(3 * time.Minute), Model: "m", Vendor: "v", Status: 0, InputTokens: 4, OutputTokens: 0, SessionID: "sess-cut"},
 		// sess-err: last call is a 429 → errored.

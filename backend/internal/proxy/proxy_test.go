@@ -1925,6 +1925,53 @@ func TestExtractAttributionCodexFallbacksAndGuards(t *testing.T) {
 	}
 }
 
+// TestExtractAttributionCodexSubagents uses the header shapes of a real Codex
+// multi-agent run: the root thread is the session, and each spawned thread names
+// its spawner in X-Codex-Parent-Thread-Id.
+func TestExtractAttributionCodexSubagents(t *testing.T) {
+	codex := func(thread, parent string) http.Header {
+		h := http.Header{}
+		h.Set("Originator", "hi_agent")
+		h.Set("User-Agent", "hi_agent/0.147.0 (Mac OS 26.6.2; arm64)")
+		h.Set("Session-Id", "root")
+		h.Set("Thread-Id", thread)
+		h.Set("X-Codex-Window-Id", thread+":0")
+		if parent != "" {
+			h.Set("X-Codex-Parent-Thread-Id", parent)
+			h.Set("X-Openai-Subagent", "collab_spawn")
+		}
+		return h
+	}
+	tests := []struct {
+		name                  string
+		h                     http.Header
+		wantAgent, wantParent string
+	}{
+		{"root thread is the main loop", codex("root", ""), "", ""},
+		{"spawned by the main loop has no parent", codex("sub-1", "root"), "sub-1", ""},
+		{"nested subagent names its spawner", codex("sub-2", "sub-1"), "sub-2", "sub-1"},
+		{"other thread without a parent stays main", codex("thread-99", ""), "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractAttribution(tt.h)
+			if got.session != "root" || got.agent != tt.wantAgent || got.parentAgent != tt.wantParent {
+				t.Errorf("attribution = %q/%q/%q, want root/%q/%q",
+					got.session, got.agent, got.parentAgent, tt.wantAgent, tt.wantParent)
+			}
+		})
+	}
+
+	// Thread and session carried only in the turn metadata.
+	h := http.Header{}
+	h.Set("Originator", "codex_cli_rs")
+	h.Set("X-Codex-Turn-Metadata", `{"session_id":"root","thread_id":"sub-1"}`)
+	h.Set("X-Codex-Parent-Thread-Id", "root")
+	if got := extractAttribution(h); got.session != "root" || got.agent != "sub-1" || got.parentAgent != "" {
+		t.Errorf("metadata attribution = %q/%q/%q, want root/sub-1/", got.session, got.agent, got.parentAgent)
+	}
+}
+
 func TestExtractClientInfo(t *testing.T) {
 	tests := []struct {
 		name          string

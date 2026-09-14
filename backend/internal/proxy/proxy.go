@@ -1524,6 +1524,9 @@ type attribution struct {
 // also repeats it in X-Codex-Turn-Metadata). SessionID lets the ledger aggregate
 // a run's calls. AgentID + ParentAgentID reconstruct the main-loop→subagent tree
 // when the client provides that information.
+//
+// Both clients leave the main loop's AgentID "" and give a subagent spawned by
+// the main loop no ParentAgentID; only a nested subagent names its spawner.
 func extractAttribution(h http.Header) attribution {
 	attr := attribution{
 		session:     strings.TrimSpace(h.Get("X-Claude-Code-Session-Id")),
@@ -1534,16 +1537,29 @@ func extractAttribution(h http.Header) attribution {
 		return attr
 	}
 
-	if sid := strings.TrimSpace(h.Get("Session-Id")); sid != "" {
-		attr.session = sid
-		return attr
+	meta := codexTurnMetadata(h.Get("X-Codex-Turn-Metadata"))
+	thread := strings.TrimSpace(h.Get("Thread-Id"))
+	if thread == "" {
+		thread = meta.ThreadID
 	}
-	if sid := codexMetadataSessionID(h.Get("X-Codex-Turn-Metadata")); sid != "" {
-		attr.session = sid
-		return attr
+	attr.session = strings.TrimSpace(h.Get("Session-Id"))
+	if attr.session == "" {
+		attr.session = meta.SessionID
 	}
-	// Last resort for older/future Codex clients that carry only a thread id.
-	attr.session = strings.TrimSpace(h.Get("Thread-Id"))
+	if attr.session == "" {
+		// Last resort for older/future Codex clients that carry only a thread id.
+		attr.session = thread
+	}
+
+	// A spawned subagent runs in its own thread and names the thread that
+	// spawned it; the root thread is the session and stays the main loop.
+	parent := strings.TrimSpace(h.Get("X-Codex-Parent-Thread-Id"))
+	if parent != "" && thread != "" && thread != attr.session {
+		attr.agent = thread
+		if parent != attr.session {
+			attr.parentAgent = parent
+		}
+	}
 	return attr
 }
 
@@ -1556,21 +1572,19 @@ func isCodexRequest(h http.Header) bool {
 		h.Get("X-Codex-Window-Id") != ""
 }
 
-func codexMetadataSessionID(raw string) string {
-	if raw == "" {
-		return ""
+type codexMetadata struct {
+	SessionID string `json:"session_id"`
+	ThreadID  string `json:"thread_id"`
+}
+
+func codexTurnMetadata(raw string) codexMetadata {
+	var meta codexMetadata
+	if raw == "" || json.Unmarshal([]byte(raw), &meta) != nil {
+		return codexMetadata{}
 	}
-	var meta struct {
-		SessionID string `json:"session_id"`
-		ThreadID  string `json:"thread_id"`
-	}
-	if err := json.Unmarshal([]byte(raw), &meta); err != nil {
-		return ""
-	}
-	if sid := strings.TrimSpace(meta.SessionID); sid != "" {
-		return sid
-	}
-	return strings.TrimSpace(meta.ThreadID)
+	meta.SessionID = strings.TrimSpace(meta.SessionID)
+	meta.ThreadID = strings.TrimSpace(meta.ThreadID)
+	return meta
 }
 
 // extractTags builds the call tags from, in order of precedence, the
