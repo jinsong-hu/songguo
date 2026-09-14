@@ -291,6 +291,10 @@ export const api = {
   sessionContext: (id: string, agent?: string) =>
     request<SessionContext>(`/sessions/${encodeURIComponent(id)}/context${qs({ agent: agent || undefined })}`),
 
+  /** One call's own system/tools/messages, in the session messages shape. 404 if not captured. */
+  callMessages: (id: string) =>
+    request<SessionMessages>(`/calls/${encodeURIComponent(id)}/messages`),
+
   /** Fetch the captured request/response trace for a call (UUID). 404 if none. */
   trace: (id: string) => request<CallTrace>(`/calls/${encodeURIComponent(id)}/trace`),
 

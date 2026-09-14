@@ -336,3 +336,63 @@ func mustMarshalJSON(t *testing.T, value any) string {
 	}
 	return string(body)
 }
+
+// The request page reads one call's own prompt: the same view as a session,
+// but never merged with the session's other requests.
+func TestCallMessagesReadsOneCapturedRequest(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Date(2026, 9, 14, 5, 33, 0, 0, time.UTC)
+
+	capture := func(ts time.Time, req []byte, headers map[string]string) string {
+		t.Helper()
+		id, err := s.AppendCall(calls.Entry{TS: ts, SessionID: "sess", Wire: "openai/responses", Status: 200})
+		if err != nil {
+			t.Fatalf("AppendCall: %v", err)
+		}
+		if err := s.SavePayload(store.Payload{
+			CallID:     id,
+			ReqHeaders: headers,
+			ReqBody:    req,
+			RespBody:   []byte("RESPONSE_MUST_NOT_BE_RETURNED"),
+			CreatedAt:  ts,
+		}); err != nil {
+			t.Fatalf("SavePayload: %v", err)
+		}
+		return id
+	}
+
+	capture(base, []byte(`{"model":"deepseek-flash","instructions":"System prompt","input":[{"role":"user","content":"EARLIER_REQUEST_MUST_NOT_BE_RETURNED"}]}`), nil)
+	id := capture(base.Add(time.Minute), gzipBytes(t, []byte(`{
+		"model":"deepseek-flash",
+		"instructions":"System prompt",
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}],
+		"input":[{"role":"user","content":"hello"},{"type":"function_call","call_id":"c1","name":"exec_command","arguments":"{}"}]
+	}`)), map[string]string{"Content-Encoding": "gzip"})
+	junk := capture(base.Add(2*time.Minute), []byte(`{not json`), nil)
+	bare, err := s.AppendCall(calls.Entry{TS: base.Add(3 * time.Minute), SessionID: "sess", Status: 200})
+	if err != nil {
+		t.Fatalf("AppendCall bare: %v", err)
+	}
+
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
+	rec := do(h, http.MethodGet, "/api/calls/"+id+"/messages", "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("call messages: code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "MUST_NOT_BE_RETURNED") {
+		t.Fatalf("call messages leaked other content: %s", rec.Body.String())
+	}
+	var view sessionMessagesView
+	decodeBody(t, rec, &view)
+	if view.Model != "deepseek-flash" || len(view.System) != 1 || len(view.Tools) != 1 || len(view.Messages) != 2 {
+		t.Fatalf("view = model %q, %d system, %d tools, %d messages; want deepseek-flash, 1, 1, 2",
+			view.Model, len(view.System), len(view.Tools), len(view.Messages))
+	}
+
+	if rec := do(h, http.MethodGet, "/api/calls/"+junk+"/messages", "secret", nil); rec.Code != http.StatusOK {
+		t.Errorf("unparseable capture: code = %d, want 200 with an empty view", rec.Code)
+	}
+	if rec := do(h, http.MethodGet, "/api/calls/"+bare+"/messages", "secret", nil); rec.Code != http.StatusNotFound {
+		t.Errorf("uncaptured call: code = %d, want 404", rec.Code)
+	}
+}

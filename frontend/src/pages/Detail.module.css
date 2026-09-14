@@ -48,6 +48,14 @@
   overflow-wrap: anywhere;
 }
 
+.ctxEstimate {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .errCard {
   padding: 16px;
 }

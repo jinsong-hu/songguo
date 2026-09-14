@@ -381,6 +381,21 @@ paths:
               schema: { $ref: "#/components/schemas/Trace" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/calls/{id}/messages:
+    get:
+      tags: [calls]
+      summary: Prompt material from one call's captured request
+      operationId: getCallMessages
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The request's system, tool, and message values in their native wire shape
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionMessages" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/sessions/{id}:
     get:
       tags: [calls]

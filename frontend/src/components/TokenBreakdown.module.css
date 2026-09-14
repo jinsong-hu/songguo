@@ -1,0 +1,160 @@
+/* Palette: cache read --chart-1, cache write --chart-4, fresh --chart-3;
+   thinking --chart-5, reply --producer-1. Checked adjacent-pair by bar order
+   with the dataviz validator (CVD + normal-vision separation, light and dark).
+   Fresh reuses the session growth chart's "Fresh (paid)" amber and cache read
+   its pine, so the two pages agree. The only close pair, cache read beside
+   fresh when there is no cache write, is carried by the 2px gap and the legend. */
+
+.card {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.total {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.rowHead {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rowName {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.rowTotal {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.equation {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.rowBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding-top: 6px;
+}
+
+.bar {
+  display: flex;
+  gap: 2px;
+  height: 12px;
+}
+
+/* 4px rounded data-ends: only the outer corners of the bar are rounded. */
+.segment {
+  min-width: 3px;
+  flex-basis: 0;
+  transition: opacity 120ms ease;
+}
+.segment:first-child {
+  border-top-left-radius: 4px;
+  border-bottom-left-radius: 4px;
+}
+.segment:last-child {
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
+}
+
+.barEmpty {
+  flex: 1;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px dashed var(--border);
+}
+
+.dim {
+  opacity: 0.35;
+}
+
+.legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  transition: opacity 120ms ease;
+}
+
+.legendZero {
+  opacity: 0.55;
+}
+
+.swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  align-self: center;
+}
+
+.legendLabel {
+  color: var(--text-muted);
+}
+
+.legendValue {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.legendPct {
+  color: var(--text-muted);
+}
+
+@media (max-width: 640px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .rowBody {
+    padding-top: 0;
+  }
+}

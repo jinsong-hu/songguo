@@ -3,7 +3,10 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
+
+	"github.com/songguo/songguo/internal/store"
 )
 
 // sessionMessagesView is the compact prompt material needed by the session
@@ -46,42 +49,93 @@ func (a *api) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) sessionMessagesData(id string) (sessionMessagesView, error) {
-	view := sessionMessagesView{
-		SessionID: id,
+	requests, err := a.store.SessionRequests(id)
+	if err != nil {
+		return emptyPromptView(id), err
+	}
+
+	prompts := make([]capturedPromptBody, 0, len(requests))
+	for _, request := range requests {
+		if request.Wire == "anthropic/count_tokens" {
+			continue
+		}
+		// The former frontend path ignored malformed captures as well. One bad
+		// request must not hide the rest of a session's conversation.
+		if prompt, ok := decodeCapturedPrompt(request.ReqBody, request.ReqHeaders); ok {
+			prompts = append(prompts, prompt)
+		}
+	}
+	view := mergePrompts(prompts)
+	view.SessionID = id
+	return view, nil
+}
+
+// handleCallMessages is the single-request sibling of handleSessionMessages:
+// the same system/tools/messages view, built from one call's captured request
+// alone, so a request detail page reads the prompt it actually sent.
+func (a *api) handleCallMessages(w http.ResponseWriter, r *http.Request) {
+	view, err := a.callMessagesData(r.PathValue("id"))
+	if err != nil {
+		a.writeDataErr(w, "get call messages", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// callMessagesData returns the prompt view for one call, or a *apiError (404)
+// when no payload was captured for it. A capture that is not a JSON prompt body
+// reads as an empty view rather than an error, as it does for a session.
+func (a *api) callMessagesData(id string) (sessionMessagesView, error) {
+	p, err := a.store.GetPayload(id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return emptyPromptView(""), notFoundErr("trace not found")
+		}
+		return emptyPromptView(""), err
+	}
+	prompt, ok := decodeCapturedPrompt(p.ReqBody, p.ReqHeaders)
+	if !ok {
+		return emptyPromptView(""), nil
+	}
+	return mergePrompts([]capturedPromptBody{prompt}), nil
+}
+
+func emptyPromptView(sessionID string) sessionMessagesView {
+	return sessionMessagesView{
+		SessionID: sessionID,
 		System:    []json.RawMessage{},
 		Tools:     []json.RawMessage{},
 		Messages:  []json.RawMessage{},
 	}
-	requests, err := a.store.SessionRequests(id)
-	if err != nil {
-		return view, err
+}
+
+// decodeCapturedPrompt reads the prompt fields out of a captured request body,
+// undoing any Content-Encoding first.
+func decodeCapturedPrompt(body []byte, headers map[string]string) (capturedPromptBody, bool) {
+	if decoded, ok := decodeTraceBody(body, headerValue(headers, "Content-Encoding")); ok {
+		body = decoded
 	}
+	var prompt capturedPromptBody
+	if err := json.Unmarshal(body, &prompt); err != nil {
+		return capturedPromptBody{}, false
+	}
+	return prompt, true
+}
+
+// mergePrompts folds requests, oldest first, into one de-duplicated view.
+func mergePrompts(prompts []capturedPromptBody) sessionMessagesView {
+	view := emptyPromptView("")
 
 	// adoptInlineSystem is decided once for the whole session rather than per
 	// request: a session that hoisted an inline preamble out of some requests but
 	// not others would hand mergePromptItems two different message shapes for the
 	// same conversation, and the overlap merge would append instead of merge.
-	prompts := make([]capturedPromptBody, 0, len(requests))
 	adoptInlineSystem := true
-	for _, request := range requests {
-		if request.Wire == "anthropic/count_tokens" {
-			continue
-		}
-		body := request.ReqBody
-		if decoded, ok := decodeTraceBody(body, headerValue(request.ReqHeaders, "Content-Encoding")); ok {
-			body = decoded
-		}
-
-		var prompt capturedPromptBody
-		if err := json.Unmarshal(body, &prompt); err != nil {
-			// The former frontend path ignored malformed captures as well. One bad
-			// request must not hide the rest of a session's conversation.
-			continue
-		}
+	for _, prompt := range prompts {
 		if hasJSONValue(topLevelSystem(prompt)) {
 			adoptInlineSystem = false
+			break
 		}
-		prompts = append(prompts, prompt)
 	}
 
 	seenSystem := map[string]struct{}{}
@@ -114,7 +168,7 @@ func (a *api) sessionMessagesData(id string) (sessionMessagesView, error) {
 	for _, item := range messages {
 		view.Messages = append(view.Messages, item.raw)
 	}
-	return view, nil
+	return view
 }
 
 // topLevelSystem is the request's out-of-band instruction field: Anthropic's

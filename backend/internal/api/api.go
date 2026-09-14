@@ -164,6 +164,7 @@ var adminRoutes = []adminRoute{
 	{"GET", "/api/calls/export", (*api).handleCallsExport, false},
 	{"GET", "/api/calls/{id}", (*api).handleCall, false},
 	{"GET", "/api/calls/{id}/trace", (*api).handleCallTrace, false},
+	{"GET", "/api/calls/{id}/messages", (*api).handleCallMessages, false},
 	// Literal path — Go's mux prefers it over the {id} wildcard below. Shared:
 	// scoped to the caller's own sessions via scopeUserID (the per-session detail
 	// routes below stay admin-only).

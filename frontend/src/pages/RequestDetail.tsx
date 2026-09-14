@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, FileText, GitBranch } from 'lucide-react';
 import { api } from '../api/client';
@@ -8,8 +9,10 @@ import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { ESTIMATE_HINT, InfoHint } from '../components/InfoHint';
 import { Page } from '../components/Layout';
+import { PromptReconstructionCard, parsePromptReconstruction } from '../components/PromptReconstruction';
 import { Skeleton } from '../components/Skeleton';
 import { StatusPill } from '../components/StatusPill';
+import { TokenBreakdown } from '../components/TokenBreakdown';
 import { TracePanel } from '../components/TracePanel';
 import { useFetch } from '../lib/useFetch';
 import { dateTime, elapsedSince, int, money, ms } from '../lib/format';
@@ -32,6 +35,15 @@ export function RequestDetailPage() {
     [callId],
     { enabled: valid },
   );
+  const messages = useFetch(() => api.callMessages(callId), [callId], {
+    enabled: valid && !!data?.has_trace,
+  });
+  const prompt = useMemo(
+    () => (messages.data ? parsePromptReconstruction(messages.data) : null),
+    [messages.data],
+  );
+  const billedInput = data ? data.input_tokens + data.cache_read_input_tokens + data.cache_creation_input_tokens : 0;
+  const estimatedWindow = data?.composition?.sources.reduce((sum, source) => sum + source.tokens, 0) ?? 0;
 
   return (
     <Page
@@ -92,21 +104,12 @@ export function RequestDetailPage() {
               <ConfidenceDot confidence={data.confidence} />
             </Field>
             <Field label="Stream">{data.stream ? 'yes' : 'no'}</Field>
-            <Field label="Input tokens">{int(data.input_tokens)}</Field>
-            {data.cache_read_input_tokens > 0 && (
-              <Field label="Cache read">{int(data.cache_read_input_tokens)}</Field>
-            )}
-            {data.cache_creation_input_tokens > 0 && (
-              <Field label="Cache creation">{int(data.cache_creation_input_tokens)}</Field>
-            )}
-            <Field label="Output tokens">{int(data.output_tokens)}</Field>
-            {data.thinking_tokens > 0 && (
-              <Field label="Thinking tokens">{int(data.thinking_tokens)}</Field>
-            )}
             <Field label="User">{data.user_id || '—'}</Field>
             {data.agent_id && <Field label="Agent" mono>{data.agent_id}</Field>}
             {data.parent_agent_id && <Field label="Parent agent" mono>{data.parent_agent_id}</Field>}
           </div>
+
+          {billedInput + data.output_tokens > 0 && <TokenBreakdown usage={data} />}
 
           {data.err && (
             <div className={`card ${styles.errCard}`}>
@@ -130,7 +133,7 @@ export function RequestDetailPage() {
 
           {data.composition && data.composition.sources.length > 0 && (
             <div className="card" style={{ padding: 16 }}>
-              <div className={styles.fieldLabel} style={{ marginBottom: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <div className={styles.fieldLabel} style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
                 Context distribution
                 <InfoHint
                   text={`${ESTIMATE_HINT} This request chart shows the single input context window for this request.`}
@@ -141,9 +144,23 @@ export function RequestDetailPage() {
                     </>
                   }
                 />
+                {billedInput > 0 && estimatedWindow > 0 && (
+                  <span className={styles.ctxEstimate}>
+                    local estimate {int(estimatedWindow)} · provider counted {int(billedInput)}
+                  </span>
+                )}
               </div>
               <ContextSunburst data={{ sources: data.composition.sources }} centerLabel="window" />
             </div>
+          )}
+
+          {data.has_trace && (
+            <PromptReconstructionCard
+              prompt={prompt}
+              loading={messages.initialLoading || !prompt}
+              error={messages.error}
+              onRetry={messages.refetch}
+            />
           )}
 
           <div className="card" style={{ padding: 16 }}>
