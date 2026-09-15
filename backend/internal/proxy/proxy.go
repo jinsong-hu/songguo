@@ -1155,25 +1155,28 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	}
 
 	if capture {
-		// The parse pipeline writes parsed_calls, a FOREIGN KEY onto calls(id),
-		// so it must not run before the row exists. Hanging it off the payload
-		// op's After puts it behind the create in the ledger's single ordered
-		// queue — the reason that ordering is worth having.
-		job := parseJob{
-			callID: id,
-			at:     h.now(),
-			in: parse.Input{
-				Wire:            wireName,
-				Adapter:         t.Vendor.Adapter,
-				Modality:        string(modality),
-				Stream:          stream,
-				ReqContentType:  r.Header.Get("Content-Type"),
-				RespContentType: resp.Header.Get("Content-Type"),
-				ReqBody:         reqBody,
-				RespBody:        parseRespBody,
-			},
+		// The parse pipeline stamps the message fingerprint onto the calls row,
+		// so it must not run before the row exists — an UPDATE of a missing row
+		// silently does nothing. Hanging it off the payload op's After puts it
+		// behind the create in the ledger's single ordered queue — the reason
+		// that ordering is worth having. Only session calls get one: the
+		// fingerprint exists for the session Messages view.
+		var after func()
+		if entry.SessionID != "" {
+			job := parseJob{
+				callID: id,
+				in: parse.Input{
+					Wire:           wireName,
+					Adapter:        t.Vendor.Adapter,
+					Modality:       string(modality),
+					Stream:         stream,
+					ReqContentType: r.Header.Get("Content-Type"),
+					ReqBody:        reqBody,
+				},
+			}
+			after = func() { h.parse.submit(job) }
 		}
-		h.savePayload(id, r, reqBody, resp, respBody, func() { h.parse.submit(job) })
+		h.savePayload(id, r, reqBody, resp, respBody, after)
 	}
 }
 

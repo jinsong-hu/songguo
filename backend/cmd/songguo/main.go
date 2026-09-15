@@ -138,13 +138,14 @@ func main() {
 	// and then stop local body analysis — never forwarding, metering or the call
 	// row. On an 8 GB box without swap the alternative is the host locking up.
 	// See internal/pressure. Every threshold is overridable; 0 disables it.
+	ioPressurePct := getfloat("SONGGUO_SHED_IO_PRESSURE_PCT", pressure.DefaultIOPressurePct)
 	monitor := pressure.New(pressure.Options{
 		Cooldown:       getduration("SONGGUO_SHED_COOLDOWN", pressure.DefaultCooldown),
 		MemCapturePct:  getfloat("SONGGUO_SHED_MEM_CAPTURE_PCT", pressure.DefaultMemCapturePct),
 		MemAnalysisPct: getfloat("SONGGUO_SHED_MEM_ANALYSIS_PCT", pressure.DefaultMemAnalysisPct),
 		DiskDir:        filepath.Dir(dbPath),
 		DiskFreeMin:    uint64(getmb("SONGGUO_SHED_DISK_FREE_MB", pressure.DefaultDiskFreeMin>>20)),
-		IOPressurePct:  getfloat("SONGGUO_SHED_IO_PRESSURE_PCT", pressure.DefaultIOPressurePct),
+		IOPressurePct:  ioPressurePct,
 		WriteLag:       getduration("SONGGUO_SHED_WRITE_LAG", pressure.DefaultWriteLag),
 		Logger:         logger,
 	})
@@ -229,6 +230,18 @@ func main() {
 		Calls:    getdays("SONGGUO_RETAIN_CALLS_DAYS", 90),
 		Sessions: getdays("SONGGUO_RETAIN_SESSIONS_DAYS", 90),
 	}, time.Hour)
+	// The retired parsed_calls table drains in the background. It yields well
+	// before the disk is busy enough to shed capture — at half that threshold —
+	// so the cleanup is never why traces are dropped. With the I/O signal
+	// disabled for shedding, the drain still keeps to half the default.
+	drainIOPct := ioPressurePct
+	if drainIOPct <= 0 {
+		drainIOPct = pressure.DefaultIOPressurePct
+	}
+	jan.PauseDrainWhen(func() bool {
+		s := monitor.Stats()
+		return s.Level != pressure.Normal.String() || s.IOPressure >= drainIOPct/2
+	})
 
 	// Price feed: refresh model rates from models.dev on start and on a fixed
 	// clock, so a long-running gateway does not meter at whatever the embedded

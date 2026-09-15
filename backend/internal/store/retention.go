@@ -118,9 +118,9 @@ func (s *Store) PruneRaw(ctx context.Context, before time.Time) (int64, error) {
 }
 
 // PruneCalls deletes call-level stats rows older than the cutoff, by start time
-// (ts). Foreign-key cascade drops each pruned call's raw/parsed/composition
-// children, so this also reclaims any raw bodies the 7-day PruneRaw hasn't
-// already removed. Returns rows deleted.
+// (ts). Foreign-key cascade drops each pruned call's raw/composition children,
+// so this also reclaims any raw bodies the 7-day PruneRaw hasn't already
+// removed. Returns rows deleted.
 //
 // The cascade makes this the most expensive of the three — each deleted call
 // takes up to three child rows with it, one of them holding the captured bodies
@@ -135,4 +135,44 @@ func (s *Store) PruneCalls(ctx context.Context, before time.Time) (int64, error)
 // rebuilt. Returns rows deleted.
 func (s *Store) PruneSessions(ctx context.Context, before time.Time) (int64, error) {
 	return s.pruneOlderThan(ctx, "sessions", "last_ts", before, pruneBatch)
+}
+
+// DrainParsedCalls deletes up to batch rows of the retired parsed_calls table,
+// oldest first, and drops the table once it is empty. It reports done when the
+// table is gone — on a database created after the retirement it never existed.
+// One call is one batch under the write lock, so the caller sets the pace.
+//
+// parsed_calls held a normalized copy of every captured call's messages: a
+// second full copy of the same content raw already holds byte-for-byte, kept
+// 90 days (through the calls cascade) against raw's 7, and read by nothing.
+// Writing it was about a third of every captured call's disk writes.
+//
+// It is not a DROP TABLE, because on a table of that size DROP is the outage:
+// freeing a row means walking its overflow chain page by page to find each next
+// pointer, and DROP does that for every row in one transaction under the write
+// lock. Deleting a few rows at a time bounds each hold, and the pages freed go
+// to the freelist, where new writes reuse them instead of growing the file.
+func (s *Store) DrainParsedCalls(ctx context.Context, batch int) (deleted int64, done bool, err error) {
+	exists, err := s.tableExists("parsed_calls")
+	if err != nil {
+		return 0, false, err
+	}
+	if !exists {
+		return 0, true, nil
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM parsed_calls WHERE rowid IN (SELECT rowid FROM parsed_calls LIMIT ?)`, batch)
+	if err != nil {
+		return 0, false, fmt.Errorf("store: drain parsed_calls: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n > 0 {
+		return n, false, err
+	}
+	// Empty: dropping it now frees two root pages, not a table's worth.
+	if _, err := s.db.ExecContext(ctx, `DROP TABLE parsed_calls`); err != nil {
+		return 0, false, fmt.Errorf("store: drop parsed_calls: %w", err)
+	}
+	return 0, true, nil
 }

@@ -76,8 +76,8 @@ whichever header the two ends use.
 
 A proxied call costs two kinds of work. The forward — buffer, route, relay,
 meter, record the call row — is what the caller is paying for. Capture (`raw`),
-the async parse (`parsed_calls`) and local context composition are songguo
-looking at the traffic for the operator. For an agent resending a 20 MB history
+the async parse that fingerprints captured messages and local context
+composition are songguo looking at the traffic for the operator. For an agent resending a 20 MB history
 every few seconds the second kind is most of the memory and nearly all of the
 disk writes, and on a small box without swap it is what locks up the host.
 
@@ -105,6 +105,15 @@ Free disk is deliberately not aggressive. SQLite never returns freed pages to
 the OS (see `internal/store/retention.go`), so free space does not recover on
 its own once the file has grown; a high threshold would switch capture off for
 good rather than during a spike.
+
+Captured content is stored once, in `raw`. A structured copy of it
+(`parsed_calls`: normalized messages, 90 days, read by nothing) was a third of
+every captured call's disk writes and is retired: views decode `raw` when they
+are asked, and the parse keeps only the message fingerprint on the call row. An
+existing table is drained a few rows at a time in the background and dropped
+when empty (`internal/janitor/drain.go`) — never a `DROP TABLE` on the full
+table, which reads every overflow chain under the write lock. Do not add a
+second stored copy of captured content without a reader that needs it.
 
 The dashboard reads captured bodies too, and a read is the same disk and the
 same memory. At any level above `normal` the session Messages view answers `503

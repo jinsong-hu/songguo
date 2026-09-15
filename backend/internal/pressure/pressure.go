@@ -7,7 +7,7 @@
 // forward itself — buffer, route, relay, meter the usage, record the call row —
 // is what the caller is paying for. Everything else is songguo looking at the
 // traffic for the operator's benefit: the captured request/response bodies in
-// `raw`, the async parse into `parsed_calls`, the local o200k context
+// `raw`, the async parse that fingerprints them, the local o200k context
 // composition. For an agent resending a 20 MB history every few seconds, that
 // second kind is most of the memory and nearly all of the disk writes, and on a
 // box without swap it is what takes the whole host down with it.

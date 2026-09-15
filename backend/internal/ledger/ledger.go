@@ -62,7 +62,7 @@
 //
 //   - FinalizeCall is an UPDATE keyed by id. A finalize that overtakes its
 //     create matches no row, and the entire outcome of the call is lost.
-//   - raw, parsed_calls and context_composition are FOREIGN KEYs onto
+//   - raw and context_composition are FOREIGN KEYs onto
 //     calls(id), so a payload or composition written before its parent row
 //     fails outright.
 //
@@ -114,8 +114,8 @@ type Op struct {
 
 	// After runs on the writer goroutine after the write SUCCEEDS, and is
 	// skipped when it fails. This is how work that depends on the row already
-	// existing — the parse pipeline writes parsed_calls, a FOREIGN KEY onto
-	// calls(id) — is sequenced behind it without this package having to know
+	// existing — the parse pipeline UPDATEs the calls row with a message
+	// fingerprint — is sequenced behind it without this package having to know
 	// what that work is. A payload dropped over budget never runs its After.
 	After func()
 

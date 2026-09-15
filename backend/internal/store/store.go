@@ -224,15 +224,10 @@ func (s *Store) migrate() error {
 		// declared column). Batching the DELETE cannot bound that; only this index
 		// can. See the History note in retention.go.
 		`CREATE INDEX IF NOT EXISTS idx_raw_created_at ON raw(created_at)`,
-		// parsed_calls holds the structured, protocol-neutral view produced by
-		// the async parse pipeline (internal/parse), 1:1 with calls.id. `data`
-		// is the JSON-encoded parse.Call; `format` names the parser used.
-		`CREATE TABLE IF NOT EXISTS parsed_calls (
-			call_id    TEXT PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE,
-			format     TEXT NOT NULL DEFAULT '',
-			data       TEXT NOT NULL DEFAULT '{}',
-			created_at INTEGER NOT NULL
-		)`,
+		// parsed_calls is retired and deliberately not created: it duplicated
+		// raw's content for 90 days and nothing read it. An existing one is
+		// drained in the background and dropped (Store.DrainParsedCalls).
+		//
 		// user_spend is the running per-user cost total that backs budget
 		// enforcement. It exists because SUM(cost) over calls was both slow (an
 		// aggregate scan on the request path, growing forever) and WRONG:
@@ -1225,10 +1220,8 @@ func (s *Store) migrateCallsToUUID() error {
 			resp_body        BLOB,
 			resp_content_type TEXT NOT NULL DEFAULT '',
 			created_at       INTEGER NOT NULL`},
-		{"parsed_calls", `call_id    TEXT PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE,
-			format     TEXT NOT NULL DEFAULT '',
-			data       TEXT NOT NULL DEFAULT '{}',
-			created_at INTEGER NOT NULL`},
+		// parsed_calls is absent here on purpose: it is retired and drained, so
+		// rebuilding it would copy a table only to delete it.
 		{"context_composition", `call_id    TEXT PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE,
 			total      REAL NOT NULL,
 			cached     REAL NOT NULL,

@@ -1,27 +1,31 @@
 package proxy
 
 import (
-	"encoding/json"
 	"log/slog"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/songguo/songguo/internal/parse"
 	"github.com/songguo/songguo/internal/store"
 )
 
-// The parse pipeline runs the full content parse OFF the request hot path. The
+// The parse pipeline runs the content parse OFF the request hot path. The
 // synchronous proxy does only routing + metering and records the call row; this
-// pipeline then turns the captured request/response bytes into a structured
-// parse.Call and persists it for later analysis. It is best-effort: a saturated
-// queue drops jobs (the call is already metered) and a parse failure still
-// stores whatever was recovered.
+// pipeline then parses a captured request's messages and stamps their
+// message-shape fingerprint onto the call row, which is what lets the session
+// Messages view skip redundant bodies (store/messagecover.go). It is
+// best-effort: a saturated queue drops jobs (the call is already metered) and a
+// call without a fingerprint only costs that view a redundant read.
+//
+// > History: it also persisted the whole parse.Call to parsed_calls — a second
+// > copy of every captured conversation, kept 90 days, read by nothing, and
+// > about a third of each captured call's disk writes. The table is retired and
+// > drained (store.DrainParsedCalls); the fingerprint is all that is kept.
 
-// parseJob is one unit of async post-processing.
+// parseJob is one unit of async post-processing. It carries the request only:
+// the fingerprint is computed from the request's messages.
 type parseJob struct {
 	callID string
-	at     time.Time
 	in     parse.Input
 }
 
@@ -31,8 +35,8 @@ type parsePipeline struct {
 	logger *slog.Logger
 	wg     sync.WaitGroup
 
-	// Each job holds a whole request and response body, so 256 slots of agent
-	// turns is gigabytes. queuedBytes bounds that alongside the slot count.
+	// Each job holds a whole request body, so 256 slots of agent turns is
+	// gigabytes. queuedBytes bounds that alongside the slot count.
 	budget      int64
 	queuedBytes atomic.Int64
 }
@@ -99,27 +103,15 @@ func (p *parsePipeline) submit(job parseJob) {
 func (p *parsePipeline) process(job parseJob) {
 	c, err := parse.Parse(job.in)
 	if err != nil {
-		// Non-fatal: persist whatever was recovered (request side usually parses
-		// even when a streamed/truncated response does not).
+		// Non-fatal: the job carries no response, which some parsers flag; the
+		// request's messages are what the fingerprint needs.
 		p.logger.Debug("parse incomplete", "err", err, "call_id", job.callID, "format", c.Format)
 	}
-	data, merr := json.Marshal(c)
-	if merr != nil {
-		p.logger.Error("marshal parsed call failed", "err", merr, "call_id", job.callID)
-		return
-	}
-	if serr := p.store.SaveParsedCall(store.ParsedCall{
-		CallID: job.callID, Format: c.Format, Data: data, CreatedAt: job.at,
-	}); serr != nil {
-		p.logger.Error("save parsed call failed", "err", serr, "call_id", job.callID)
-	}
 
-	// Stamp the message-shape fingerprint onto the calls row. Done here because
-	// this is the one place the normalized messages already exist in memory —
-	// the caller has paid for the body read and the JSON unmarshal, and hashing
-	// what they produced is a rounding error on top. A failure is logged and
-	// dropped: the columns stay unknown, and an unknown fingerprint costs the
-	// session view a redundant body read rather than a missing conversation.
+	// Stamp the message-shape fingerprint onto the calls row. A failure is
+	// logged and dropped: the columns stay unknown, and an unknown fingerprint
+	// costs the session view a redundant body read rather than a missing
+	// conversation.
 	f := c.Fingerprint()
 	if ferr := p.store.SaveMessageFingerprint(job.callID, f.Count, f.Head, f.Tail); ferr != nil {
 		p.logger.Error("save message fingerprint failed", "err", ferr, "call_id", job.callID)

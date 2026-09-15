@@ -37,7 +37,15 @@ type Janitor struct {
 	interval time.Duration
 	now      func() time.Time
 	done     chan struct{}
+
+	// busy reports that the host is short of I/O or the gateway is shedding
+	// load; the parsed_calls drain waits while it does. Nil means never busy.
+	busy func() bool
 }
+
+// PauseDrainWhen sets the condition the background parsed_calls drain waits
+// out (see drainParsedCalls). Call it before Run.
+func (j *Janitor) PauseDrainWhen(busy func() bool) { j.busy = busy }
 
 // New builds a Janitor. A non-positive interval defaults to hourly.
 func New(st *store.Store, logger *slog.Logger, w Windows, interval time.Duration) *Janitor {
@@ -59,6 +67,13 @@ func New(st *store.Store, logger *slog.Logger, w Windows, interval time.Duration
 // future sweeps).
 func (j *Janitor) Run(ctx context.Context) {
 	defer close(j.done)
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		j.drainParsedCalls(ctx)
+	}()
+	defer func() { <-drained }()
+
 	j.sweep(ctx)
 	t := time.NewTicker(j.interval)
 	defer t.Stop()

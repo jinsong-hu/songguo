@@ -1,55 +1,54 @@
 package proxy
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/parse"
 	"github.com/songguo/songguo/internal/store"
 )
 
-// TestParsePipelinePersists submits a job, drains via Close(), then verifies the
-// structured parse was stored against the call row.
-func TestParsePipelinePersists(t *testing.T) {
+// TestParsePipelineStampsFingerprints submits two turns of one growing
+// conversation, drains via Close(), and checks the session cover collapses them
+// to the later body — which it can only do once both calls carry a fingerprint.
+// Unfingerprinted, the cover keeps both.
+func TestParsePipelineStampsFingerprints(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
 	defer st.Close()
 
-	id, err := st.AppendCall(calls.Entry{Model: "gpt-4o", Vendor: "openai", Wire: "openai/chat"})
-	if err != nil {
-		t.Fatalf("AppendCall: %v", err)
+	bodies := []string{
+		`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`,
+		`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"hello"},{"role":"user","content":"more"}]}`,
 	}
-
+	base := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
 	p := newParsePipeline(st, nil, 1, 8)
-	p.submit(parseJob{
-		callID: id,
-		in: parse.Input{
-			Wire:     "openai/chat",
-			ReqBody:  []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`),
-			RespBody: []byte(`{"choices":[{"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`),
-		},
-	})
+	var ids []string
+	for i, body := range bodies {
+		id, err := st.AppendCall(calls.Entry{TS: base.Add(time.Duration(i) * time.Minute), SessionID: "sess", Model: "gpt-4o", Wire: "openai/chat"})
+		if err != nil {
+			t.Fatalf("AppendCall: %v", err)
+		}
+		if err := st.SavePayload(store.Payload{CallID: id, ReqBody: []byte(body)}); err != nil {
+			t.Fatalf("SavePayload: %v", err)
+		}
+		p.submit(parseJob{callID: id, in: parse.Input{Wire: "openai/chat", ReqBody: []byte(body)}})
+		ids = append(ids, id)
+	}
 	p.Close() // drains in-flight jobs
 
-	pc, err := st.GetParsedCall(id)
+	cover, err := st.SessionCover("sess")
 	if err != nil {
-		t.Fatalf("GetParsedCall: %v", err)
+		t.Fatalf("SessionCover: %v", err)
 	}
-	if pc.Format != "openai-chat" {
-		t.Errorf("format = %q", pc.Format)
-	}
-	var c parse.Call
-	if err := json.Unmarshal(pc.Data, &c); err != nil {
-		t.Fatalf("unmarshal stored data: %v", err)
-	}
-	if c.Output[0].Text != "hello" || c.FinishReason != "stop" || c.Tokens.Input != 3 {
-		t.Errorf("parsed call = %+v", c)
+	if len(cover) != 1 || cover[0].CallID != ids[1] {
+		t.Fatalf("cover = %+v, want only the later turn (fingerprints stamped)", cover)
 	}
 }
 
