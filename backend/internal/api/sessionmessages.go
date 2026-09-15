@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -23,7 +24,19 @@ type sessionMessagesView struct {
 	System    []json.RawMessage `json:"system"`
 	Tools     []json.RawMessage `json:"tools"`
 	Messages  []json.RawMessage `json:"messages"`
+	// OmittedRequests counts the oldest covering request bodies left unread
+	// because the newer ones already filled sessionMessagesBudget. Non-zero
+	// means the view starts part-way through the session.
+	OmittedRequests int `json:"omitted_requests"`
 }
+
+// sessionMessagesBudget bounds the stored request bytes one Messages view
+// reads. The merge below holds each decoded body several times over (raw
+// message values, a canonical key per message, the encoded response), so the
+// process pays a few hundred MB at this size — affordable on the 8 GB host the
+// gateway shares with other services, where an unbounded read of one busy
+// session was not.
+const sessionMessagesBudget = 64 << 20
 
 type capturedPromptBody struct {
 	Model        string          `json:"model"`
@@ -40,18 +53,36 @@ type promptItem struct {
 }
 
 func (a *api) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
-	view, err := a.sessionMessagesData(r.PathValue("id"))
+	if a.shedding() {
+		writeError(w, http.StatusServiceUnavailable, "shedding_load",
+			"the gateway is short of disk or memory and has paused reading captured bodies; retry once it recovers")
+		return
+	}
+	select {
+	case a.bodyReads <- struct{}{}:
+		defer func() { <-a.bodyReads }()
+	case <-r.Context().Done():
+		return
+	}
+	view, err := a.sessionMessagesData(r.Context(), r.PathValue("id"))
 	if err != nil {
+		if r.Context().Err() != nil {
+			return // the viewer left; nobody to answer
+		}
 		a.writeDataErr(w, "get session messages", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, view)
 }
 
-func (a *api) sessionMessagesData(id string) (sessionMessagesView, error) {
-	requests, err := a.store.SessionRequests(id)
+func (a *api) sessionMessagesData(ctx context.Context, id string) (sessionMessagesView, error) {
+	requests, omitted, err := a.store.SessionRequests(ctx, id, sessionMessagesBudget)
 	if err != nil {
 		return emptyPromptView(id), err
+	}
+	if omitted > 0 {
+		a.logger.Info("session messages omitted the oldest bodies over budget",
+			"session", id, "read", len(requests), "omitted", omitted, "budget_mb", sessionMessagesBudget>>20)
 	}
 
 	prompts := make([]capturedPromptBody, 0, len(requests))
@@ -67,6 +98,7 @@ func (a *api) sessionMessagesData(id string) (sessionMessagesView, error) {
 	}
 	view := mergePrompts(prompts)
 	view.SessionID = id
+	view.OmittedRequests = omitted
 	return view, nil
 }
 

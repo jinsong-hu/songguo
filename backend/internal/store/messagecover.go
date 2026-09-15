@@ -24,11 +24,24 @@ import (
 //
 //	same msg_head  +  msg_count non-decreasing  ⇒  the later one is a superset
 //
-// A maximal run of such requests collapses to its LAST member. A run ends when
-// msg_head changes (the conversation was replaced — compaction substituted a
-// summary for the history) or msg_count drops (messages were dropped), and the
-// next request opens a new run. Equal counts additionally require equal
-// msg_tail, which separates two same-length arrays that diverged — a fork.
+// A maximal run of such requests collapses to its LAST member. Runs are kept
+// per msg_head, not per neighbour: a request extends the latest earlier request
+// with the SAME head, wherever that one sits in time. A different head is a
+// different conversation (compaction substituted a summary for the history, or
+// another thread of the same session), so it opens its own run without closing
+// this one. A run ends when msg_count drops (messages were dropped), and the
+// next request with that head opens a new one. Equal counts additionally
+// require equal msg_tail, which separates two same-length arrays that diverged —
+// a fork.
+//
+// > History: runs used to be judged between adjacent requests only, so ANY
+// > head change closed the run. A harness that drives several threads under one
+// > session id interleaves them in time, which made nearly every request its own
+// > run. The production Codex session that exposed it had 12 threads and 1,264
+// > calls; the cover kept 1,068 bodies, and one open of its Messages panel read
+// > gigabytes of BLOBs, spilled them to a temp B-tree for the ORDER BY, and hung
+// > the host (2026-09-15). Per-head runs read that session in 22: one per
+// > thread plus the ten calls that never got a fingerprint.
 //
 // WHY THIS IS NOT A HEURISTIC. There is no threshold and no tuning constant
 // here, and that is deliberate: a "context shrank by more than 30%, call it a
@@ -65,6 +78,9 @@ import (
 // Unknown fingerprints (rows written before the columns existed, or never
 // parsed) are never treated as redundant. That is the whole safety property:
 // the fallback on missing information is to read the body, never to drop it.
+// Nor do they end anyone else's run: an unknown request proves nothing about
+// the requests around it, so a later request can still extend an earlier one
+// across it.
 
 // CoveringRequest identifies one call whose captured request body must be read
 // to reconstruct a session's conversation.
@@ -176,7 +192,8 @@ func extends(prev, cur callShape) bool {
 // Runs never span agents: a subagent's context is an unrelated conversation, not
 // a truncation of its parent's, so its shorter array must not read as a boundary
 // in the parent's run. The ordering from sessionShapes puts each agent's calls
-// together, and the walk resets whenever the agent id changes.
+// together, and the walk closes every open run whenever the agent id changes.
+// Within an agent, one run is open per msg_head (see THE RULE).
 //
 // Within a run the last member wins — but only if its body still exists. When it
 // does not (raw pruned at 7 days), the walk falls back to the latest member of
@@ -187,30 +204,56 @@ func extends(prev, cur callShape) bool {
 // there — which is the honest outcome, not one to paper over.
 func messageCover(shapes []callShape) []CoveringRequest {
 	var out []CoveringRequest
-
-	// best is the latest capture-bearing member of the run in progress.
-	var best *callShape
-	flush := func() {
-		if best != nil {
-			out = append(out, CoveringRequest{CallID: best.CallID, AgentID: best.AgentID, TS: best.TS})
-			best = nil
+	emit := func(c *callShape) {
+		if c != nil {
+			out = append(out, CoveringRequest{CallID: c.CallID, AgentID: c.AgentID, TS: c.TS})
 		}
+	}
+
+	// run is one open run: its latest member, which the next request with the
+	// same head must extend, and its latest capture-bearing member, which is
+	// the body that gets read.
+	type run struct {
+		last callShape
+		best *callShape
+	}
+	open := map[string]*run{}
+	closeAll := func() {
+		for _, r := range open {
+			emit(r.best)
+		}
+		clear(open)
 	}
 
 	for i := range shapes {
 		cur := shapes[i]
-		newRun := i == 0 ||
-			shapes[i-1].AgentID != cur.AgentID ||
-			!extends(shapes[i-1], cur)
-		if newRun {
-			flush()
+		if i > 0 && shapes[i-1].AgentID != cur.AgentID {
+			closeAll()
 		}
+		if !cur.known() {
+			// Nothing can extend it and it extends nothing: a run of one.
+			if cur.HasRaw {
+				emit(&cur)
+			}
+			continue
+		}
+		key := string(cur.Head)
+		r := open[key]
+		if r != nil && !extends(r.last, cur) {
+			emit(r.best)
+			r = nil
+		}
+		if r == nil {
+			r = &run{}
+			open[key] = r
+		}
+		r.last = cur
 		if cur.HasRaw {
 			c := cur
-			best = &c
+			r.best = &c
 		}
 	}
-	flush()
+	closeAll()
 
 	// The walk emits agent-major (that is the order runs are detected in), but
 	// callers reassemble a conversation in time order. Sorting here rather than

@@ -450,6 +450,12 @@ export interface SessionMessages {
    * whatever was lifted into `system` and `tools`.
    */
   messages: unknown[];
+  /**
+   * The oldest request bodies the backend left unread because the newer ones
+   * already filled its read budget. Non-zero means the view starts part-way
+   * through the session.
+   */
+  omitted_requests?: number;
 }
 
 // --- Context distribution (where the context window goes) ---

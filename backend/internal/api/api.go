@@ -81,7 +81,19 @@ type api struct {
 	// stepped clock cannot invert the comparison.
 	bootTime time.Time
 
+	// bodyReads admits one session-wide body read at a time (see
+	// sessionMessagesBudget). Its budget bounds one read; this bounds how many
+	// of them a few open tabs can stack up.
+	bodyReads chan struct{}
+
 	warnOnce sync.Once
+}
+
+// shedding reports whether the gateway is shedding its own bookkeeping to keep
+// forwarding. Dashboard reads of captured bodies are bookkeeping too, and they
+// hit the same disk the ledger is short of, so they stand down with it.
+func (a *api) shedding() bool {
+	return a.pressure != nil && a.pressure().Level != pressure.Normal.String()
 }
 
 // newAPI resolves Deps into a concrete *api with defaults applied. It is shared
@@ -126,6 +138,7 @@ func newAPI(d Deps) *api {
 		listenAddr:  d.ListenAddr,
 		dbPath:      d.DBPath,
 		bootTime:    now(),
+		bodyReads:   make(chan struct{}, 1),
 	}
 }
 

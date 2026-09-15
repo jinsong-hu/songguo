@@ -81,6 +81,12 @@ export function PromptReconstructionCard({
           </span>
           <span className="chip chip-mono">{prompt.messages.length}</span>
         </summary>
+        {prompt.omittedRequests > 0 ? (
+          <div className={styles.promptEmpty}>
+            Starts part-way through: the {prompt.omittedRequests} oldest{' '}
+            {prompt.omittedRequests === 1 ? 'request was' : 'requests were'} too large to read with the rest.
+          </div>
+        ) : null}
         {prompt.messages.length > 0 ? (
           <div className={styles.messageTimeline}>
             {prompt.messages.map((message, i) => (
@@ -315,6 +321,8 @@ export interface PromptReconstruction {
   tools: ToolInfo[];
   messages: PromptMessage[];
   blocks: PromptBlock[];
+  /** Oldest request bodies left unread over the backend's read budget. */
+  omittedRequests: number;
 }
 
 interface ToolInfo {
@@ -369,6 +377,7 @@ export function parsePromptReconstruction(source: SessionMessages): PromptRecons
     system,
     tools,
     messages,
+    omittedRequests: source.omitted_requests ?? 0,
   };
   return {
     ...prompt,

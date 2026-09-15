@@ -2,7 +2,9 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,7 +155,7 @@ func TestSessionRequests(t *testing.T) {
 		}
 	}
 
-	got, err := s.SessionRequests("sess")
+	got, _, err := s.SessionRequests(context.Background(), "sess", 0)
 	if err != nil {
 		t.Fatalf("SessionRequests: %v", err)
 	}
@@ -167,7 +169,7 @@ func TestSessionRequests(t *testing.T) {
 		t.Errorf("second request = %+v, want call %q", got[1], id2)
 	}
 
-	empty, err := s.SessionRequests("missing")
+	empty, _, err := s.SessionRequests(context.Background(), "missing", 0)
 	if err != nil {
 		t.Fatalf("SessionRequests(missing): %v", err)
 	}
@@ -220,7 +222,7 @@ func TestSessionRequestsReadsOnlyTheCoveringBodies(t *testing.T) {
 		ids = append(ids, id)
 	}
 
-	got, err := s.SessionRequests("grow")
+	got, _, err := s.SessionRequests(context.Background(), "grow", 0)
 	if err != nil {
 		t.Fatalf("SessionRequests: %v", err)
 	}
@@ -232,5 +234,63 @@ func TestSessionRequestsReadsOnlyTheCoveringBodies(t *testing.T) {
 	}
 	if got[1].CallID != ids[4] || string(got[1].ReqBody) != "turn5" {
 		t.Errorf("second covering body = %+v, want turn5 (last of the new run)", got[1])
+	}
+}
+
+// The budget keeps a contiguous newest stretch: once a body does not fit, it and
+// everything older are omitted and counted, even an older body small enough to
+// squeeze in — a view with holes in the middle would misread as a conversation.
+func TestSessionRequestsBudgetKeepsNewestStretch(t *testing.T) {
+	s := openTestStore(t)
+	base := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	// Unfingerprinted, so the cover keeps every body and only the budget cuts.
+	seedSession(t, s, "big", base, 0, "", "", "s")
+	seedSession(t, s, "big", base.Add(time.Minute), 0, "", "", strings.Repeat("L", 60))
+	mid := seedSession(t, s, "big", base.Add(2*time.Minute), 0, "", "", strings.Repeat("M", 30))
+	newest := seedSession(t, s, "big", base.Add(3*time.Minute), 0, "", "", strings.Repeat("N", 30))
+
+	got, omitted, err := s.SessionRequests(context.Background(), "big", 64)
+	if err != nil {
+		t.Fatalf("SessionRequests: %v", err)
+	}
+	if len(got) != 2 || got[0].CallID != mid || got[1].CallID != newest {
+		t.Fatalf("read %+v, want [mid newest] oldest first", got)
+	}
+	if omitted != 2 {
+		t.Errorf("omitted = %d, want 2 (large, and small behind it)", omitted)
+	}
+
+	// However large, the newest body is always read: a blank view explains nothing.
+	got, omitted, err = s.SessionRequests(context.Background(), "big", 1)
+	if err != nil {
+		t.Fatalf("SessionRequests(tiny budget): %v", err)
+	}
+	if len(got) != 1 || got[0].CallID != newest || omitted != 3 {
+		t.Errorf("tiny budget read %d bodies (omitted %d), want only the newest (3 omitted)", len(got), omitted)
+	}
+
+	// A cancelled viewer stops the read.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := s.SessionRequests(ctx, "big", 0); err == nil {
+		t.Error("SessionRequests with a cancelled context succeeded, want an error")
+	}
+}
+
+func TestRequestBodySizes(t *testing.T) {
+	s := openTestStore(t)
+	base := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	a := seedSession(t, s, "sz", base, 0, "", "", strings.Repeat("x", 1234))
+	b := seedSession(t, s, "sz", base.Add(time.Second), 0, "", "", "")
+
+	got, err := s.RequestBodySizes(context.Background(), []string{a, b, "missing"})
+	if err != nil {
+		t.Fatalf("RequestBodySizes: %v", err)
+	}
+	if len(got) != 2 || got[a] != 1234 || got[b] != 0 {
+		t.Errorf("sizes = %v, want %s:1234 %s:0 and no entry for missing", got, a, b)
+	}
+	if empty, err := s.RequestBodySizes(context.Background(), nil); err != nil || len(empty) != 0 {
+		t.Errorf("RequestBodySizes(nil) = %v, %v; want empty", empty, err)
 	}
 }

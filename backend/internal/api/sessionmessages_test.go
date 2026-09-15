@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/songguo/songguo/internal/calls"
+	"github.com/songguo/songguo/internal/pressure"
 	"github.com/songguo/songguo/internal/store"
 )
 
@@ -312,6 +313,64 @@ func TestSessionMessagesEmptySessionUsesArrays(t *testing.T) {
 		!strings.Contains(rec.Body.String(), `"tools":[]`) ||
 		!strings.Contains(rec.Body.String(), `"messages":[]`) {
 		t.Errorf("empty response should use arrays: %s", rec.Body.String())
+	}
+}
+
+// Reading captured bodies is our own bookkeeping, on the disk the ledger is
+// short of, so the Messages view stands down while the gateway sheds load.
+func TestSessionMessagesStandsDownUnderPressure(t *testing.T) {
+	s := newTestStore(t)
+	appendCapturedRequest(t, s, time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC), "sess", "openai/responses", `{"input":"hi"}`)
+	level := pressure.ShedCapture
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret", PressureStats: func() pressure.Stats {
+		return pressure.Stats{Level: level.String()}
+	}})
+
+	rec := do(h, http.MethodGet, "/api/sessions/sess/messages", "secret", nil)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "songguo_shedding_load") {
+		t.Fatalf("under pressure: code = %d, body = %s; want 503 shedding_load", rec.Code, rec.Body.String())
+	}
+
+	level = pressure.Normal
+	rec = do(h, http.MethodGet, "/api/sessions/sess/messages", "secret", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"omitted_requests":0`) {
+		t.Fatalf("recovered: code = %d, body = %s; want 200 with nothing omitted", rec.Code, rec.Body.String())
+	}
+}
+
+// The title fallback probes sizes and fetches only small candidates, so a
+// session whose title request was never captured does not read its
+// conversation looking for one. The large body below IS a title request; if the
+// fallback read it, the title would come back.
+func TestSessionTitleFallbackSkipsLargeBodies(t *testing.T) {
+	s := newTestStore(t)
+	titleReq := `{"system":[{"type":"text","text":"Generate a concise, sentence-case title (3-7 words) that captures the main topic or goal of this coding session."}],` +
+		`"messages":[{"role":"user","content":"x"}],` +
+		`"output_config":{"format":{"type":"json_schema","schema":{"type":"object","properties":{"title":{"type":"string"}},"required":["title"]}}}}`
+	titleResp := `{"content":[{"type":"text","text":"{\"title\": \"Found the title\"}"}]}`
+	add := func(ts time.Time, req string) calls.Entry {
+		t.Helper()
+		e := calls.Entry{TS: ts, SessionID: "t", Wire: "anthropic/messages", Status: 200}
+		id, err := s.AppendCall(e)
+		if err != nil {
+			t.Fatalf("AppendCall: %v", err)
+		}
+		if err := s.SavePayload(store.Payload{CallID: id, ReqBody: []byte(req), RespBody: []byte(titleResp)}); err != nil {
+			t.Fatalf("SavePayload: %v", err)
+		}
+		e.ID = id
+		return e
+	}
+	base := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
+	large := add(base, titleReq+strings.Repeat(" ", titleCandidateMaxBytes))
+
+	a := newAPI(Deps{Store: s})
+	if got := a.sessionTitleFromEntries("t", []calls.Entry{large}); got != "" {
+		t.Fatalf("title = %q from a body over titleCandidateMaxBytes, want it skipped", got)
+	}
+	small := add(base.Add(time.Minute), titleReq)
+	if got := a.sessionTitleFromEntries("t", []calls.Entry{large, small}); got != "Found the title" {
+		t.Fatalf("title = %q, want the small title request's", got)
 	}
 }
 

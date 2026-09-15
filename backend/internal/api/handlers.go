@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -1158,15 +1159,44 @@ func (a *api) sessionTitle(id string) string {
 	return a.sessionTitleFromEntries(id, entries)
 }
 
+// Bounds on the title fallback's body reads. Claude Code's title request is a
+// short system prompt and a clipped excerpt, a few KB; a main-loop turn carries
+// the tool schemas and the history and is far larger. Probing sizes first and
+// fetching only the small candidates finds the title without reading the
+// conversation — which, when no title request was ever captured, the loop used
+// to do for every anthropic/messages call in the session, twice per page view.
+const (
+	titleCandidateMaxBytes = 256 << 10
+	titleProbeBudget       = 8 << 20
+)
+
 func (a *api) sessionTitleFromEntries(id string, entries []calls.Entry) string {
 	if title, err := a.store.SessionTitle(id); err == nil && title != "" {
 		return title
 	}
+	if a.shedding() {
+		return ""
+	}
+	var ids []string
 	for _, e := range entries {
-		if e.Wire != "anthropic/messages" {
+		if e.Wire == "anthropic/messages" {
+			ids = append(ids, e.ID)
+		}
+	}
+	sizes, err := a.store.RequestBodySizes(context.Background(), ids)
+	if err != nil {
+		return ""
+	}
+	var spent int64
+	for _, callID := range ids {
+		size, ok := sizes[callID]
+		if !ok || size > titleCandidateMaxBytes {
 			continue
 		}
-		p, err := a.store.GetPayload(e.ID)
+		if spent += size; spent > titleProbeBudget {
+			return ""
+		}
+		p, err := a.store.GetPayload(callID)
 		if err != nil {
 			continue
 		}

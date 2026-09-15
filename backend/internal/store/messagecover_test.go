@@ -1,6 +1,8 @@
 package store
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -112,14 +114,39 @@ func TestCoverNeverSpansAgents(t *testing.T) {
 
 // An unknown fingerprint cannot be proven redundant, so it survives. This is the
 // safety property the whole design rests on: missing information costs a
-// redundant read, never a dropped message.
+// redundant read, never a dropped message. It proves nothing about its
+// neighbours either, so r3 still supersedes r1 across it.
 func TestCoverKeepsUnknownFingerprints(t *testing.T) {
 	legacy := shape("r2", "", 2, 0, "", "")
 	assertCover(t, "unknown", []callShape{
 		shape("r1", "", 1, 3, "A", "t3"),
 		legacy,
 		shape("r3", "", 3, 7, "A", "t7"),
-	}, "r1", "r2", "r3")
+	}, "r2", "r3")
+}
+
+// Threads of one session interleave in time. Each thread is its own run, so the
+// cover reads one body per thread however the requests alternate — judging runs
+// between neighbours read one body per request here.
+func TestCoverCollapsesInterleavedThreads(t *testing.T) {
+	var shapes []callShape
+	for i := 1; i <= 300; i++ {
+		head := []string{"A", "B", "C"}[i%3]
+		shapes = append(shapes, shape(fmt.Sprintf("%s%d", head, i), "", i, int64(i), head, fmt.Sprint("t", i)))
+	}
+	assertCover(t, "interleaved", shapes, "B298", "C299", "A300")
+}
+
+// A count drop ends only the run of its own head; the other thread's run keeps
+// growing across it.
+func TestCoverCountDropEndsOnlyItsOwnThread(t *testing.T) {
+	assertCover(t, "drop", []callShape{
+		shape("a1", "", 1, 5, "A", "t5"),
+		shape("b1", "", 2, 3, "B", "v3"),
+		shape("a2", "", 3, 2, "A", "t2"), // A dropped messages: a new A run
+		shape("b2", "", 4, 6, "B", "v6"),
+		shape("a3", "", 5, 4, "A", "t4"),
+	}, "a1", "b2", "a3")
 }
 
 // raw is pruned at 7 days while calls lives 90, so a run's last member often has
@@ -201,7 +228,7 @@ func TestUnavailableFingerprintStillReadsAsUnknown(t *testing.T) {
 	}
 	seedSession(t, s, "sess", base.Add(time.Minute), 5, "A", "t5", "turn2")
 
-	got, err := s.SessionRequests("sess")
+	got, _, err := s.SessionRequests(context.Background(), "sess", 0)
 	if err != nil {
 		t.Fatalf("SessionRequests: %v", err)
 	}

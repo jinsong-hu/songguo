@@ -106,6 +106,17 @@ the OS (see `internal/store/retention.go`), so free space does not recover on
 its own once the file has grown; a high threshold would switch capture off for
 good rather than during a spike.
 
+The dashboard reads captured bodies too, and a read is the same disk and the
+same memory. At any level above `normal` the session Messages view answers `503
+songguo_shedding_load` and the session-title fallback stops probing bodies. Even
+at `normal` such reads are bounded, never "just this once": one session-wide
+body read at a time, a stored-byte budget (the oldest bodies past it are left
+out and counted), sizes probed before bodies are fetched, one point lookup per
+body, and no `ORDER BY` over a BLOB — SQLite sorts BLOBs by copying them into a
+temp file. On 2026-09-15 a single unbounded open of one 12-thread Codex session
+read ~1,000 multi-MB bodies that way and hung the host within minutes, with
+capture already shed.
+
 The rules that keep this from turning into the things this file forbids:
 
 - **Never shed:** forwarding, the call row, usage, cost, spend, routing, health.
