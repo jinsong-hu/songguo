@@ -2209,6 +2209,15 @@ func (a *api) handleSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.settingsData())
 }
 
+// handleStatus returns the live status snapshot (see internal/status).
+func (a *api) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if a.status == nil {
+		writeError(w, http.StatusServiceUnavailable, "status_unavailable", "status sampler is not running")
+		return
+	}
+	writeJSON(w, http.StatusOK, a.status())
+}
+
 // settingsData returns non-secret runtime settings (never the admin key).
 func (a *api) settingsData() settingsView {
 	v := settingsView{

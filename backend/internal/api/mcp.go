@@ -2,11 +2,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/songguo/songguo/internal/status"
 	"github.com/songguo/songguo/internal/store"
 )
 
@@ -83,6 +85,11 @@ func (a *api) buildMCPServer(enableWrites bool) *mcp.Server {
 		Name:        "get_settings",
 		Description: "Return non-secret runtime settings: listen address, db path, whether the admin API is protected, and version.",
 	}, a.mcpGetSettings)
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "get_status",
+		Description: "Return live load and degrade status: whether songguo is shedding capture or analysis and which signal caused it, each signal against its threshold, host CPU/memory/I/O pressure, songguo's in-flight requests, network and disk throughput, and 15 minutes of history. Reads memory and /proc only, so it is safe to call while the gateway is struggling.",
+	}, a.mcpGetStatus)
 
 	if !enableWrites {
 		return srv
@@ -302,6 +309,13 @@ func (a *api) mcpListPricing(_ context.Context, _ *mcp.CallToolRequest, _ noArgs
 
 func (a *api) mcpGetSettings(_ context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, settingsView, error) {
 	return nil, a.settingsData(), nil
+}
+
+func (a *api) mcpGetStatus(_ context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, status.Snapshot, error) {
+	if a.status == nil {
+		return nil, status.Snapshot{}, errors.New("status sampler is not running")
+	}
+	return nil, a.status(), nil
 }
 
 // --- write tool args + handlers ---

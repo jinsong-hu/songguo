@@ -88,6 +88,44 @@ func TestStepsDownOnlyAfterCooldown(t *testing.T) {
 	r.at(time.Second).want(t, Normal)
 }
 
+// The status page answers three questions from Stats alone: what is over its
+// line right now, where the lines are, and when a shed level lets go. Reason
+// cannot answer the first — it keeps naming the cause through the cooldown.
+func TestStatsSayWhatIsOverAndWhenItRestores(t *testing.T) {
+	r := newRig(t, Options{MemCapturePct: 20, MemAnalysisPct: 10, IOPressurePct: 10, WriteLag: time.Second, Cooldown: time.Minute})
+	if s := r.m.Stats(); s.Over != nil || s.RestoreAtMS != 0 {
+		t.Fatalf("at normal: over %v restore %d, want neither", s.Over, s.RestoreAtMS)
+	}
+	want := Thresholds{MemCapturePct: 20, MemAnalysisPct: 10, IOPressurePct: 10, WriteLagMS: 1000}
+	if s := r.m.Stats(); s.Thresholds != want || s.CooldownMS != 60_000 {
+		t.Errorf("thresholds %+v cooldown %d, want %+v and 60000", s.Thresholds, s.CooldownMS, want)
+	}
+
+	r.memAvail, r.ioSome = 15, 12
+	r.at(0).want(t, ShedCapture)
+	if s := r.m.Stats(); len(s.Over) != 2 || s.Over[0] != "memory" || s.Over[1] != "io_pressure" || s.RestoreAtMS != 0 {
+		t.Errorf("both over: over %v restore %d, want [memory io_pressure] and no restore time", s.Over, s.RestoreAtMS)
+	}
+
+	r.memAvail, r.ioSome = 80, 0
+	r.at(10 * time.Second)
+	clear := r.now
+	r.at(20*time.Second).want(t, ShedCapture)
+	s := r.m.Stats()
+	if s.Over != nil || s.Reason != "memory" {
+		t.Errorf("cooling down: over %v reason %q, want none over and the original reason", s.Over, s.Reason)
+	}
+	if got, want := s.RestoreAtMS, clear.Add(time.Minute).UnixMilli(); got != want {
+		t.Errorf("restore_at = %d, want %d (first clear reading + cooldown)", got, want)
+	}
+
+	r.ioSome = 11 // relapse: no restore time until it clears again
+	r.at(time.Second)
+	if s := r.m.Stats(); s.RestoreAtMS != 0 {
+		t.Errorf("relapsed: restore_at = %d, want 0", s.RestoreAtMS)
+	}
+}
+
 // Disk space, disk I/O, write lag and capture backlog are about writes, so they
 // shed capture and never analysis — analysis costs memory and CPU, not disk.
 func TestWriteSignalsShedCaptureOnly(t *testing.T) {

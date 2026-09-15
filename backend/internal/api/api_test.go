@@ -17,6 +17,8 @@ import (
 	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/compose"
 	"github.com/songguo/songguo/internal/config"
+	"github.com/songguo/songguo/internal/pressure"
+	"github.com/songguo/songguo/internal/status"
 	"github.com/songguo/songguo/internal/store"
 )
 
@@ -134,6 +136,7 @@ func TestAuthRequiredOnAllEndpoints(t *testing.T) {
 		{"PATCH", "/api/proxies/x"},
 		{"DELETE", "/api/proxies/x"},
 		{"GET", "/api/settings"},
+		{"GET", "/api/status"},
 		{"GET", "/api/pricing"},
 	}
 
@@ -1054,6 +1057,34 @@ func TestSettingsUnprotected(t *testing.T) {
 	decodeBody(t, rec, &sv)
 	if sv.AdminProtected {
 		t.Error("admin_protected should be false in unprotected mode")
+	}
+}
+
+// /api/status serves whatever the sampler holds, admin-only, and says plainly
+// when there is no sampler rather than inventing an all-zero idle gateway.
+func TestStatus(t *testing.T) {
+	h := testHandler(t, Deps{AdminKey: "secret"})
+	if rec := do(h, "GET", "/api/status", "secret", nil); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("no sampler: code = %d, want 503", rec.Code)
+	}
+
+	snap := status.Snapshot{
+		SampledAtMS: 42,
+		Degrade:     &pressure.Stats{Level: "shed_capture", Reason: "io_pressure", Over: []string{"io_pressure"}},
+		Gateway:     status.Gateway{InFlight: 7, Waiting: 2},
+	}
+	h = testHandler(t, Deps{AdminKey: "secret", Status: func() status.Snapshot { return snap }})
+	if rec := do(h, "GET", "/api/status", "", nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("no key: code = %d, want 401", rec.Code)
+	}
+	rec := do(h, "GET", "/api/status", "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: code = %d", rec.Code)
+	}
+	var got status.Snapshot
+	decodeBody(t, rec, &got)
+	if got.SampledAtMS != 42 || got.Degrade == nil || got.Degrade.Reason != "io_pressure" || got.Gateway.InFlight != 7 || got.Gateway.Waiting != 2 {
+		t.Errorf("status = %+v", got)
 	}
 }
 

@@ -14,7 +14,7 @@ import (
 // buildMCPServer. Kept here so the test fails loudly if the catalogue changes.
 var mcpReadTools = []string{
 	"get_overview", "get_usage_series", "list_calls", "get_call_trace",
-	"list_users", "list_providers", "list_proxies", "list_services", "list_pricing", "get_settings",
+	"list_users", "list_providers", "list_proxies", "list_services", "list_pricing", "get_settings", "get_status",
 }
 
 var mcpWriteTools = []string{

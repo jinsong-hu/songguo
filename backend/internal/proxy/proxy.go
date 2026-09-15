@@ -49,6 +49,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -126,6 +127,29 @@ type handler struct {
 	// Close only drains one it owns — a caller that shares a writer across
 	// handlers closes it itself.
 	ownLedger bool
+
+	// Live load for the status page. Atomics only: this is the hot path.
+	inFlight atomic.Int64
+	started  atomic.Int64
+	buffered atomic.Int64
+}
+
+// Load is the proxy's live load.
+type Load struct {
+	// InFlight counts requests being handled now. A response still streaming
+	// and an open WebSocket both count until they end, so this is also how
+	// many upstream connections songguo is holding for callers.
+	InFlight int64
+	// Started counts requests since boot, denied ones included.
+	Started int64
+	// BufferedBytes is the request bodies held in memory by those requests —
+	// the memory the no-size-ceiling buffering costs, multiplied by concurrency.
+	BufferedBytes int64
+}
+
+// Load reports the proxy's live load for the admin status page.
+func (h *handler) Load() Load {
+	return Load{InFlight: h.inFlight.Load(), Started: h.started.Load(), BufferedBytes: h.buffered.Load()}
 }
 
 // NewHandler builds the transparent proxy handler.
@@ -206,6 +230,10 @@ func (h *handler) insights(e calls.Entry, title string) {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.started.Add(1)
+	h.inFlight.Add(1)
+	defer h.inFlight.Add(-1)
+
 	// 1. Auth. The client presents its songguo key in whichever header its
 	// native SDK uses — Authorization: Bearer (OpenAI-style) or X-Api-Key
 	// (Anthropic, ByteDance ASR/TTS) — so the endpoint swap needs no other change.
@@ -243,6 +271,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "failed to read request body")
 		return
 	}
+	h.buffered.Add(int64(len(body)))
+	defer h.buffered.Add(-int64(len(body)))
 
 	// Decide capture once from the authenticated user's setting so it is stable
 	// for this in-flight request — unless the host is short of memory or disk,

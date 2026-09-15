@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/songguo/songguo/internal/store"
@@ -41,6 +42,9 @@ type Janitor struct {
 	// busy reports that the host is short of I/O or the gateway is shedding
 	// load; the parsed_calls drain waits while it does. Nil means never busy.
 	busy func() bool
+
+	drainMu sync.Mutex
+	drain   DrainStatus
 }
 
 // PauseDrainWhen sets the condition the background parsed_calls drain waits

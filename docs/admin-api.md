@@ -60,7 +60,29 @@ served **without** auth — it describes shapes only and carries no secrets.
 | `GET /api/vendors` · `POST /api/vendors/{name}/test` | List snapshot vendors / probe one. Add `?stats=1` for the ledger aggregate — see below. |
 | `GET /api/catalog` · `GET /api/wires` | Provider presets / registered wire names. |
 | `GET /api/settings` | Read runtime settings. |
+| `GET /api/status` | Live load and degrade status — see below. |
 | `GET /api/pricing` | Flattened per-provider model prices. |
+
+### `/api/status`: live, and never from the ledger
+
+The Settings page polls this every 5 seconds. It answers three questions: is
+songguo shedding its own bookkeeping, and why (`degrade`: level, the signal that
+caused it, every signal still `over` its line, the `thresholds`, and
+`restore_at_ms`); how loaded is the host (`host`: CPU, load averages, PSI); and
+how loaded is songguo itself (`gateway`, `process`, `network`, `database`,
+`drain`). `history` carries the last 15 minutes of the key series.
+
+Every reading comes from memory, `/proc` or a `stat` of the database file. It
+never queries the database, because the moment someone checks the status is the
+moment the database may already be the problem. On 2026-09-15 a single unfiltered
+`/api/feed` call pushed host I/O pressure to 50% and made songguo shed capture.
+
+A reading that could not be taken is **absent, not zero**. A dev laptop has no
+`/proc`, and a rate needs two samples; "0% CPU" would be a claim nobody measured.
+
+`network` is the traffic on songguo's own network namespace. In a container that
+is songguo's traffic alone: clients' request bodies in, and the same bodies out
+to providers. Out is usually the first thing a server's bandwidth cap hits.
 
 ### `?stats=1`: the ledger aggregate is opt-in
 
@@ -192,6 +214,7 @@ never drifts from the dashboard.
 | `list_services` | auto-derived model → providers |
 | `list_pricing` | per-provider model prices |
 | `get_settings` | non-secret runtime settings |
+| `get_status` | live load and degrade status (same as `GET /api/status`) |
 
 **Write (opt-in only)** — registered **only** when `SONGGUO_MCP_WRITE` is set,
 because the admin key already controls budgets and upstream credentials and an

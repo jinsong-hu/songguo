@@ -23,6 +23,7 @@ import (
 	"github.com/songguo/songguo/internal/pressure"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/spend"
+	"github.com/songguo/songguo/internal/status"
 	"github.com/songguo/songguo/internal/store"
 )
 
@@ -55,6 +56,10 @@ type Deps struct {
 	Version       string            // build version string, default "dev"
 	ListenAddr    string            // from SONGGUO_LISTEN; shown in settings
 	DBPath        string
+
+	// Status is the live snapshot behind GET /api/status: host and gateway load
+	// and the degrade level, all from memory and /proc. Optional: nil answers 503.
+	Status func() status.Snapshot
 }
 
 // api is the concrete handler holding resolved dependencies.
@@ -66,6 +71,7 @@ type api struct {
 	spend       *spend.Tracker
 	ledgerStats func() ledger.Stats
 	pressure    func() pressure.Stats
+	status      func() status.Snapshot
 	reload      func() error
 	adminKey    string
 	logger      *slog.Logger
@@ -129,6 +135,7 @@ func newAPI(d Deps) *api {
 		spend:       d.Spend,
 		ledgerStats: d.LedgerStats,
 		pressure:    d.PressureStats,
+		status:      d.Status,
 		reload:      reload,
 		adminKey:    d.AdminKey,
 		logger:      logger,
@@ -221,6 +228,9 @@ var adminRoutes = []adminRoute{
 	{"GET", "/api/catalog", (*api).handleCatalog, true},
 	{"GET", "/api/wires", (*api).handleWires, true},
 	{"GET", "/api/settings", (*api).handleSettings, false},
+	// Live load and degrade status. Memory and /proc only — never the ledger —
+	// because it is polled while the gateway may already be struggling.
+	{"GET", "/api/status", (*api).handleStatus, false},
 	{"GET", "/api/pricing", (*api).handlePricing, false},
 }
 

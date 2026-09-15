@@ -1083,6 +1083,88 @@ export interface PressureStats {
   capture_budget_bytes: number;
   shed_captures: number;
   shed_analyses: number;
+  /** Every signal past its line in the last sample. Empty while a shed level
+   *  waits out its cooldown — `reason` still names what caused it. */
+  over?: PressureSignal[];
+  /** The configured lines; 0 disables that signal. Capture backlog sheds at half
+   *  of capture_budget_bytes. */
+  thresholds: PressureThresholds;
+  cooldown_ms: number;
+  /** When the level steps down if readings stay clear; absent at normal and while
+   *  a signal is still over its line. */
+  restore_at_ms?: number;
+}
+
+export type PressureSignal = 'memory' | 'disk' | 'io_pressure' | 'write_lag' | 'capture_backlog';
+
+export interface PressureThresholds {
+  mem_capture_pct: number;
+  mem_analysis_pct: number;
+  disk_free_min_bytes: number;
+  io_pressure_pct: number;
+  write_lag_ms: number;
+}
+
+/**
+ * GET /api/status — live load and degrade status, from memory and /proc only.
+ * A reading that could not be taken is absent (undefined), never 0: render "—".
+ */
+export interface Status {
+  sampled_at_ms: number;
+  interval_ms: number;
+  started_at_ms: number;
+  degrade?: PressureStats;
+  /** Whole-machine readings, shared with everything else on the box. */
+  host: {
+    cpus: number;
+    load1?: number;
+    load5?: number;
+    load15?: number;
+    cpu_pct?: number;
+    cpu_pressure_pct?: number;
+    memory_pressure_pct?: number;
+    io_pressure_pct?: number;
+    io_pressure_avg60_pct?: number;
+  };
+  gateway: {
+    in_flight: number;
+    /** Requests queued for a provider slot (max_concurrency). */
+    waiting: number;
+    requests_per_min?: number;
+    buffered_request_bytes: number;
+    ledger?: LedgerStats;
+  };
+  process: {
+    /** One core = 100. */
+    cpu_pct?: number;
+    rss_bytes?: number;
+    goroutines: number;
+    disk_read_bps?: number;
+    disk_write_bps?: number;
+  };
+  /** Bits per second on songguo's network namespace — its own traffic when containerized. */
+  network: { rx_bps?: number; tx_bps?: number };
+  database: { size_bytes?: number; wal_bytes?: number };
+  drain?: {
+    state: 'pending' | 'running' | 'paused' | 'retrying' | 'done';
+    rows: number;
+    last_batch_ms: number;
+    started_at_ms?: number;
+    done_at_ms?: number;
+  };
+  /** Oldest-first parallel series; null where the reading was absent. */
+  history: {
+    t: number[];
+    cpu_pct: (number | null)[];
+    io_pressure_pct: (number | null)[];
+    net_rx_bps: (number | null)[];
+    net_tx_bps: (number | null)[];
+    in_flight: number[];
+    process_cpu_pct: (number | null)[];
+    disk_write_bps: (number | null)[];
+    /** 0 normal, 1 shed_capture, 2 shed_analysis. */
+    level: number[];
+  };
 }
 
 export interface Settings {

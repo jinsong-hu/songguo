@@ -28,6 +28,7 @@ import { CopyButton } from '../components/CopyButton';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
 import { Skeleton } from '../components/Skeleton';
+import { StatusPanel } from '../components/StatusPanel';
 import { useToast } from '../components/Toast';
 import { useFetch } from '../lib/useFetch';
 import { rateBasis } from '../lib/catalogIndex';
@@ -88,6 +89,9 @@ export function SettingsPage() {
       }
     >
       <div className={styles.sections}>
+        {/* Live status: degrade level, host load, songguo load. */}
+        <StatusPanel />
+
         {/* Appearance */}
         <div className={`card ${styles.panel}`}>
           <div className={styles.panelTitle}>Appearance</div>
@@ -286,47 +290,6 @@ export function SettingsPage() {
             <span className={styles.metaVal}>{settings.db_path || '—'}</span>
           </div>
         </div>
-
-        {/* Ledger queue — the gateway's clearest load signal. */}
-        {settings.ledger && (
-          <div className={`card ${styles.panel}`}>
-            <div className={styles.panelTitle}>Ledger queue</div>
-            <div className={styles.panelDesc}>
-              Every proxied call is recorded through this queue, off the request path.
-              Depth should sit near zero.
-            </div>
-            <div className={styles.meta}>
-              <span className={styles.metaKey}>Queued now</span>
-              <span className={styles.metaVal}>
-                {settings.ledger.depth.toLocaleString()} /{' '}
-                {settings.ledger.capacity.toLocaleString()}
-              </span>
-
-              <span className={styles.metaKey}>Peak queued</span>
-              <span className={styles.metaVal}>
-                {settings.ledger.high_water.toLocaleString()}
-              </span>
-
-              <span className={styles.metaKey}>Records written</span>
-              <span className={styles.metaVal}>
-                {settings.ledger.written.toLocaleString()}
-                {settings.ledger.failed > 0 && (
-                  <> · {settings.ledger.failed.toLocaleString()} failed</>
-                )}
-              </span>
-
-              {/* The queue never drops a call record, so a full queue makes
-                  requests wait instead. Non-zero here is the only visible sign
-                  the database could not keep up — surface it, don't bury it. */}
-              <span className={styles.metaKey}>Requests delayed</span>
-              <span className={styles.metaVal}>
-                {settings.ledger.blocked === 0
-                  ? 'None'
-                  : `${settings.ledger.blocked.toLocaleString()} · ${settings.ledger.blocked_ms.toLocaleString()} ms total`}
-              </span>
-            </div>
-          </div>
-        )}
 
         {/* Pricing */}
         <div className={`card ${styles.panel}`}>

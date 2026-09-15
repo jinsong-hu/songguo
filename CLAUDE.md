@@ -98,8 +98,11 @@ minutes costs nothing a caller can see; flapping back into heavy writes the
 moment the disk recovers would. Independently of the level, the ledger drops any
 captured body that would take its queue past `SONGGUO_CAPTURE_BUDGET_MB`, and the
 parse queue drops jobs past 32 MB — both catch a burst between samples. Every
-threshold is an env var; `0` disables it. The level, its reason, the readings and
-the shed counters are on `GET /api/settings`.
+threshold is an env var; `0` disables it. The level, its reason, every signal
+against its threshold, the restore time and the shed counters are live on
+`GET /api/status` and on the Settings page, next to host and songguo load
+(`internal/status`). Keep that endpoint to memory and `/proc`: a status check
+that queries the database can be the cause of the status it reports.
 
 Free disk is deliberately not aggressive. SQLite never returns freed pages to
 the OS (see `internal/store/retention.go`), so free space does not recover on

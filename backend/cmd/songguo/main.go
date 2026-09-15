@@ -22,6 +22,7 @@ import (
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/server"
 	"github.com/songguo/songguo/internal/spend"
+	"github.com/songguo/songguo/internal/status"
 	"github.com/songguo/songguo/internal/store"
 )
 
@@ -165,6 +166,26 @@ func main() {
 	proxyHandler := proxy.NewHandler(proxyDeps)
 	testWSHandler := proxy.NewWSTestHandler(proxyDeps)
 
+	// Live status for the Settings page and the get_status MCP tool: host and
+	// gateway load and the degrade level, sampled from memory and /proc only.
+	// See internal/status for why it never queries the database.
+	sampler := status.New(status.Sources{
+		Pressure: monitor.Stats,
+		Ledger:   proxyHandler.Stats,
+		Gateway: func() status.GatewayCounters {
+			l := proxyHandler.Load()
+			return status.GatewayCounters{InFlight: l.InFlight, Started: l.Started, BufferedBytes: l.BufferedBytes}
+		},
+		Waiting: func() int {
+			n := 0
+			for _, s := range gate.Stats() {
+				n += s.Waiting
+			}
+			return n
+		},
+		DBPath: dbPath,
+	}, status.DefaultInterval, status.DefaultHistory)
+
 	adminDeps := api.Deps{
 		Store:    st,
 		Snapshot: manager.Current,
@@ -175,6 +196,7 @@ func main() {
 		// any request has ever had to wait on it.
 		LedgerStats:   proxyHandler.Stats,
 		PressureStats: monitor.Stats,
+		Status:        sampler.Snapshot,
 		Reload: func() error {
 			if err := manager.Reload(); err != nil {
 				return err
@@ -243,6 +265,7 @@ func main() {
 		s := monitor.Stats()
 		return s.Level != pressure.Normal.String() || s.IOPressure >= drainIOPct/2
 	})
+	sampler.WatchDrain(jan.DrainStatus)
 
 	// Price feed: refresh model rates from models.dev on start and on a fixed
 	// clock, so a long-running gateway does not meter at whatever the embedded
@@ -286,6 +309,7 @@ func main() {
 	}
 	go spendTracker.Run(spendCtx, 0)
 	go monitor.Run(pressureCtx)
+	go sampler.Run(pressureCtx)
 
 	errCh := make(chan error, 1)
 	go func() {

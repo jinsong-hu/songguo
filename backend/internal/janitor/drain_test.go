@@ -61,14 +61,29 @@ func TestRunDrainsParsedCalls(t *testing.T) {
 	defer cancel()
 	go j.Run(ctx)
 	deadline := time.Now().Add(10 * time.Second)
-	for parsedCallsExists(t, raw) {
+	for j.DrainStatus().State != DrainDone {
 		if time.Now().After(deadline) {
-			t.Fatal("parsed_calls not dropped within 10s")
+			t.Fatalf("drain not done within 10s: %+v", j.DrainStatus())
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	if parsedCallsExists(t, raw) {
+		t.Error("drain reported done but parsed_calls still exists")
+	}
+	if s := j.DrainStatus(); s.Rows != 6 || s.StartedAtMS == 0 || s.DoneAtMS < s.StartedAtMS {
+		t.Errorf("status = %+v, want 6 rows and start <= done", s)
+	}
 	cancel()
 	j.Wait()
+}
+
+// Before Run the drain is pending, not done: "done" is a claim that the table
+// is gone, and nothing has checked yet.
+func TestDrainStatusBeforeRun(t *testing.T) {
+	st, _ := openWithLegacyParsedCalls(t)
+	if s := quietJanitor(st).DrainStatus(); s.State != DrainPending || s.Rows != 0 {
+		t.Errorf("status = %+v, want pending with no rows", s)
+	}
 }
 
 // While busy the drain deletes nothing, and a shutdown during its pause returns
@@ -96,6 +111,9 @@ func TestDrainWaitsWhileBusy(t *testing.T) {
 
 	if asked.Load() == 0 {
 		t.Fatal("the drain never consulted busy")
+	}
+	if s := j.DrainStatus(); s.State != DrainPaused || s.Rows != 0 {
+		t.Errorf("status = %+v, want paused with no rows", s)
 	}
 	var rows int
 	if err := raw.QueryRow(`SELECT count(*) FROM parsed_calls`).Scan(&rows); err != nil || rows != 6 {

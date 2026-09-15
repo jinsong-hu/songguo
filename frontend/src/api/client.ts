@@ -30,6 +30,7 @@ import type {
   SessionMessages,
   SessionStats,
   Settings,
+  Status,
   User,
   UsageFacets,
   UsageFilter,
@@ -183,6 +184,9 @@ export const api = {
   me: () => request<Me>('/me'),
 
   settings: () => request<Settings>('/settings'),
+
+  /** Live load and degrade status. Memory and /proc only, so it is safe to poll. */
+  status: () => request<Status>('/status'),
 
   overview: (since: number, until: number, filter?: UsageFilter) =>
     request<Overview>(`/overview${qs({ since, until, ...filterParams(filter) })}`),

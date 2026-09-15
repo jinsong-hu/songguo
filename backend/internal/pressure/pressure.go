@@ -149,6 +149,29 @@ type Stats struct {
 	CaptureBudget  int64   `json:"capture_budget_bytes"`
 	ShedCaptures   int64   `json:"shed_captures"`
 	ShedAnalyses   int64   `json:"shed_analyses"`
+
+	// Over names every signal past its line in the last sample. Reason is only
+	// the one that set the level; while the level waits out its cooldown, Over
+	// is empty and Reason still says what caused it.
+	Over []string `json:"over,omitempty"`
+	// Thresholds are the configured lines, so a reading can be shown against
+	// the one it would cross.
+	Thresholds Thresholds `json:"thresholds"`
+	CooldownMS int64      `json:"cooldown_ms"`
+	// RestoreAtMS is when the level steps down if the readings stay clear. Zero
+	// at normal, and while any signal is still over its line.
+	RestoreAtMS int64 `json:"restore_at_ms,omitempty"`
+}
+
+// Thresholds are the shedding lines in force. Zero means that signal is
+// disabled. Capture backlog has no line of its own: it sheds at half of
+// Stats.CaptureBudget.
+type Thresholds struct {
+	MemCapturePct  float64 `json:"mem_capture_pct"`
+	MemAnalysisPct float64 `json:"mem_analysis_pct"`
+	DiskFreeMin    uint64  `json:"disk_free_min_bytes"`
+	IOPressurePct  float64 `json:"io_pressure_pct"`
+	WriteLagMS     int64   `json:"write_lag_ms"`
 }
 
 // Monitor samples the signals and holds the current level. A nil *Monitor is
@@ -273,12 +296,24 @@ func (m *Monitor) Stats() Stats {
 	if m == nil {
 		return Stats{Level: Normal.String()}
 	}
+	o := m.opts
 	m.mu.Lock()
 	s := m.last
 	s.Level = m.Level().String()
 	s.Reason = m.reason
 	s.SinceMS = m.changedAt.UnixMilli()
+	if !m.clearAt.IsZero() {
+		s.RestoreAtMS = m.clearAt.Add(o.Cooldown).UnixMilli()
+	}
 	m.mu.Unlock()
+	s.Thresholds = Thresholds{
+		MemCapturePct:  o.MemCapturePct,
+		MemAnalysisPct: o.MemAnalysisPct,
+		DiskFreeMin:    o.DiskFreeMin,
+		IOPressurePct:  o.IOPressurePct,
+		WriteLagMS:     o.WriteLag.Milliseconds(),
+	}
+	s.CooldownMS = o.Cooldown.Milliseconds()
 	s.ShedCaptures = m.shedCaptures.Load()
 	s.ShedAnalyses = m.shedAnalyses.Load()
 	return s
@@ -294,6 +329,7 @@ func (m *Monitor) sample() {
 	var r Stats
 	target, reason := Normal, ""
 	raise := func(l Level, why string) {
+		r.Over = append(r.Over, why)
 		if l > target {
 			target, reason = l, why
 		}
