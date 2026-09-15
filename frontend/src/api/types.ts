@@ -1048,6 +1048,35 @@ export interface LedgerStats {
   failed: number;
   blocked: number;
   blocked_ms: number;
+  /** Captured bodies queued but not yet written, their byte budget (0 = unlimited),
+   * and how many were dropped past it. The call row is written either way. */
+  payload_bytes: number;
+  payload_budget: number;
+  payloads_shed: number;
+}
+
+/**
+ * Degradation level: whether the gateway is shedding capture ("shed_capture")
+ * or also local body analysis ("shed_analysis") to keep forwarding up when the
+ * host runs short. Forwarding, metering and call rows are never shed.
+ */
+export interface PressureStats {
+  level: 'normal' | 'shed_capture' | 'shed_analysis';
+  /** Which signal set the level: "memory" | "disk" | "io_pressure" | "write_lag" | "capture_backlog". */
+  reason?: string;
+  since_ms: number;
+  mem_available_bytes?: number;
+  mem_total_bytes?: number;
+  disk_free_bytes?: number;
+  disk_total_bytes?: number;
+  /** Host PSI io `some avg10`, percent. */
+  io_pressure_pct: number;
+  /** Slowest ledger write (submit to done) in the last sample, or the one in progress. */
+  write_lag_ms: number;
+  capture_backlog_bytes: number;
+  capture_budget_bytes: number;
+  shed_captures: number;
+  shed_analyses: number;
 }
 
 export interface Settings {
@@ -1056,6 +1085,7 @@ export interface Settings {
   admin_protected: boolean;
   version: string;
   ledger?: LedgerStats;
+  pressure?: PressureStats;
 }
 
 export interface PricingRow {

@@ -72,6 +72,52 @@ whichever header the two ends use.
   mid-stream-truncation handling. Not a priority — raise the
   cap / add a memory budget first if 413s or RAM become the real pain.
 
+## Degradation: shed our own bookkeeping, never the caller's traffic
+
+A proxied call costs two kinds of work. The forward — buffer, route, relay,
+meter, record the call row — is what the caller is paying for. Capture (`raw`),
+the async parse (`parsed_calls`) and local context composition are songguo
+looking at the traffic for the operator. For an agent resending a 20 MB history
+every few seconds the second kind is most of the memory and nearly all of the
+disk writes, and on a small box without swap it is what locks up the host.
+
+So when the host runs short, songguo gives up the second kind, in a fixed order,
+automatically (`internal/pressure`, sampled every second):
+
+| level | sheds | entered by (any one) |
+|---|---|---|
+| `normal` | nothing | — |
+| `shed_capture` | `raw` bodies and the parse that reads them | host I/O pressure (PSI `some avg10`) ≥ `SONGGUO_SHED_IO_PRESSURE_PCT` (10) · a ledger write taking ≥ `SONGGUO_SHED_WRITE_LAG` (1s) from submit to done · captured bodies queued ≥ half of `SONGGUO_CAPTURE_BUDGET_MB` (64) · available memory < `SONGGUO_SHED_MEM_CAPTURE_PCT` (30) · free disk < `SONGGUO_SHED_DISK_FREE_MB` (10240) |
+| `shed_analysis` | also context composition and tool-turn estimates | available memory < `SONGGUO_SHED_MEM_ANALYSIS_PCT` (10) |
+
+Disk I/O is the bottleneck more often than memory — a captured agent turn is
+thousands of overflow pages, written twice, on a disk the rest of the box
+shares — so capture is shed early and restored slowly: up is immediate, down
+waits for `SONGGUO_SHED_COOLDOWN` (5m) of clear readings. Losing traces for a few
+minutes costs nothing a caller can see; flapping back into heavy writes the
+moment the disk recovers would. Independently of the level, the ledger drops any
+captured body that would take its queue past `SONGGUO_CAPTURE_BUDGET_MB`, and the
+parse queue drops jobs past 32 MB — both catch a burst between samples. Every
+threshold is an env var; `0` disables it. The level, its reason, the readings and
+the shed counters are on `GET /api/settings`.
+
+Free disk is deliberately not aggressive. SQLite never returns freed pages to
+the OS (see `internal/store/retention.go`), so free space does not recover on
+its own once the file has grown; a high threshold would switch capture off for
+good rather than during a spike.
+
+The rules that keep this from turning into the things this file forbids:
+
+- **Never shed:** forwarding, the call row, usage, cost, spend, routing, health.
+  A missing trace is a trace; a missing call row is a hole in the cost history.
+  This is why the ledger may drop a payload op but still never drops a call op.
+- **Never refuse, delay or reroute.** Degradation removes work *we* chose to do;
+  it does not invent refusals or timeouts any more than we invent retries.
+  Making callers wait is `max_concurrency` — an operator's setting, not a
+  reflex, and the last resort after everything above has been shed.
+- **Never touch the bytes.** Shedding is not permission for a smaller, cheaper
+  body — byte-transparency still outranks it.
+
 ## Behavioral transparency: one attempt, we never invent retries
 
 songguo forwards **exactly one attempt** per request and surfaces whatever the

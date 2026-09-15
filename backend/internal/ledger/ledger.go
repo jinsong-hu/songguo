@@ -38,6 +38,21 @@
 // are replaced. Size this by how long a stall you want to survive, not by
 // max_concurrency.
 //
+// # Captured bodies are the exception, and they do drop
+//
+// The 500-bytes-an-op model holds for call rows. It does not hold for
+// KindPayload: a captured agent turn carries its whole request body, and a
+// codex-style client resends a 20 MB history every few seconds. Those ops are
+// also the slowest to write — thousands of overflow pages each — so they are
+// exactly the ones that back up, and 32k slots of them is the host's memory,
+// not 16 MB.
+//
+// So payloads get a byte budget of their own (SetPayloadBudget). Past it a
+// payload is dropped at Submit and counted, and nothing else changes: the call
+// row, its finalize and its metering still go through, never dropped, exactly
+// as above. A missing trace is a trace; a missing call row is a hole in the
+// cost history. That asymmetry is the whole reason the rule differs.
+//
 // # One writer, because ordering is the whole game
 //
 // SQLite permits exactly one writer, so a single goroutine matches the
@@ -101,8 +116,15 @@ type Op struct {
 	// skipped when it fails. This is how work that depends on the row already
 	// existing — the parse pipeline writes parsed_calls, a FOREIGN KEY onto
 	// calls(id) — is sequenced behind it without this package having to know
-	// what that work is.
+	// what that work is. A payload dropped over budget never runs its After.
 	After func()
+
+	// payloadBytes is what this op counted against the payload budget, released
+	// once it has been applied.
+	payloadBytes int64
+	// submitted is when Submit took the op, so the write lag includes both the
+	// queue wait and the write itself.
+	submitted time.Time
 }
 
 // Store is the subset of *store.Store the writer needs. An interface so tests
@@ -144,6 +166,13 @@ type Stats struct {
 	Failed    int64 `json:"failed"`
 	Blocked   int64 `json:"blocked"`
 	BlockedMS int64 `json:"blocked_ms"`
+
+	// PayloadBytes is the size of captured bodies queued but not yet written;
+	// PayloadBudget is the ceiling past which they drop (0 = unlimited);
+	// PayloadsShed counts the ones that did.
+	PayloadBytes  int64 `json:"payload_bytes"`
+	PayloadBudget int64 `json:"payload_budget"`
+	PayloadsShed  int64 `json:"payloads_shed"`
 }
 
 // Writer owns the queue and its single writer goroutine.
@@ -160,6 +189,14 @@ type Writer struct {
 	blockedNanos atomic.Int64
 	lastBlockLog atomic.Int64 // unix nanos, for rate-limiting the warning
 	now          func() time.Time
+
+	payloadBudget  atomic.Int64 // bytes; 0 = unlimited
+	payloadPending atomic.Int64
+	payloadsShed   atomic.Int64
+	lastShedLog    atomic.Int64 // unix nanos
+
+	lagPeak  atomic.Int64 // nanos; slowest Submit-to-done since the last WriteLag
+	applying atomic.Int64 // unix nanos the op being applied was submitted; 0 = idle
 }
 
 // New starts the writer goroutine. A non-positive queue uses DefaultQueue.
@@ -181,9 +218,61 @@ func New(st Store, logger *slog.Logger, queue int) *Writer {
 	return w
 }
 
+// SetPayloadBudget caps the bytes of captured bodies that may sit in the queue
+// at once. 0 (the default) is unlimited. See the package comment.
+func (w *Writer) SetPayloadBudget(bytes int64) {
+	if w == nil {
+		return
+	}
+	if bytes < 0 {
+		bytes = 0
+	}
+	w.payloadBudget.Store(bytes)
+}
+
+// PayloadBacklog reports the captured bytes queued and the budget, for the
+// pressure monitor.
+func (w *Writer) PayloadBacklog() (pending, budget int64) {
+	if w == nil {
+		return 0, 0
+	}
+	return w.payloadPending.Load(), w.payloadBudget.Load()
+}
+
+// WriteLag reports how far behind the writer is: the slowest Submit-to-done time
+// since the previous call, or the age of the write still in progress if that is
+// longer. The peak resets on every call, so it has exactly one reader — the
+// pressure monitor. It is the direct reading of disk I/O as the bottleneck: the
+// database is not slow in general, this write is slow now.
+func (w *Writer) WriteLag() time.Duration {
+	if w == nil {
+		return 0
+	}
+	lag := w.lagPeak.Swap(0)
+	if started := w.applying.Load(); started != 0 {
+		if cur := w.now().UnixNano() - started; cur > lag {
+			lag = cur
+		}
+	}
+	return time.Duration(lag)
+}
+
+func (w *Writer) observeLag(submitted time.Time) {
+	lag := int64(w.now().Sub(submitted))
+	for {
+		peak := w.lagPeak.Load()
+		if lag <= peak || w.lagPeak.CompareAndSwap(peak, lag) {
+			return
+		}
+	}
+}
+
 // Submit enqueues an op. It does not block in normal operation; when the queue
 // is at its ceiling it blocks until there is room rather than discarding the
 // record, and counts how long it waited so the stall is visible in Stats.
+//
+// The one exception is a payload over the byte budget, which is dropped here
+// rather than queued (see the package comment).
 //
 // Callers must treat this as potentially blocking and therefore must not hold
 // a lock across it.
@@ -191,6 +280,10 @@ func (w *Writer) Submit(op Op) {
 	if w == nil {
 		return
 	}
+	if op.Kind == KindPayload && op.Payload != nil && !w.admitPayload(&op) {
+		return
+	}
+	op.submitted = w.now()
 	select {
 	case w.ops <- op:
 		w.observeDepth()
@@ -215,6 +308,36 @@ func (w *Writer) Submit(op Op) {
 			"waited_ms", waited.Milliseconds(),
 			"capacity", cap(w.ops),
 			"blocked_total", w.blocked.Load())
+	}
+}
+
+// admitPayload charges a payload against the byte budget, or drops it. An empty
+// backlog always admits one, so a single body larger than the whole budget is
+// still captured when nothing else is waiting.
+func (w *Writer) admitPayload(op *Op) bool {
+	size := int64(len(op.Payload.ReqBody) + len(op.Payload.RespBody))
+	for {
+		pending := w.payloadPending.Load()
+		if budget := w.payloadBudget.Load(); budget > 0 && pending > 0 && pending+size > budget {
+			w.shedPayload(op, pending, budget)
+			return false
+		}
+		if w.payloadPending.CompareAndSwap(pending, pending+size) {
+			op.payloadBytes = size
+			return true
+		}
+	}
+}
+
+func (w *Writer) shedPayload(op *Op, pending, budget int64) {
+	total := w.payloadsShed.Add(1)
+	nowNanos := w.now().UnixNano()
+	last := w.lastShedLog.Load()
+	if nowNanos-last >= int64(blockLogInterval) && w.lastShedLog.CompareAndSwap(last, nowNanos) {
+		w.logger.Warn("ledger payload budget full; captured body dropped, call row kept",
+			"call_id", op.callID(),
+			"body_bytes", len(op.Payload.ReqBody)+len(op.Payload.RespBody),
+			"pending_bytes", pending, "budget_bytes", budget, "shed_total", total)
 	}
 }
 
@@ -243,6 +366,10 @@ func (w *Writer) Stats() Stats {
 		Failed:    w.failed.Load(),
 		Blocked:   w.blocked.Load(),
 		BlockedMS: w.blockedNanos.Load() / int64(time.Millisecond),
+
+		PayloadBytes:  w.payloadPending.Load(),
+		PayloadBudget: w.payloadBudget.Load(),
+		PayloadsShed:  w.payloadsShed.Load(),
 	}
 }
 
@@ -258,6 +385,17 @@ func (w *Writer) run() {
 // a busy retry here, rather than requeueing the op, preserves create ->
 // finalize -> children ordering.
 func (w *Writer) apply(op Op) {
+	if op.payloadBytes > 0 {
+		// Released after the write, not before: the body is held until then.
+		defer w.payloadPending.Add(-op.payloadBytes)
+	}
+	if !op.submitted.IsZero() {
+		w.applying.Store(op.submitted.UnixNano())
+		defer func() {
+			w.applying.Store(0)
+			w.observeLag(op.submitted)
+		}()
+	}
 	var err error
 	switch op.Kind {
 	case KindUpsert:

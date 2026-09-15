@@ -39,6 +39,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -61,6 +62,7 @@ import (
 	"github.com/songguo/songguo/internal/meter"
 	"github.com/songguo/songguo/internal/outbound"
 	"github.com/songguo/songguo/internal/parse"
+	"github.com/songguo/songguo/internal/pressure"
 	"github.com/songguo/songguo/internal/pricing"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/sessiontitle"
@@ -95,6 +97,14 @@ type Deps struct {
 	HTTPClient *http.Client      // optional; default constructed if nil
 	Outbound   *outbound.Manager // optional; shared in production
 	Now        func() time.Time  // optional; defaults to time.Now (for tests)
+
+	// Pressure sheds capture and body analysis when the host runs short; nil
+	// never sheds. See internal/pressure.
+	Pressure *pressure.Monitor
+	// CaptureBudget caps the bytes of captured bodies waiting in the ledger;
+	// past it a payload is dropped and its call row kept. 0 is unlimited. Only
+	// applied to a ledger this handler constructs.
+	CaptureBudget int64
 }
 
 // handler is the concrete http.Handler returned by NewHandler.
@@ -111,6 +121,7 @@ type handler struct {
 	spend    *spend.Tracker
 	parse    *parsePipeline
 	insight  *insightsFork
+	pressure *pressure.Monitor
 	// ownLedger records whether this handler constructed the ledger writer, so
 	// Close only drains one it owns — a caller that shares a writer across
 	// handlers closes it itself.
@@ -146,7 +157,10 @@ func NewHandler(d Deps) *handler {
 	led, own := d.Ledger, false
 	if led == nil {
 		led, own = ledger.New(d.Store, logger, 0), true
+		led.SetPayloadBudget(d.CaptureBudget)
 	}
+	d.Pressure.WatchBacklog(led.PayloadBacklog)
+	d.Pressure.WatchWriteLag(led.WriteLag)
 	return &handler{
 		snapshot:  d.Snapshot,
 		store:     d.Store,
@@ -161,6 +175,7 @@ func NewHandler(d Deps) *handler {
 		ownLedger: own,
 		parse:     newParsePipeline(d.Store, logger, 0, 0),
 		insight:   newInsightsFork(d.Store, logger, 0, 0),
+		pressure:  d.Pressure,
 	}
 }
 
@@ -230,8 +245,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Decide capture once from the authenticated user's setting so it is stable
-	// for this in-flight request.
-	capture := user.Capture
+	// for this in-flight request — unless the host is short of memory or disk,
+	// in which case the trace is the first thing to go (see internal/pressure).
+	capture := h.pressure.Capture(user.Capture)
 
 	// Mint the call id (UUID) up front and open the ledger row (phase 1,
 	// create-at-start). Everything downstream — denials during routing, budget/
@@ -1021,9 +1037,13 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	// below: decoupled from billed usage, never mutates bytes. Only chat wires
 	// carry tools; everything else yields (0, 0). Uses the same raw reqBody bytes
 	// compose does, so the two stay consistent.
+	//
+	// Both this and compose decode the whole request body, so both go when the
+	// host is under pressure; analyze is decided once so a call is shed whole.
+	analyze := modality == calls.ModalityChat && rw.matched && h.pressure.Analysis()
 	var toolCalls int
 	var toolTokens float64
-	if modality == calls.ModalityChat && rw.matched {
+	if analyze {
 		n, tok := compose.ToolTurn(wireName, reqBody)
 		toolCalls, toolTokens = n, float64(tok)
 	}
@@ -1087,6 +1107,10 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		ClientOSVersion: client.OSVersion,
 	}
 	id := callID
+	// Re-checked at the end: a long turn may have started before the host ran
+	// short. The response was already teed, but not writing it still spares the
+	// disk and releases the bodies now instead of after a queued write.
+	capture = h.pressure.Capture(capture)
 	title := ""
 	if capture && entry.SessionID != "" {
 		reqForTitle := bodyForMeter(reqBody, r.Header.Get("Content-Encoding"), h.logger)
@@ -1123,7 +1147,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	// input: a heavily-cached agent turn can report input_tokens=0 with a large
 	// cache-read count, and it still has a context window worth decomposing.
 	totalInput := ext.Norm.InputTokens + ext.Norm.CachedInputTokens + ext.Norm.CacheCreationTokens
-	if modality == calls.ModalityChat && rw.matched && totalInput > 0 {
+	if analyze && totalInput > 0 {
 		if comp, ok := compose.Compose(rw.wire.Name, reqBody,
 			int64(ext.Norm.CachedInputTokens)); ok {
 			h.ledger.Submit(ledger.Op{Kind: ledger.KindComposition, CallID: id, Composition: &comp})
@@ -1481,7 +1505,10 @@ func bytesReader(b []byte) io.Reader {
 	if len(b) == 0 {
 		return http.NoBody
 	}
-	return strings.NewReader(string(b))
+	// bytes.Reader, not strings.NewReader(string(b)): the conversion copied the
+	// whole body a second time for every in-flight request, and NewRequest sets
+	// GetBody for either type.
+	return bytes.NewReader(b)
 }
 
 // copyHeaders copies all of src into dst except hop-by-hop headers and

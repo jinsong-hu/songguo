@@ -268,11 +268,14 @@ func approxEqual(a, b float64) bool {
 // the proxy's upstream calls so failover and streaming exercise real HTTP.
 func newEnv(t *testing.T, snap func() *config.Snapshot, st *store.Store) *testEnv {
 	t.Helper()
-	h := NewHandler(Deps{
-		Snapshot: snap,
-		Store:    st,
-		Router:   router.New(snap),
-	})
+	return newEnvDeps(t, Deps{Snapshot: snap, Store: st, Router: router.New(snap)})
+}
+
+// newEnvDeps is newEnv for a test that needs to set other Deps.
+func newEnvDeps(t *testing.T, d Deps) *testEnv {
+	t.Helper()
+	st := d.Store
+	h := NewHandler(d)
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	// Drain the background forks before the store's own cleanup closes the

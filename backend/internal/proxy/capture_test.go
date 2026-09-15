@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/songguo/songguo/internal/calls"
+	"github.com/songguo/songguo/internal/pressure"
+	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/store"
 )
 
@@ -131,6 +133,59 @@ func TestCaptureOffStoresNothing(t *testing.T) {
 	callID := callIDForVendor(t, env, "vendorA")
 	if _, err := st.GetPayload(callID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected no payload when capture off, got err %v", err)
+	}
+}
+
+// --- capture shed under pressure: the trace goes, the traffic and the row stay ---
+
+// When the host runs short, capture is the first thing songguo gives up. The
+// client must not be able to tell, and the call must still be metered.
+func TestCaptureShedUnderPressure(t *testing.T) {
+	up := &mockUpstream{}
+	mock := httptest.NewServer(up.handler())
+	defer mock.Close()
+
+	// No filesystem has an exabyte free, so the disk signal trips on the first
+	// reading — a real pressure source, not a test hook.
+	mon := pressure.New(pressure.Options{DiskDir: t.TempDir(), DiskFreeMin: 1 << 60})
+	if mon.Level() != pressure.ShedCapture {
+		t.Skipf("disk signal unavailable on this platform (level %s)", mon.Level())
+	}
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t", Capture: true})
+	snap := snapshotFunc(t, captureYAML(mock.URL))
+	env := newEnvDeps(t, Deps{Snapshot: snap, Store: st, Router: router.New(snap), Pressure: mon})
+
+	reqBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
+	resp := env.post(t, "/v1/chat/completions", key, reqBody)
+	gotBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	wantBody := `{"id":"chatcmpl-1","object":"chat.completion","choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}`
+	if resp.StatusCode != http.StatusOK || string(gotBody) != wantBody {
+		t.Fatalf("client saw %d %q; shedding must be invisible to the caller", resp.StatusCode, gotBody)
+	}
+	up.mu.Lock()
+	upstreamGot := string(up.lastBody)
+	up.mu.Unlock()
+	if upstreamGot != reqBody {
+		t.Errorf("upstream received %q, want the request verbatim", upstreamGot)
+	}
+
+	env.drain(t)
+	entries, err := st.QueryCalls(storeFilterAll())
+	if err != nil {
+		t.Fatalf("QueryCalls: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Status != http.StatusOK || entries[0].InputTokens != 10 {
+		t.Fatalf("call rows = %+v, want one metered 200 — metering is never shed", entries)
+	}
+	if _, err := st.GetPayload(entries[0].ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("payload stored under pressure (err %v); capture should have been shed", err)
+	}
+	if s := mon.Stats(); s.ShedCaptures != 1 {
+		t.Errorf("ShedCaptures = %d, want 1", s.ShedCaptures)
 	}
 }
 

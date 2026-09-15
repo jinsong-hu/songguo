@@ -195,9 +195,14 @@ and observability semantics.
 `raw` holds the full request and response bodies plus redacted headers, 1:1 with
 the call id. It is:
 
-- **Gated by the `capture` toggle** (a single global app setting, read once per
-  request so a mid-flight config reload can't change an in-flight call's
-  behavior). Off by default.
+- **Gated by the user's `capture` flag** (per user, read once per request so a
+  mid-flight edit can't change an in-flight call's behavior). Off by default.
+- **Shed under pressure** — the first thing the gateway gives up when disk I/O,
+  write lag, memory, disk space or the ledger's write backlog runs short
+  (`internal/pressure`), and
+  captured bodies past the ledger's byte budget are dropped at submit. The call
+  row and its metering are written either way. See "Degradation" in
+  `CLAUDE.md`.
 - **Redacted** — `Authorization`, `X-Api-Key`, `Api-Key`, `Cookie` are stripped
   before storage; no captured trace persists a secret.
 - **Byte-identical** to what crossed the wire. For streams, the bytes are tee'd

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/songguo/songguo/internal/parse"
@@ -29,12 +30,20 @@ type parsePipeline struct {
 	store  *store.Store
 	logger *slog.Logger
 	wg     sync.WaitGroup
+
+	// Each job holds a whole request and response body, so 256 slots of agent
+	// turns is gigabytes. queuedBytes bounds that alongside the slot count.
+	budget      int64
+	queuedBytes atomic.Int64
 }
 
 const (
 	defaultParseWorkers = 2
 	defaultParseQueue   = 256
+	defaultParseBudget  = 32 << 20
 )
+
+func (j parseJob) size() int64 { return int64(len(j.in.ReqBody) + len(j.in.RespBody)) }
 
 // newParsePipeline starts the worker pool. workers/queue <= 0 use defaults.
 func newParsePipeline(st *store.Store, logger *slog.Logger, workers, queue int) *parsePipeline {
@@ -47,7 +56,7 @@ func newParsePipeline(st *store.Store, logger *slog.Logger, workers, queue int) 
 	if queue <= 0 {
 		queue = defaultParseQueue
 	}
-	p := &parsePipeline{jobs: make(chan parseJob, queue), store: st, logger: logger}
+	p := &parsePipeline{jobs: make(chan parseJob, queue), store: st, logger: logger, budget: defaultParseBudget}
 	p.wg.Add(workers)
 	for i := 0; i < workers; i++ {
 		go p.worker()
@@ -59,19 +68,30 @@ func (p *parsePipeline) worker() {
 	defer p.wg.Done()
 	for job := range p.jobs {
 		p.process(job)
+		p.queuedBytes.Add(-job.size())
 	}
 }
 
-// submit enqueues a job without ever blocking the caller. A full queue means
-// analysis is backed up; the job is dropped (and logged) rather than slowing
-// the proxy — the call's metering row was already written synchronously.
+// submit enqueues a job without ever blocking the caller. A full queue — by
+// slots or by bytes — means analysis is backed up; the job is dropped (and
+// logged) rather than slowing the proxy — the call's metering row was already
+// written synchronously. An empty queue always admits one job, however large.
 func (p *parsePipeline) submit(job parseJob) {
 	if p == nil {
+		return
+	}
+	size := job.size()
+	queued := p.queuedBytes.Add(size)
+	if p.budget > 0 && queued > p.budget && queued != size {
+		p.queuedBytes.Add(-size)
+		p.logger.Warn("parse queue over byte budget; dropping parse job",
+			"call_id", job.callID, "queued_bytes", queued-size, "budget_bytes", p.budget)
 		return
 	}
 	select {
 	case p.jobs <- job:
 	default:
+		p.queuedBytes.Add(-size)
 		p.logger.Warn("parse queue full; dropping parse job", "call_id", job.callID)
 	}
 }

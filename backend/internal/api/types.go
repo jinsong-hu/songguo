@@ -11,6 +11,7 @@ import (
 	"github.com/songguo/songguo/internal/compose"
 	"github.com/songguo/songguo/internal/concurrency"
 	"github.com/songguo/songguo/internal/config"
+	"github.com/songguo/songguo/internal/pressure"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/store"
 )
@@ -796,6 +797,10 @@ type settingsView struct {
 	AdminProtected bool        `json:"admin_protected"`
 	Version        string      `json:"version"`
 	Ledger         *ledgerView `json:"ledger,omitempty"`
+	// Pressure is the degradation level: whether capture and body analysis are
+	// being shed to keep forwarding up, which signal caused it, and how many
+	// calls lost their trace or composition to it.
+	Pressure *pressure.Stats `json:"pressure,omitempty"`
 }
 
 // ledgerView is the ledger write queue's occupancy — the gateway's clearest
@@ -814,6 +819,12 @@ type ledgerView struct {
 	Failed    int64 `json:"failed"`
 	Blocked   int64 `json:"blocked"`
 	BlockedMS int64 `json:"blocked_ms"`
+
+	// The one kind of op the queue does drop: captured bodies past their byte
+	// budget. The call row is still written.
+	PayloadBytes  int64 `json:"payload_bytes"`
+	PayloadBudget int64 `json:"payload_budget"`
+	PayloadsShed  int64 `json:"payloads_shed"`
 }
 
 // traceSideView is one side (request or response) of a captured trace.

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/songguo/songguo/internal/configsvc"
 	"github.com/songguo/songguo/internal/janitor"
 	"github.com/songguo/songguo/internal/outbound"
+	"github.com/songguo/songguo/internal/pressure"
 	"github.com/songguo/songguo/internal/pricefeed"
 	"github.com/songguo/songguo/internal/proxy"
 	"github.com/songguo/songguo/internal/router"
@@ -52,6 +54,28 @@ func getduration(key string, def time.Duration) time.Duration {
 		}
 	}
 	return def
+}
+
+// getfloat reads a non-negative number from an env var, falling back to def when
+// unset or unparseable. 0 is honoured and disables that threshold.
+func getfloat(key string, def float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			return f
+		}
+	}
+	return def
+}
+
+// getmb reads a size in MiB from an env var and returns bytes, falling back to
+// def (also MiB) when unset or unparseable. 0 is honoured and disables it.
+func getmb(key string, def int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+			return n << 20
+		}
+	}
+	return def << 20
 }
 
 func main() {
@@ -109,14 +133,32 @@ func main() {
 	// budget enforcement acts on. Flushed on a ticker by spendTracker.Run below.
 	spendTracker := spend.New(st, logger)
 
+	// Degradation before failure: when memory, disk space or disk I/O runs short,
+	// or captured bodies back up faster than SQLite writes them, stop capturing
+	// and then stop local body analysis — never forwarding, metering or the call
+	// row. On an 8 GB box without swap the alternative is the host locking up.
+	// See internal/pressure. Every threshold is overridable; 0 disables it.
+	monitor := pressure.New(pressure.Options{
+		Cooldown:       getduration("SONGGUO_SHED_COOLDOWN", pressure.DefaultCooldown),
+		MemCapturePct:  getfloat("SONGGUO_SHED_MEM_CAPTURE_PCT", pressure.DefaultMemCapturePct),
+		MemAnalysisPct: getfloat("SONGGUO_SHED_MEM_ANALYSIS_PCT", pressure.DefaultMemAnalysisPct),
+		DiskDir:        filepath.Dir(dbPath),
+		DiskFreeMin:    uint64(getmb("SONGGUO_SHED_DISK_FREE_MB", pressure.DefaultDiskFreeMin>>20)),
+		IOPressurePct:  getfloat("SONGGUO_SHED_IO_PRESSURE_PCT", pressure.DefaultIOPressurePct),
+		WriteLag:       getduration("SONGGUO_SHED_WRITE_LAG", pressure.DefaultWriteLag),
+		Logger:         logger,
+	})
+
 	proxyDeps := proxy.Deps{
-		Snapshot: manager.Current,
-		Store:    st,
-		Router:   rt,
-		Gate:     gate,
-		Spend:    spendTracker,
-		Logger:   logger,
-		Outbound: out,
+		Snapshot:      manager.Current,
+		Store:         st,
+		Router:        rt,
+		Gate:          gate,
+		Spend:         spendTracker,
+		Logger:        logger,
+		Outbound:      out,
+		Pressure:      monitor,
+		CaptureBudget: getmb("SONGGUO_CAPTURE_BUDGET_MB", 64),
 	}
 	proxyHandler := proxy.NewHandler(proxyDeps)
 	testWSHandler := proxy.NewWSTestHandler(proxyDeps)
@@ -129,7 +171,8 @@ func main() {
 		Spend:    spendTracker,
 		// Ledger queue occupancy, so an operator can see backlog and whether
 		// any request has ever had to wait on it.
-		LedgerStats: proxyHandler.Stats,
+		LedgerStats:   proxyHandler.Stats,
+		PressureStats: monitor.Stats,
 		Reload: func() error {
 			if err := manager.Reload(); err != nil {
 				return err
@@ -212,7 +255,9 @@ func main() {
 	// record — not a derived rollup — so skipping the drain loses ledger rows on
 	// every restart.
 	spendCtx, stopSpend := context.WithCancel(context.Background())
+	pressureCtx, stopPressure := context.WithCancel(context.Background())
 	defer proxyHandler.Close()
+	defer stopPressure()
 	defer spendTracker.Wait()
 	defer jan.Wait()
 	if feed != nil {
@@ -226,6 +271,7 @@ func main() {
 		go feed.Run(feedCtx)
 	}
 	go spendTracker.Run(spendCtx, 0)
+	go monitor.Run(pressureCtx)
 
 	errCh := make(chan error, 1)
 	go func() {

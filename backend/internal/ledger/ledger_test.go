@@ -174,6 +174,102 @@ func TestFullQueueBlocksAndNeverDrops(t *testing.T) {
 	}
 }
 
+// gatedStore holds the first payload write until released, so a payload backlog
+// can be built up deterministically behind it.
+type gatedStore struct {
+	*fakeStore
+	release chan struct{}
+	once    sync.Once
+}
+
+func (g *gatedStore) SavePayload(p store.Payload) error {
+	g.once.Do(func() { <-g.release })
+	return g.fakeStore.SavePayload(p)
+}
+
+func payloadOp(id string, n int, after func()) Op {
+	return Op{Kind: KindPayload, CallID: id, After: after,
+		Payload: &store.Payload{CallID: id, ReqBody: make([]byte, n)}}
+}
+
+// Captured bodies are the one thing the queue drops: past the byte budget a
+// payload is discarded at Submit, while the same call's row still goes through.
+// A missing trace is a trace; a missing call row is a hole in the cost history.
+func TestPayloadBudgetDropsBodiesNeverCallRows(t *testing.T) {
+	fs := &gatedStore{fakeStore: newFakeStore(), release: make(chan struct{})}
+	w := New(fs, discardLogger(), 0)
+	w.SetPayloadBudget(100)
+
+	for _, id := range []string{"a", "b", "c"} {
+		w.Submit(Op{Kind: KindCreate, Entry: entry(id)})
+	}
+	var droppedAfter atomic.Int64
+	w.Submit(payloadOp("a", 60, nil)) // held by the store; 60 pending
+	w.Submit(payloadOp("b", 30, nil)) // 90 pending, within budget
+	w.Submit(payloadOp("c", 30, func() { droppedAfter.Add(1) }))
+	w.Submit(Op{Kind: KindFinalize, Entry: entry("c")})
+
+	if pending, budget := w.PayloadBacklog(); pending != 90 || budget != 100 {
+		t.Errorf("backlog = %d/%d, want 90/100", pending, budget)
+	}
+	close(fs.release)
+	w.Flush()
+
+	// With the backlog drained, a body larger than the whole budget is still
+	// captured: an empty queue always admits one.
+	w.Submit(payloadOp("b", 500, nil))
+	w.Close()
+
+	got := map[string]int{}
+	for _, op := range fs.snapshot() {
+		got[op]++
+	}
+	if got["payload:a"] != 1 || got["payload:b"] != 2 {
+		t.Errorf("payload writes = %v, want a once and b twice", got)
+	}
+	if got["payload:c"] != 0 {
+		t.Error("payload c was over budget and must have been dropped")
+	}
+	if got["finalize:c"] != 1 {
+		t.Error("the call row for c must be written even though its body was dropped")
+	}
+	if droppedAfter.Load() != 0 {
+		t.Error("a dropped payload's After ran; the parse would read a body that was never stored")
+	}
+	st := w.Stats()
+	if st.PayloadsShed != 1 || st.PayloadBytes != 0 || st.PayloadBudget != 100 {
+		t.Errorf("stats = %+v, want 1 shed, 0 pending, budget 100", st)
+	}
+}
+
+// WriteLag is how the pressure monitor sees a slow disk: it reports a write
+// still in progress as it happens, the slowest finished one once, and then
+// resets — so a single stall does not keep capture shed forever.
+func TestWriteLagReportsInProgressAndPeakOnce(t *testing.T) {
+	fs := &gatedStore{fakeStore: newFakeStore(), release: make(chan struct{})}
+	w := New(fs, discardLogger(), 0)
+
+	w.Submit(Op{Kind: KindCreate, Entry: entry("a")})
+	w.Flush()
+	w.WriteLag() // discard the create's lag
+
+	w.Submit(payloadOp("a", 10, nil)) // held by the store
+	time.Sleep(60 * time.Millisecond)
+	if lag := w.WriteLag(); lag < 50*time.Millisecond {
+		t.Errorf("in-progress lag = %v, want >= 50ms: a stuck write must be visible before it finishes", lag)
+	}
+
+	close(fs.release)
+	w.Flush()
+	if lag := w.WriteLag(); lag < 50*time.Millisecond {
+		t.Errorf("peak lag = %v, want >= 50ms for the write that just finished", lag)
+	}
+	if lag := w.WriteLag(); lag >= 50*time.Millisecond {
+		t.Errorf("lag after reset = %v, want the peak cleared", lag)
+	}
+	w.Close()
+}
+
 // After runs only when the write succeeded, because it is how work that
 // requires the row to exist (the parse pipeline, whose table has a FOREIGN KEY
 // onto calls) is sequenced behind it.

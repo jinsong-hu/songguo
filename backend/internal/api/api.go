@@ -20,6 +20,7 @@ import (
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/ledger"
 	"github.com/songguo/songguo/internal/outbound"
+	"github.com/songguo/songguo/internal/pressure"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/spend"
 	"github.com/songguo/songguo/internal/store"
@@ -42,15 +43,18 @@ type Deps struct {
 	// LedgerStats reports the ledger write queue's occupancy, so an operator can
 	// see backlog and whether any request has ever had to wait on it. Optional.
 	LedgerStats func() ledger.Stats
-	Reload      func() error // rebuild the live snapshot after a config write
-	AdminKey    string       // from SONGGUO_ADMIN_KEY; empty = unprotected (logged once)
-	Logger      *slog.Logger
-	HTTPClient  *http.Client      // for vendor test-connection; default if nil
-	Outbound    *outbound.Manager // optional; shared in production
-	Now         func() time.Time  // defaults to time.Now
-	Version     string            // build version string, default "dev"
-	ListenAddr  string            // from SONGGUO_LISTEN; shown in settings
-	DBPath      string
+	// PressureStats reports whether the gateway is shedding capture or body
+	// analysis to stay up, and why. Optional.
+	PressureStats func() pressure.Stats
+	Reload        func() error // rebuild the live snapshot after a config write
+	AdminKey      string       // from SONGGUO_ADMIN_KEY; empty = unprotected (logged once)
+	Logger        *slog.Logger
+	HTTPClient    *http.Client      // for vendor test-connection; default if nil
+	Outbound      *outbound.Manager // optional; shared in production
+	Now           func() time.Time  // defaults to time.Now
+	Version       string            // build version string, default "dev"
+	ListenAddr    string            // from SONGGUO_LISTEN; shown in settings
+	DBPath        string
 }
 
 // api is the concrete handler holding resolved dependencies.
@@ -61,6 +65,7 @@ type api struct {
 	gate        *concurrency.Gate
 	spend       *spend.Tracker
 	ledgerStats func() ledger.Stats
+	pressure    func() pressure.Stats
 	reload      func() error
 	adminKey    string
 	logger      *slog.Logger
@@ -111,6 +116,7 @@ func newAPI(d Deps) *api {
 		gate:        d.Gate,
 		spend:       d.Spend,
 		ledgerStats: d.LedgerStats,
+		pressure:    d.PressureStats,
 		reload:      reload,
 		adminKey:    d.AdminKey,
 		logger:      logger,

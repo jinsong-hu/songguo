@@ -2197,7 +2197,15 @@ func (a *api) settingsData() settingsView {
 			Failed:    s.Failed,
 			Blocked:   s.Blocked,
 			BlockedMS: s.BlockedMS,
+
+			PayloadBytes:  s.PayloadBytes,
+			PayloadBudget: s.PayloadBudget,
+			PayloadsShed:  s.PayloadsShed,
 		}
+	}
+	if a.pressure != nil {
+		s := a.pressure()
+		v.Pressure = &s
 	}
 	return v
 }
