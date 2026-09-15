@@ -70,6 +70,22 @@ func TestPragmasApplyToEveryConnection(t *testing.T) {
 		if cache != -65536 {
 			t.Errorf("conn %d: cache_size = %d, want -65536 (a KiB budget; the -2000 default is 2 MiB against a 70 GB file)", i, cache)
 		}
+
+		var autockpt, walLimit int64
+		if err := c.QueryRowContext(ctx, `PRAGMA wal_autocheckpoint`).Scan(&autockpt); err != nil {
+			t.Fatalf("conn %d: read wal_autocheckpoint: %v", i, err)
+		}
+		if err := c.QueryRowContext(ctx, `PRAGMA journal_size_limit`).Scan(&walLimit); err != nil {
+			t.Fatalf("conn %d: read journal_size_limit: %v", i, err)
+		}
+		// Any connection left at the default 1000 would checkpoint inside its
+		// own commits again (see checkpoint.go).
+		if autockpt != 0 {
+			t.Errorf("conn %d: wal_autocheckpoint = %d, want 0 (checkpoints belong to the background loop)", i, autockpt)
+		}
+		if walLimit != walSizeLimit {
+			t.Errorf("conn %d: journal_size_limit = %d, want %d", i, walLimit, walSizeLimit)
+		}
 	}
 }
 

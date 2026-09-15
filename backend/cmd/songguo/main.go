@@ -95,6 +95,7 @@ func main() {
 		logger.Error("failed to open store", "path", dbPath, "err", err)
 		os.Exit(1)
 	}
+	st.SetLogger(logger) // checkpoint failures and a WAL held back by a long read
 
 	// From here on a failure must NOT call os.Exit directly: that skips every
 	// defer below, including the ledger drain, and losing the queued call

@@ -39,6 +39,9 @@ type Store struct {
 	// SQLite instead, where callers wait rather than fail and retention can
 	// deliberately yield between batches.
 	writeMu sync.Mutex
+
+	// ckpt runs WAL checkpoints in the background (see checkpoint.go).
+	ckpt *checkpointer
 }
 
 // dsnPragmas are applied by the driver on EVERY new connection, which is the
@@ -57,11 +60,17 @@ type Store struct {
 // The same index scan measured 2.8s cold against 0.13s warm.
 //
 // It is per-CONNECTION, which is exactly why it rides the DSN with the others.
+//
+// wal_autocheckpoint(0) takes checkpoints out of the commit path and
+// journal_size_limit caps the WAL file left behind by a burst (walSizeLimit);
+// both are per-connection too. checkpoint.go runs the checkpoints instead.
 const dsnPragmas = "_pragma=busy_timeout(5000)" +
 	"&_pragma=journal_mode(WAL)" +
 	"&_pragma=foreign_keys(1)" +
 	"&_pragma=synchronous(1)" +
-	"&_pragma=cache_size(-65536)"
+	"&_pragma=cache_size(-65536)" +
+	"&_pragma=wal_autocheckpoint(0)" +
+	"&_pragma=journal_size_limit(67108864)"
 
 // Maximum concurrent connections. SQLite allows many readers but only one
 // writer, so this bounds memory and file descriptors rather than throughput;
@@ -97,6 +106,10 @@ const (
 // > ON DELETE CASCADE that retention relies on to drop each pruned call's raw
 // > blobs. TestPragmasApplyToEveryConnection is the regression guard.
 func Open(path string) (*Store, error) {
+	return open(path, defaultCheckpointConfig)
+}
+
+func open(path string, ckpt checkpointConfig) (*Store, error) {
 	// A '?' in the path would be parsed as the start of the query string by the
 	// driver, silently truncating the filename and swallowing our pragmas.
 	if strings.ContainsRune(path, '?') {
@@ -119,15 +132,19 @@ func Open(path string) (*Store, error) {
 	}
 
 	s := &Store{db: db}
+	s.startCheckpointer(path, ckpt)
 	if err := s.migrate(); err != nil {
+		s.stopCheckpointer()
 		db.Close()
 		return nil, err
 	}
 	return s, nil
 }
 
-// Close releases the underlying database handle.
+// Close stops the checkpointer and releases the underlying database handle.
+// Closing the last connection checkpoints whatever the WAL still holds.
 func (s *Store) Close() error {
+	s.stopCheckpointer()
 	if err := s.db.Close(); err != nil {
 		return fmt.Errorf("store: close: %w", err)
 	}
