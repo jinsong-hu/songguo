@@ -75,7 +75,7 @@
       },
       {
         "wire": "openai/models",
-        "endpoint": "https://api.openai.com/v1",
+        "endpoint": "https://api.openai.com/v1/models",
         "adapter": "openai-compatible"
       }
     ]
@@ -98,7 +98,7 @@
       },
       {
         "wire": "openai/models",
-        "endpoint": "https://api.x.ai/v1",
+        "endpoint": "https://api.x.ai/v1/models",
         "adapter": "openai-compatible"
       }
     ]
@@ -421,7 +421,7 @@
       },
       {
         "wire": "openai/models",
-        "endpoint": "https://api.deepseek.com",
+        "endpoint": "https://api.deepseek.com/models",
         "adapter": "openai-compatible"
       },
       {
@@ -544,7 +544,7 @@
       },
       {
         "wire": "openai/models",
-        "endpoint": "https://ark.cn-beijing.volces.com/api/v3",
+        "endpoint": "https://ark.cn-beijing.volces.com/api/v3/models",
         "adapter": "openai-compatible"
       }
     ]
@@ -1136,7 +1136,7 @@
       },
       {
         "wire": "openai/models",
-        "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/models",
         "adapter": "openai-compatible"
       },
       {
@@ -1172,7 +1172,7 @@
       },
       {
         "wire": "openai/models",
-        "endpoint": "https://api.minimaxi.com/v1",
+        "endpoint": "https://api.minimaxi.com/v1/models",
         "adapter": "openai-compatible"
       },
       {
@@ -1278,7 +1278,7 @@
       },
       {
         "wire": "openai/models",
-        "endpoint": "https://api.moonshot.cn/v1",
+        "endpoint": "https://api.moonshot.cn/v1/models",
         "adapter": "openai-compatible"
       },
       {

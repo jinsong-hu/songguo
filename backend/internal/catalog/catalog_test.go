@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/songguo/songguo/internal/wire"
@@ -419,5 +421,80 @@ func TestDeepSeekRetiredAliasesPriceAsFlash(t *testing.T) {
 		if m.Note == "" {
 			t.Errorf("%s carries no note; a retired id that still bills needs to say so", alias)
 		}
+	}
+}
+
+// TestEndpointIsAFullPathNotABaseURL guards the distinction the catalogue kept
+// losing: a BASE URL is the bare host an operator types, an ENDPOINT is the full
+// path a wire is served at. Commit 13ccddf settled that and rewrote the `custom`
+// template accordingly ("{base}" -> "{base}/v1/models"), but the preset
+// providers were never migrated, and seven of them sat for months with a base
+// URL in an endpoint field — six as "<host>/v1" (the pre-13ccddf base) and one
+// as "<host>" (the current base).
+//
+// The two forms fail differently, which is why neither was noticed:
+//
+//	<host>/v1  carries a path, so the proxy forwards it as the exact upstream
+//	           URL. GET /v1/models arrived at https://api.openai.com/v1 — a 404
+//	           — with /models silently dropped.
+//	<host>     carries none, so it falls through to passthroughURL, which keeps
+//	           the inbound path and happens to produce the right URL. Working by
+//	           accident of a rule written for something else is not the same as
+//	           being correct, and it is what made the broken siblings look like a
+//	           style difference rather than a bug.
+//
+// The rule asserted here is the narrow one that catches both without outlawing
+// the deliberate origin-only entries: IF an endpoint carries a path, that path
+// must end in one of its wire's suffixes. Origin-only stays legal, because the
+// multi-suffix wires (volc/voice-clone, volc/asr-file) and the WebSocket wires
+// rely on passthrough to reach several native paths through one endpoint.
+func TestEndpointIsAFullPathNotABaseURL(t *testing.T) {
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Volcengine Ark has no image-EDIT path: it edits by posting an image field
+	// to the same generations URL, which is why openai/images-edit exists as its
+	// own wire (see internal/wire/openai.go). A real exception, not a stale base.
+	exempt := map[string]string{
+		"volcengine-ark-plan|openai/images-edit": "Ark edits at the generations URL; it has no /images/edits path",
+	}
+
+	checked := 0
+	for id, p := range c {
+		for _, ep := range p.Endpoints {
+			w, ok := wire.Get(ep.Wire)
+			if !ok {
+				continue // TestCatalogLoads reports unknown wires
+			}
+			if _, skip := exempt[id+"|"+ep.Wire]; skip {
+				continue
+			}
+			u, err := url.Parse(strings.ReplaceAll(strings.ReplaceAll(ep.Endpoint, "{base}", "https://b.example"), "{model}", "m"))
+			if err != nil {
+				t.Errorf("provider %q endpoint %q is not a URL: %v", id, ep.Wire, ep.Endpoint)
+				continue
+			}
+			path := strings.TrimRight(u.Path, "/")
+			if path == "" {
+				continue // origin-only: deliberate passthrough, see above
+			}
+			checked++
+			matched := false
+			for _, suf := range w.Suffixes {
+				if strings.HasSuffix(strings.ToLower(path), strings.ToLower(suf)) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				t.Errorf("provider %q wire %q: endpoint %q carries a path that does not end in any of the wire's suffixes %v — that is a base URL in an endpoint field, and the proxy will forward it verbatim",
+					id, ep.Wire, ep.Endpoint, w.Suffixes)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no path-bearing endpoint was checked — the catalogue or the wire suffixes changed shape")
 	}
 }
