@@ -79,13 +79,12 @@ const WIRE_KIND: Record<string, string> = {
   'volc/asr-stream-async': 'stt',
   'volc/asr-stream-nostream': 'stt',
   'volc/voice-clone': 'tts',
-  // System One answers typed questions rather than generating messages, so no
-  // kind here really fits. It is filed as chat because "" means "management
-  // wire, serves no models" (wireServesModels) — which would drop Jev out of
-  // model routing in the UI — and chat is the only kind that keeps a
-  // text-in/text-out model visible. The backend wire is filed the same way so
-  // the two halves cannot disagree.
-  'typesafe/systemone': 'chat',
+  // System One answers typed questions rather than generating messages, so it
+  // is neither chat nor a management wire ("" — serves no models, which would
+  // drop Jev out of model routing in the UI). It has its own kind; the backend
+  // wire carries the matching calls.ModalityDecision so the two halves cannot
+  // disagree.
+  'typesafe/systemone': 'decision',
 };
 
 export function wireKind(wire: string): string {

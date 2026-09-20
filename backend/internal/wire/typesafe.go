@@ -7,13 +7,14 @@ func init() {
 		Name:     "typesafe/systemone",
 		Suffixes: []string{"/systemone"},
 		// System One is not chat — it answers typed questions about a state,
-		// with no message array and no generated text. It is filed under the
-		// chat modality anyway because the vocabulary has no "decision" member
-		// and the empty modality means "management wire, serves no models",
-		// which would take the wire out of model routing entirely. Nothing
-		// downstream mistakes it for chat: compose.Compose and compose.ToolTurn
-		// dispatch on the wire NAME, and this one matches none of their cases.
-		Modality: calls.ModalityChat,
+		// with no message array and no generated text — and it is not a
+		// management wire either (the empty modality, which would take it out of
+		// model routing entirely). It gets its own modality: "decision". The
+		// chat-gated paths it now correctly falls out of are the ones that were
+		// never going to do anything for it anyway — compose.Compose and
+		// compose.ToolTurn dispatch on the wire NAME and match none of their
+		// cases, so the gate change removes a wasted decode, not a feature.
+		Modality: calls.ModalityDecision,
 		Extract:  systemOneExtract,
 		// NewScanner stays nil: the System One API has no streaming mode.
 	})

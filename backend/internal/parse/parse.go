@@ -51,7 +51,7 @@ type Tokens struct {
 
 // Call is the protocol-neutral parsed view persisted for later analysis.
 type Call struct {
-	Format        string    `json:"format"` // "openai-chat" | "anthropic-messages" | "openai-responses" | "embeddings" | "generic"
+	Format        string    `json:"format"` // "openai-chat" | "anthropic-messages" | "openai-responses" | "embeddings" | "typesafe-systemone" | "generic"
 	Model         string    `json:"model,omitempty"`
 	System        string    `json:"system,omitempty"`
 	Input         []Message `json:"input,omitempty"`  // request messages
@@ -61,6 +61,10 @@ type Call struct {
 	Tokens        Tokens    `json:"tokens"`
 	Stream        bool      `json:"stream"`
 	ToolCallCount int       `json:"tool_call_count"`
+	// SystemOne carries the typed question/answer structure of a System One
+	// call, which has no messages to put in Input/Output. Set only by the
+	// typesafe/systemone parser.
+	SystemOne *SystemOne `json:"system_one,omitempty"`
 }
 
 // Parse dispatches to the parser matching the call's wire (falling back to the
@@ -76,6 +80,8 @@ func Parse(in Input) (Call, error) {
 		return parseOpenAIResponses(in)
 	case "openai/embeddings":
 		return parseEmbeddings(in)
+	case "typesafe/systemone":
+		return parseSystemOne(in)
 	}
 	// Unmatched wire: infer from adapter for the two big chat families, else
 	// record a generic shape.

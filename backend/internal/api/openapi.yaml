@@ -396,6 +396,21 @@ paths:
               schema: { $ref: "#/components/schemas/SessionMessages" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/calls/{id}/systemone:
+    get:
+      tags: [calls]
+      summary: Typed question/answer structure of one System One call
+      operationId: getCallSystemOne
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The state, questions, and answers parsed from the call's captured bodies
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SystemOneCall" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/sessions/{id}:
     get:
       tags: [calls]
@@ -1305,6 +1320,42 @@ components:
           type: array
           description: Native message/input items after cumulative-history overlap removal.
           items: {}
+    SystemOneCall:
+      type: object
+      description: >-
+        A TypeSafe System One call parsed from its raw capture: the state, the
+        typed questions asked about it, and the typed answers. Empty when the
+        capture has expired or is not a System One shape.
+      properties:
+        model: { type: string }
+        state: { type: string, description: The text the questions were asked about. }
+        questions:
+          type: array
+          items: { $ref: "#/components/schemas/SystemOneQuestion" }
+        answers:
+          type: array
+          items: { $ref: "#/components/schemas/SystemOneAnswer" }
+        tokens: { $ref: "#/components/schemas/SystemOneTokens" }
+    SystemOneQuestion:
+      type: object
+      properties:
+        key: { type: string, description: The key this question had in the request's questions map. }
+        type: { type: string, description: "Answer type asked for: noul, choice, or score." }
+        instructions: { type: string }
+        raw: { description: The question object exactly as sent, so fields this build does not name stay visible. }
+    SystemOneAnswer:
+      type: object
+      properties:
+        key: { type: string }
+        type: { type: string }
+        value: { description: The value at the key the answer's own type field names; absent when that key is not present. }
+        raw: { description: The answer object exactly as returned. }
+    SystemOneTokens:
+      type: object
+      description: Token usage. TypeSafe publishes no cache or reasoning axis, so only these two are ever set.
+      properties:
+        input: { type: integer }
+        output: { type: integer }
     TraceSide:
       type: object
       properties:

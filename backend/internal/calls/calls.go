@@ -14,9 +14,15 @@ import (
 type Modality string
 
 // Known modalities. ModalityUnknown is the zero-value fallback.
+//
+// ModalityDecision is typed questions answered about a state, with calibrated
+// probabilities rather than generated text (TypeSafe System One). It has its
+// own member because it is a model-serving capability that is not chat —
+// filing it under chat made every chat-gated path treat it as a conversation.
 const (
 	ModalityChat      Modality = "chat"
 	ModalityEmbedding Modality = "embedding"
+	ModalityDecision  Modality = "decision"
 	ModalityImage     Modality = "image"
 	ModalityVideo     Modality = "video"
 	ModalityTTS       Modality = "tts"

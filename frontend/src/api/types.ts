@@ -458,6 +458,45 @@ export interface SessionMessages {
   omitted_requests?: number;
 }
 
+// --- System One (typesafe/systemone) -------------------------------------
+//
+// A System One call is a state plus a map of typed questions, answered with
+// typed values — no messages, so SessionMessages can only ever describe it as
+// three empty panels. This is the shape the request detail page renders
+// instead.
+
+/** One entry of the request's questions map. */
+export interface SystemOneQuestion {
+  /** The key this question had in the questions map; also the answer's key. */
+  key: string;
+  /** The answer type asked for: "noul" | "choice" | "score". */
+  type: string;
+  instructions?: string;
+  /** The question object verbatim, so fields this build does not name stay visible. */
+  raw?: unknown;
+}
+
+/** One entry of the response's answers map. */
+export interface SystemOneAnswer {
+  key: string;
+  type: string;
+  /** The value at the key the answer's own `type` names; absent when that key is not present. */
+  value?: unknown;
+  /** The answer object verbatim. */
+  raw?: unknown;
+}
+
+/** GET /api/calls/{id}/systemone: one System One call, parsed from its capture. */
+export interface SystemOneCall {
+  model: string;
+  /** The text the questions were asked about. */
+  state: string;
+  questions: SystemOneQuestion[];
+  answers: SystemOneAnswer[];
+  /** TypeSafe publishes no cache or reasoning axis, so only these two are ever set. */
+  tokens: { input?: number; output?: number };
+}
+
 // --- Context distribution (where the context window goes) ---
 
 /** A producer sub-slice of a source bucket (e.g. Read under tool results). */

@@ -35,7 +35,7 @@ describe('wireTests', () => {
     expect(ids(['openai/models', 'volc/voice-clone', 'openai/chat'])).toEqual(['openai/chat']);
   });
 
-  it('offers System One, behind the wires that have an interactive panel', () => {
+  it('offers System One, behind chat and ahead of the media families', () => {
     // typesafe/systemone has no panel (a state plus typed questions fits none of
     // them), so it renders the snippet fallback — but it is model-serving, so it
     // must still be listed rather than dropped like a management wire.
@@ -47,6 +47,13 @@ describe('wireTests', () => {
         kind: 'unsupported',
         endpoint: 'POST /v1/systemone',
       },
+    ]);
+    // Its own modality ("decision") needs its own MODALITY_RANK entry, or it
+    // sorts to the `?? 99` tail behind ASR instead of with the text wires.
+    expect(ids(['volc/asr-file', 'typesafe/systemone', 'openai/embeddings'])).toEqual([
+      'typesafe/systemone',
+      'openai/embeddings',
+      'volc/asr-file',
     ]);
   });
 });

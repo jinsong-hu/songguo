@@ -130,15 +130,18 @@ export function wireTests(wires: string[], preferred?: Set<string>): WireTest[] 
   });
 }
 
-// Display order of the wire families (from wireKind). Text wires lead; speech —
-// TTS then ASR — comes last so the two stay grouped together.
+// Display order of the wire families (from wireKind). Text wires lead — chat,
+// then decision, then embeddings; speech — TTS then ASR — comes last so the two
+// stay grouped together. Every kind needs an entry: a kind missing here sorts
+// to the `?? 99` tail, behind ASR.
 const MODALITY_RANK: Record<string, number> = {
   chat: 0,
-  embedding: 1,
-  image: 2,
-  video: 3,
-  tts: 4,
-  stt: 5,
+  decision: 1,
+  embedding: 2,
+  image: 3,
+  video: 4,
+  tts: 5,
+  stt: 6,
 };
 
 // --- Snippet examples (single source for the "Try it" card and the playground

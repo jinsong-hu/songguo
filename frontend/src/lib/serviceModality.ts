@@ -7,11 +7,11 @@ import type { Catalog } from '../api/types';
 import { wireKind } from './wires';
 
 // Coarse capability kinds, matching wireKind's vocabulary.
-export type Kind = 'chat' | 'embedding' | 'image' | 'video' | 'tts' | 'stt';
+export type Kind = 'chat' | 'decision' | 'embedding' | 'image' | 'video' | 'tts' | 'stt';
 
 // More specific kinds win when a model is served by several wires (a provider
 // key may carry sibling wires); chat is the least specific.
-const KIND_PRIORITY: Kind[] = ['embedding', 'image', 'video', 'tts', 'stt', 'chat'];
+const KIND_PRIORITY: Kind[] = ['embedding', 'image', 'video', 'tts', 'stt', 'decision', 'chat'];
 
 // Id-based fallback for models the catalog doesn't describe. First match wins.
 const ID_KINDS: Array<[RegExp, Kind]> = [
@@ -68,6 +68,11 @@ export interface Bucket {
 // dropped, so the order just sets precedence among populated sections.
 export const BUCKETS: Bucket[] = [
   { id: 'text-generation', label: 'Text Generation', kinds: ['chat'] },
+  // System One: labels are supplied at inference time and nothing is
+  // fine-tuned, which is what the HF task describes. Its three answer types are
+  // the same task at different resolutions — `choice` is the multi-label case,
+  // `noul` the binary one, `score` the graded one.
+  { id: 'zero-shot-classification', label: 'Zero-Shot Classification', kinds: ['decision'] },
   { id: 'feature-extraction', label: 'Feature Extraction', kinds: ['embedding'] },
   { id: 'text-to-image', label: 'Text-to-Image', kinds: ['image'] },
   { id: 'text-to-speech', label: 'Text-to-Speech', kinds: ['tts'] },

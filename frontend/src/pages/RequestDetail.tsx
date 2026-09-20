@@ -12,6 +12,7 @@ import { Page } from '../components/Layout';
 import { PromptReconstructionCard, parsePromptReconstruction } from '../components/PromptReconstruction';
 import { Skeleton } from '../components/Skeleton';
 import { StatusPill } from '../components/StatusPill';
+import { SystemOnePanel } from '../components/SystemOnePanel';
 import { TokenBreakdown } from '../components/TokenBreakdown';
 import { TracePanel } from '../components/TracePanel';
 import { useFetch } from '../lib/useFetch';
@@ -35,8 +36,16 @@ export function RequestDetailPage() {
     [callId],
     { enabled: valid },
   );
+  // A System One body carries no system/tools/messages, so the prompt card can
+  // only ever render three empty panels for it. The page swaps in the panel
+  // that can read that shape — and swaps rather than adds, so it stays at one
+  // captured-body read either way.
+  const isSystemOne = data?.wire === 'typesafe/systemone';
   const messages = useFetch(() => api.callMessages(callId), [callId], {
-    enabled: valid && !!data?.has_trace,
+    enabled: valid && !!data?.has_trace && !isSystemOne,
+  });
+  const systemOne = useFetch(() => api.callSystemOne(callId), [callId], {
+    enabled: valid && !!data?.has_trace && isSystemOne,
   });
   const prompt = useMemo(
     () => (messages.data ? parsePromptReconstruction(messages.data) : null),
@@ -154,14 +163,22 @@ export function RequestDetailPage() {
             </div>
           )}
 
-          {data.has_trace && (
-            <PromptReconstructionCard
-              prompt={prompt}
-              loading={messages.initialLoading || !prompt}
-              error={messages.error}
-              onRetry={messages.refetch}
-            />
-          )}
+          {data.has_trace &&
+            (isSystemOne ? (
+              <SystemOnePanel
+                call={systemOne.data}
+                loading={systemOne.initialLoading || !systemOne.data}
+                error={systemOne.error}
+                onRetry={systemOne.refetch}
+              />
+            ) : (
+              <PromptReconstructionCard
+                prompt={prompt}
+                loading={messages.initialLoading || !prompt}
+                error={messages.error}
+                onRetry={messages.refetch}
+              />
+            ))}
 
           <div className="card" style={{ padding: 16 }}>
             <div className={styles.traceHead}>

@@ -31,6 +31,7 @@ import type {
   SessionStats,
   Settings,
   Status,
+  SystemOneCall,
   User,
   UsageFacets,
   UsageFilter,
@@ -298,6 +299,10 @@ export const api = {
   /** One call's own system/tools/messages, in the session messages shape. 404 if not captured. */
   callMessages: (id: string) =>
     request<SessionMessages>(`/calls/${encodeURIComponent(id)}/messages`),
+
+  /** One System One call's state, questions and answers. 404 if not captured. */
+  callSystemOne: (id: string) =>
+    request<SystemOneCall>(`/calls/${encodeURIComponent(id)}/systemone`),
 
   /** Fetch the captured request/response trace for a call (UUID). 404 if none. */
   trace: (id: string) => request<CallTrace>(`/calls/${encodeURIComponent(id)}/trace`),

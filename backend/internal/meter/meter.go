@@ -78,6 +78,8 @@ func modalityFromPath(path string) calls.Modality {
 		return calls.ModalityImage
 	case strings.HasSuffix(p, "/contents/generations/tasks"):
 		return calls.ModalityVideo
+	case strings.HasSuffix(p, "/systemone"):
+		return calls.ModalityDecision
 	default:
 		return calls.ModalityUnknown
 	}
