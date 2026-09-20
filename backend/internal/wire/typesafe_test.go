@@ -53,7 +53,7 @@ func TestSystemOneExtract(t *testing.T) {
 	body := []byte(`{
 		"model": "jev-1.13.0",
 		"answers": {
-			"is_urgent": {"type": "noul", "value": true, "probability": 0.94, "confidence": 0.88}
+			"is_urgent": {"type": "noul", "noul": 0.95}
 		},
 		"usage": {"input_tokens": 296, "output_tokens": 20}
 	}`)

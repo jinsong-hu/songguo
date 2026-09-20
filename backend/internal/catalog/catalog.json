@@ -1378,9 +1378,9 @@
       },
       {
         "wire": "openai/models",
-        "endpoint": "https://api.typesafe.ai/v1",
+        "endpoint": "https://api.typesafe.ai/v1/models",
         "adapter": "openai-compatible",
-        "note": "Reuses openai/models rather than adding a typesafe/models: two wires claiming the /models suffix route ambiguously, which is why anthropic/models was deleted. TypeSafe's listing shape differs ({\"models\":[{name,description,release_date}]} rather than {\"data\":[…]}), and that never matters — the wire is ZeroCost and never parses the body, so the response is forwarded verbatim."
+        "note": "Reuses openai/models rather than adding a typesafe/models: two wires claiming the /models suffix route ambiguously, which is why anthropic/models was deleted. TypeSafe's listing shape differs ({\"models\":[{name,description,release_date}]} rather than {\"data\":[…]}), and that never matters — the wire is ZeroCost and never parses the body, so the response is forwarded verbatim. The endpoint is the FULL URL, not the <origin>/v1 form most siblings use here: a path-bearing endpoint is forwarded as-is, so \"https://api.typesafe.ai/v1\" would GET the root and drop /models."
       }
     ]
   },
