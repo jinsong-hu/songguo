@@ -182,6 +182,46 @@ Read-only by design: if a usage shape isn't recognized the call still succeeds w
 - **`anthropic/count_tokens`** — zero-cost: Anthropic bills token counting as free, so the call is logged (for observability) but never priced; the response (`{"input_tokens":N}`, no `usage` object) is not parsed.
 - **`openai/models`, `anthropic/models`, `volc/voice-clone`** — zero-cost management endpoints, not parsed. (Voice-clone's slot fee is billed out-of-band on first synthesis.)
 
+### Reply decoding — the same read, for a different reader
+
+A wire may also declare `DecodeReply`, which reconstructs the assistant turn
+from a **stored** response body so the request detail page can render the reply
+beside the prompt it answered. It is the same read-only sniffing as metering,
+one step later: nothing calls it on the forwarding path, it reads a body the
+ledger already captured, and it quotes what the vendor said without rewriting a
+byte of it.
+
+The items it returns are in the wire's own **request** vocabulary — a Responses
+`output` item is already shaped like an `input` item; an Anthropic reply is
+wrapped as `{"role":"assistant","content":[…]}`, the shape the next turn would
+send it back as — so one renderer reads both halves of a turn.
+
+Declared by two wires, covering ~99.7% of chat traffic:
+
+- **`openai/responses`** — non-streamed: the `output` array verbatim. Streamed:
+  `response.output` from the terminal `response.completed` / `response.incomplete`
+  event, falling back to the `response.output_item.done` items in order, which is
+  all a stream that died before its terminal event left behind.
+- **`anthropic/messages`** — non-streamed: the top-level `content`. Streamed:
+  content blocks accumulated by `index` — `content_block_start` gives the block's
+  shape, then `text_delta` / `thinking_delta` / `signature_delta` /
+  `input_json_delta` fill the fields they name. A tool call whose argument JSON
+  never finished arriving keeps the start event's `input` rather than a
+  half-parsed guess.
+
+`openai/chat` deliberately declares none: its SSE delta accumulation is a third
+shape to maintain for a share of traffic that rounds to zero here. Every other
+wire leaves the field nil, and the page reads that as "this protocol has no turn
+to show" rather than as an empty body.
+
+Whether a body is a stream is read from the **call row**, never sniffed from the
+bytes: `Stream` is recorded fact about what was served, and guessing it would be
+the display inventing a post-mortem the ledger already holds. Two more
+boundaries it shares with the ledger: a body it cannot read yields nothing
+rather than a reconstruction, and the reply is never shown on the **session**
+page — that view merges requests, each of which already carries the previous
+turn's reply inside its own history.
+
 ### Unpriced models fall back to the provider's ceiling
 
 Metering answers "how much was used"; pricing answers "at what rate". They fail

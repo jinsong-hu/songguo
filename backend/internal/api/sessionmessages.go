@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/songguo/songguo/internal/store"
+	"github.com/songguo/songguo/internal/wire"
 )
 
 // sessionMessagesView is the compact prompt material needed by the session
@@ -24,6 +25,14 @@ type sessionMessagesView struct {
 	System    []json.RawMessage `json:"system"`
 	Tools     []json.RawMessage `json:"tools"`
 	Messages  []json.RawMessage `json:"messages"`
+	// Reply is the assistant turn decoded from the call's captured RESPONSE,
+	// in the same item shape as Messages — what the caller received, kept apart
+	// from what it sent so the two are never read as one list.
+	//
+	// Only the single-call path fills it. A session view merges requests, and
+	// every request after the first already carries the previous reply inside
+	// its own history; decoding responses there would show each turn twice.
+	Reply []json.RawMessage `json:"reply"`
 	// OmittedRequests counts the oldest covering request bodies left unread
 	// because the newer ones already filled sessionMessagesBudget. Non-zero
 	// means the view starts part-way through the session.
@@ -125,11 +134,39 @@ func (a *api) callMessagesData(id string) (sessionMessagesView, error) {
 		}
 		return emptyPromptView(""), err
 	}
-	prompt, ok := decodeCapturedPrompt(p.ReqBody, p.ReqHeaders)
-	if !ok {
-		return emptyPromptView(""), nil
+	view := emptyPromptView("")
+	// A request body we cannot parse says nothing about the response, so the
+	// reply is decoded either way.
+	if prompt, ok := decodeCapturedPrompt(p.ReqBody, p.ReqHeaders); ok {
+		view = mergePrompts([]capturedPromptBody{prompt})
 	}
-	return mergePrompts([]capturedPromptBody{prompt}), nil
+	if reply := a.capturedReply(id, p); len(reply) > 0 {
+		view.Reply = reply
+	}
+	return view, nil
+}
+
+// capturedReply decodes the assistant turn out of one call's captured response.
+//
+// Wire and Stream are read from the call row rather than sniffed off the body:
+// both are recorded fact about what was actually served, and guessing the
+// protocol from the bytes would be the display inventing a post-mortem the
+// ledger already knows the answer to. A wire with no reply shape, a call with
+// no capture, or a body the decoder cannot read all return nothing to show.
+func (a *api) capturedReply(id string, p store.Payload) []json.RawMessage {
+	e, err := a.store.GetCall(id)
+	if err != nil {
+		return nil
+	}
+	w, ok := wire.Get(e.Wire)
+	if !ok || w.DecodeReply == nil {
+		return nil
+	}
+	body := p.RespBody
+	if decoded, ok := decodeTraceBody(body, headerValue(p.RespHeaders, "Content-Encoding")); ok {
+		body = decoded
+	}
+	return w.DecodeReply(body, e.Stream)
 }
 
 func emptyPromptView(sessionID string) sessionMessagesView {
@@ -138,6 +175,7 @@ func emptyPromptView(sessionID string) sessionMessagesView {
 		System:    []json.RawMessage{},
 		Tools:     []json.RawMessage{},
 		Messages:  []json.RawMessage{},
+		Reply:     []json.RawMessage{},
 	}
 }
 

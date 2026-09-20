@@ -7,6 +7,8 @@
 package wire
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
 	"sort"
 	"strings"
@@ -101,6 +103,15 @@ type Wire struct {
 	// NewScanner returns a scanner for a streaming response; nil means the
 	// wire never streams.
 	NewScanner func(q Quirks) StreamScanner
+	// DecodeReply reconstructs the assistant turn from a STORED response body,
+	// for display only. It returns items in the same shape the wire's REQUEST
+	// carries them, so one prompt renderer reads both halves of a turn without
+	// a second vocabulary. nil means this wire has no reply shape to show.
+	//
+	// This is read-only sniffing of a body we already captured — the same
+	// category as metering, and the same boundary: we quote what the vendor
+	// said and never rewrite it. Nothing here runs on the forwarding path.
+	DecodeReply func(body []byte, streamed bool) []json.RawMessage
 	// ZeroCost marks management endpoints (model listings) that are metered
 	// as free without parsing.
 	ZeroCost bool
@@ -215,6 +226,21 @@ func numAt(m map[string]any, path ...string) float64 {
 // is measured (the call completed) and Calls=1 drives per_call pricing.
 func perCallExtract(_ []byte, _ Quirks) Extraction {
 	return Extraction{Norm: Normalized{Calls: 1}, Confidence: calls.ConfidenceMeasured}
+}
+
+// storedSSELines splits a COMPLETE stored body into lines. The reply decoders
+// use it instead of lineScanner because that type exists to reassemble lines
+// across arbitrary Write boundaries in a live tee; a body read back from the
+// ledger has no boundaries left to cross.
+func storedSSELines(body []byte) [][]byte {
+	return bytes.Split(body, []byte("\n"))
+}
+
+// hasJSONValue reports whether a raw message carries something other than
+// absence — an unset field and an explicit null both read as nothing to show.
+func hasJSONValue(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
 }
 
 // confidenceFor grades an extraction: usage present means measured.

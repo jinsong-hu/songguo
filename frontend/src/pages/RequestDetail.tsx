@@ -177,6 +177,7 @@ export function RequestDetailPage() {
                 loading={messages.initialLoading || !prompt}
                 error={messages.error}
                 onRetry={messages.refetch}
+                showResponse
               />
             ))}
 

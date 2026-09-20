@@ -9,11 +9,12 @@ import (
 
 func init() {
 	register(Wire{
-		Name:       "openai/responses",
-		Suffixes:   []string{"/responses"},
-		Modality:   calls.ModalityChat,
-		Extract:    responsesExtract,
-		NewScanner: newResponsesScanner,
+		Name:        "openai/responses",
+		Suffixes:    []string{"/responses"},
+		Modality:    calls.ModalityChat,
+		Extract:     responsesExtract,
+		NewScanner:  newResponsesScanner,
+		DecodeReply: responsesDecodeReply,
 	})
 }
 
@@ -95,4 +96,60 @@ func (s *responsesScanner) Result() Extraction {
 
 func (s *responsesScanner) StreamCompleted() bool {
 	return s.completed
+}
+
+// responsesDecodeReply reads the assistant turn out of a stored Responses body.
+// The items it returns are the response's own "output" array, which is already
+// exactly the shape "input" items take on the way in — a reasoning item, a
+// message item and a function_call item all render through the same path as
+// their request-side twins.
+func responsesDecodeReply(body []byte, streamed bool) []json.RawMessage {
+	if !streamed {
+		var resp struct {
+			Output []json.RawMessage `json:"output"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return nil
+		}
+		return resp.Output
+	}
+
+	// A stream states its final output twice over: once item by item as each
+	// one finishes, and once whole in the terminal event. Prefer the terminal
+	// event — it is the vendor's own last word on what it sent — and fall back
+	// to the per-item events, which are all a stream that died early left us.
+	var (
+		final []json.RawMessage
+		items []json.RawMessage
+	)
+	for _, line := range storedSSELines(body) {
+		payload, ok := ssePayload(line)
+		if !ok {
+			continue
+		}
+		var env struct {
+			Type     string          `json:"type"`
+			Item     json.RawMessage `json:"item"`
+			Response struct {
+				Output []json.RawMessage `json:"output"`
+			} `json:"response"`
+		}
+		if err := json.Unmarshal(payload, &env); err != nil {
+			continue
+		}
+		switch env.Type {
+		case "response.completed", "response.incomplete":
+			if env.Response.Output != nil {
+				final = env.Response.Output
+			}
+		case "response.output_item.done":
+			if hasJSONValue(env.Item) {
+				items = append(items, env.Item)
+			}
+		}
+	}
+	if final != nil {
+		return final
+	}
+	return items
 }

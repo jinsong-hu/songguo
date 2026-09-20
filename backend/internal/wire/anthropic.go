@@ -2,17 +2,20 @@ package wire
 
 import (
 	"encoding/json"
+	"sort"
+	"strings"
 
 	"github.com/songguo/songguo/internal/calls"
 )
 
 func init() {
 	register(Wire{
-		Name:       "anthropic/messages",
-		Suffixes:   []string{"/messages"},
-		Modality:   calls.ModalityChat,
-		Extract:    anthropicExtract,
-		NewScanner: newAnthropicScanner,
+		Name:        "anthropic/messages",
+		Suffixes:    []string{"/messages"},
+		Modality:    calls.ModalityChat,
+		Extract:     anthropicExtract,
+		NewScanner:  newAnthropicScanner,
+		DecodeReply: anthropicDecodeReply,
 	})
 	// Token counting (POST /v1/messages/count_tokens). Same request shape and
 	// model as Messages, but Anthropic bills it as free, so it's ZeroCost: the
@@ -153,4 +156,150 @@ func (s *anthropicScanner) StreamError() string { return s.streamErr }
 
 func (s *anthropicScanner) Result() Extraction {
 	return anthropicNormalize(s.merged)
+}
+
+// anthropicDecodeReply reads the assistant turn out of a stored Messages body.
+// It returns a single item shaped like the request's own assistant messages —
+// {"role":"assistant","content":[...]} — so a thinking block, a text block and
+// a tool_use block render exactly as they do when a later turn sends them back
+// as history.
+func anthropicDecodeReply(body []byte, streamed bool) []json.RawMessage {
+	var content json.RawMessage
+	if streamed {
+		content = anthropicStreamContent(body)
+	} else {
+		var resp struct {
+			Content json.RawMessage `json:"content"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return nil
+		}
+		content = resp.Content
+	}
+	if !hasJSONValue(content) {
+		return nil
+	}
+	item, err := json.Marshal(struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}{Role: "assistant", Content: content})
+	if err != nil {
+		return nil
+	}
+	return []json.RawMessage{item}
+}
+
+// anthropicReplyBlock accumulates one content block of a stream. The start
+// event carries the block's shape with its variable-length fields blank; the
+// deltas fill exactly those fields, so the block is rebuilt by starting from
+// the template and writing the accumulated text back over it.
+type anthropicReplyBlock struct {
+	tmpl        map[string]any
+	text        strings.Builder
+	thinking    strings.Builder
+	signature   strings.Builder
+	partialJSON strings.Builder
+}
+
+// anthropicStreamContent rebuilds the content array of a streamed reply.
+func anthropicStreamContent(body []byte) json.RawMessage {
+	blocks := map[int]*anthropicReplyBlock{}
+	block := func(index int) *anthropicReplyBlock {
+		b, ok := blocks[index]
+		if !ok {
+			b = &anthropicReplyBlock{}
+			blocks[index] = b
+		}
+		return b
+	}
+
+	for _, line := range storedSSELines(body) {
+		payload, ok := ssePayload(line)
+		if !ok {
+			continue
+		}
+		var env struct {
+			Type         string         `json:"type"`
+			Index        int            `json:"index"`
+			ContentBlock map[string]any `json:"content_block"`
+			Delta        struct {
+				Type        string `json:"type"`
+				Text        string `json:"text"`
+				Thinking    string `json:"thinking"`
+				Signature   string `json:"signature"`
+				PartialJSON string `json:"partial_json"`
+			} `json:"delta"`
+		}
+		if err := json.Unmarshal(payload, &env); err != nil {
+			continue
+		}
+		switch env.Type {
+		case "content_block_start":
+			b := block(env.Index)
+			b.tmpl = env.ContentBlock
+			// Seed from the template so a relay that puts content in the start
+			// event rather than in a delta is not silently truncated.
+			seedBuilder(&b.text, env.ContentBlock, "text")
+			seedBuilder(&b.thinking, env.ContentBlock, "thinking")
+			seedBuilder(&b.signature, env.ContentBlock, "signature")
+		case "content_block_delta":
+			b := block(env.Index)
+			b.text.WriteString(env.Delta.Text)
+			b.thinking.WriteString(env.Delta.Thinking)
+			b.signature.WriteString(env.Delta.Signature)
+			b.partialJSON.WriteString(env.Delta.PartialJSON)
+		}
+	}
+	if len(blocks) == 0 {
+		return nil
+	}
+
+	indexes := make([]int, 0, len(blocks))
+	for index := range blocks {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+
+	out := make([]map[string]any, 0, len(indexes))
+	for _, index := range indexes {
+		out = append(out, blocks[index].value())
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		return nil
+	}
+	return encoded
+}
+
+// value renders one accumulated block back into its whole form.
+func (b *anthropicReplyBlock) value() map[string]any {
+	out := make(map[string]any, len(b.tmpl)+1)
+	for k, v := range b.tmpl {
+		out[k] = v
+	}
+	setIfBuilt(out, "text", &b.text)
+	setIfBuilt(out, "thinking", &b.thinking)
+	setIfBuilt(out, "signature", &b.signature)
+	if b.partialJSON.Len() > 0 {
+		var input any
+		// A tool call whose argument JSON never finished arriving keeps the
+		// template's input rather than a half-parsed guess; the partial text is
+		// still in the trace panel for anyone who needs it.
+		if err := json.Unmarshal([]byte(b.partialJSON.String()), &input); err == nil {
+			out["input"] = input
+		}
+	}
+	return out
+}
+
+func seedBuilder(dst *strings.Builder, tmpl map[string]any, key string) {
+	if s, ok := tmpl[key].(string); ok {
+		dst.WriteString(s)
+	}
+}
+
+func setIfBuilt(out map[string]any, key string, b *strings.Builder) {
+	if b.Len() > 0 {
+		out[key] = b.String()
+	}
 }

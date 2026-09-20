@@ -556,6 +556,36 @@
   border-radius: 8px;
 }
 
+/* A reasoning block wears the tool block's chrome but opens closed: it is
+   routinely an order of magnitude longer than the answer beside it. */
+.messageReasoning {
+  min-width: 0;
+}
+
+.messageReasoningHead {
+  border-bottom: none;
+  cursor: pointer;
+  list-style: none;
+}
+
+.messageReasoningHead::-webkit-details-marker {
+  display: none;
+}
+
+.messageReasoning[open] .messageReasoningHead {
+  border-bottom: 1px solid var(--border);
+}
+
+.messageReasoningChevron {
+  flex: none;
+  color: var(--text-muted);
+  transition: transform 140ms ease;
+}
+
+.messageReasoning[open] .messageReasoningChevron {
+  transform: rotate(90deg);
+}
+
 .messageImageBlock {
   margin: 0;
   position: relative;

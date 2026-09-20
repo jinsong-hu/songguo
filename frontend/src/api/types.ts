@@ -451,6 +451,14 @@ export interface SessionMessages {
    */
   messages: unknown[];
   /**
+   * The assistant turn decoded from the call's captured RESPONSE, in the same
+   * item shape as `messages` — what the caller received, kept apart from what
+   * it sent. Only GET /api/calls/{id}/messages ever fills it; the session path
+   * always sends `[]`, because each request after the first already carries the
+   * previous reply inside its own history.
+   */
+  reply: unknown[];
+  /**
    * The oldest request bodies the backend left unread because the newer ones
    * already filled its read budget. Non-zero means the view starts part-way
    * through the session.

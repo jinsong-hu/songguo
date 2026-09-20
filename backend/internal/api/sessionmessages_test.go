@@ -397,10 +397,21 @@ func mustMarshalJSON(t *testing.T, value any) string {
 }
 
 // The request page reads one call's own prompt: the same view as a session,
-// but never merged with the session's other requests.
+// but never merged with the session's other requests. It also reads that call's
+// own reply — the half of the turn a session view must never carry.
 func TestCallMessagesReadsOneCapturedRequest(t *testing.T) {
 	s := newTestStore(t)
 	base := time.Date(2026, 9, 14, 5, 33, 0, 0, time.UTC)
+
+	// A real non-streamed Responses reply: a reasoning item carrying its text
+	// in content[] with an empty summary, then the assistant message.
+	reply := []byte(`{
+		"id":"resp_1","status":"completed",
+		"output":[
+			{"type":"reasoning","id":"rs_1","summary":[],"content":[{"type":"reasoning_text","text":"REPLY_REASONING"}]},
+			{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"REPLY_TEXT"}]}
+		]
+	}`)
 
 	capture := func(ts time.Time, req []byte, headers map[string]string) string {
 		t.Helper()
@@ -412,7 +423,7 @@ func TestCallMessagesReadsOneCapturedRequest(t *testing.T) {
 			CallID:     id,
 			ReqHeaders: headers,
 			ReqBody:    req,
-			RespBody:   []byte("RESPONSE_MUST_NOT_BE_RETURNED"),
+			RespBody:   reply,
 			CreatedAt:  ts,
 		}); err != nil {
 			t.Fatalf("SavePayload: %v", err)
@@ -447,11 +458,112 @@ func TestCallMessagesReadsOneCapturedRequest(t *testing.T) {
 		t.Fatalf("view = model %q, %d system, %d tools, %d messages; want deepseek-flash, 1, 1, 2",
 			view.Model, len(view.System), len(view.Tools), len(view.Messages))
 	}
-
-	if rec := do(h, http.MethodGet, "/api/calls/"+junk+"/messages", "secret", nil); rec.Code != http.StatusOK {
-		t.Errorf("unparseable capture: code = %d, want 200 with an empty view", rec.Code)
+	if len(view.Reply) != 2 {
+		t.Fatalf("reply = %d items, want 2 (reasoning, message): %s", len(view.Reply), rec.Body.String())
 	}
+	for _, want := range []string{"REPLY_REASONING", "REPLY_TEXT"} {
+		if !strings.Contains(string(view.Reply[0])+string(view.Reply[1]), want) {
+			t.Errorf("reply is missing %s: %s", want, rec.Body.String())
+		}
+	}
+
+	// A call whose request body is unreadable still has a readable response,
+	// and the two are decoded independently.
+	rec = do(h, http.MethodGet, "/api/calls/"+junk+"/messages", "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unparseable capture: code = %d, want 200 with an empty prompt", rec.Code)
+	}
+	var junkView sessionMessagesView
+	decodeBody(t, rec, &junkView)
+	if len(junkView.Messages) != 0 || len(junkView.Reply) != 2 {
+		t.Errorf("unparseable request: %d messages, %d reply items; want 0 and 2", len(junkView.Messages), len(junkView.Reply))
+	}
+
 	if rec := do(h, http.MethodGet, "/api/calls/"+bare+"/messages", "secret", nil); rec.Code != http.StatusNotFound {
 		t.Errorf("uncaptured call: code = %d, want 404", rec.Code)
+	}
+}
+
+// A session view merges REQUESTS, and every request after the first already
+// carries the previous turn's reply inside its own history. Decoding responses
+// there too would render each assistant turn twice, so the reply is the one
+// field the two paths must never agree on — and a call with no reply shape to
+// read still answers with an array rather than a null.
+func TestSessionMessagesCarriesNoReply(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Date(2026, 9, 14, 5, 33, 0, 0, time.UTC)
+
+	id, err := s.AppendCall(calls.Entry{TS: base, SessionID: "sess", Wire: "anthropic/messages", Status: 200})
+	if err != nil {
+		t.Fatalf("AppendCall: %v", err)
+	}
+	if err := s.SavePayload(store.Payload{
+		CallID:    id,
+		ReqBody:   []byte(`{"model":"claude-opus-5","messages":[{"role":"user","content":"hi"}]}`),
+		RespBody:  []byte(`{"role":"assistant","content":[{"type":"text","text":"REPLY_TEXT"}]}`),
+		CreatedAt: base,
+	}); err != nil {
+		t.Fatalf("SavePayload: %v", err)
+	}
+
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
+
+	rec := do(h, http.MethodGet, "/api/sessions/sess/messages", "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("session messages: code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"reply":[]`) {
+		t.Errorf("session messages should carry an empty reply array: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "REPLY_TEXT") {
+		t.Errorf("session messages leaked the response body: %s", rec.Body.String())
+	}
+
+	// The same call read one at a time does surface it.
+	rec = do(h, http.MethodGet, "/api/calls/"+id+"/messages", "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("call messages: code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "REPLY_TEXT") {
+		t.Errorf("call messages should carry the reply: %s", rec.Body.String())
+	}
+}
+
+// Whether the reply came from a stream is recorded fact on the call row, not
+// something to guess from the bytes: the same body read under the wrong flag
+// decodes to nothing.
+func TestCallMessagesReadsStreamFromTheCallRow(t *testing.T) {
+	s := newTestStore(t)
+	base := time.Date(2026, 9, 14, 5, 33, 0, 0, time.UTC)
+	body := "data: " + `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+		"data: " + `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"STREAMED_REPLY"}}` + "\n\n" +
+		"data: " + `{"type":"message_stop"}` + "\n\n"
+
+	capture := func(stream bool) string {
+		t.Helper()
+		id, err := s.AppendCall(calls.Entry{TS: base, SessionID: "sess", Wire: "anthropic/messages", Status: 200, Stream: stream})
+		if err != nil {
+			t.Fatalf("AppendCall: %v", err)
+		}
+		if err := s.SavePayload(store.Payload{
+			CallID:    id,
+			ReqBody:   []byte(`{"model":"claude-opus-5","messages":[{"role":"user","content":"hi"}]}`),
+			RespBody:  []byte(body),
+			CreatedAt: base,
+		}); err != nil {
+			t.Fatalf("SavePayload: %v", err)
+		}
+		return id
+	}
+
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret"})
+
+	rec := do(h, http.MethodGet, "/api/calls/"+capture(true)+"/messages", "secret", nil)
+	if !strings.Contains(rec.Body.String(), "STREAMED_REPLY") {
+		t.Errorf("streamed call should decode its SSE reply: %s", rec.Body.String())
+	}
+	rec = do(h, http.MethodGet, "/api/calls/"+capture(false)+"/messages", "secret", nil)
+	if !strings.Contains(rec.Body.String(), `"reply":[]`) {
+		t.Errorf("an SSE body read as non-streamed has nothing to show: %s", rec.Body.String())
 	}
 }

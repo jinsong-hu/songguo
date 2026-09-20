@@ -10,16 +10,23 @@ import styles from '../pages/Detail.module.css';
 // prompt view (GET /api/sessions/{id}/messages or /api/calls/{id}/messages).
 // Shared by the session page, which merges every request, and the request page,
 // which shows the one prompt that call sent.
+//
+// showResponse adds the Response panel, and only the request page sets it. The
+// backend fills `reply` for a single call alone — a session merges requests,
+// each of which already carries the previous turn's reply in its history — so
+// on a session the panel could only ever render empty.
 export function PromptReconstructionCard({
   prompt,
   loading,
   error,
   onRetry,
+  showResponse = false,
 }: {
   prompt: PromptReconstruction | null;
   loading: boolean;
   error?: string | null;
   onRetry: () => void;
+  showResponse?: boolean;
 }) {
   if (error) return <ErrorBanner message={error} onRetry={onRetry} />;
 
@@ -29,6 +36,7 @@ export function PromptReconstructionCard({
         <Skeleton height={180} />
         <Skeleton height={180} />
         <Skeleton height={220} />
+        {showResponse ? <Skeleton height={180} /> : null}
       </div>
     );
   }
@@ -97,17 +105,56 @@ export function PromptReconstructionCard({
           <div className={styles.promptEmpty}>No messages captured.</div>
         )}
       </details>
+
+      {showResponse ? (
+        <details className={styles.promptPanel}>
+          <summary className={styles.promptPanelHead}>
+            <span className={styles.promptPanelTitle}>
+              <ChevronRight size={15} className={styles.promptChevron} />
+              Response
+            </span>
+            <span className="chip chip-mono">{prompt.reply.length}</span>
+          </summary>
+          {prompt.reply.length > 0 ? (
+            <div className={styles.messageTimeline}>
+              {prompt.reply.map((message, i) => (
+                <MessageCard key={`${message.role}-${i}`} message={message} index={i} scope="reply" />
+              ))}
+            </div>
+          ) : (
+            <div className={styles.promptEmpty}>No response captured for this call.</div>
+          )}
+        </details>
+      ) : null}
     </div>
   );
 }
 
-function MessageCard({ message, index }: { message: PromptMessage; index: number }) {
+function MessageCard({
+  message,
+  index,
+  scope = 'prompt',
+}: {
+  message: PromptMessage;
+  index: number;
+  // scope namespaces the part DOM ids. The reply renders the same components as
+  // the prompt on the same page, so without it both panels would mint
+  // "prompt-message-0-part-0" and every jump would land on whichever came first.
+  scope?: string;
+}) {
   return (
     <div className={styles.messageCard}>
       <div className={styles.messageRole}>{message.role}</div>
       <div className={styles.messageContent}>
         {message.parts.map((part, i) => (
-          <MessagePartView key={i} part={part} domId={messagePartDomId(index, [i])} path={[i]} messageIndex={index} />
+          <MessagePartView
+            key={i}
+            part={part}
+            domId={messagePartDomId(index, [i], scope)}
+            path={[i]}
+            messageIndex={index}
+            scope={scope}
+          />
         ))}
       </div>
     </div>
@@ -119,11 +166,13 @@ function MessagePartView({
   domId,
   messageIndex,
   path,
+  scope = 'prompt',
 }: {
   part: MessagePart;
   domId: string;
   messageIndex: number;
   path: number[];
+  scope?: string;
 }) {
   if (part.kind === 'text') {
     return (
@@ -187,9 +236,10 @@ function MessagePartView({
               <MessagePartView
                 key={i}
                 part={child}
-                domId={messagePartDomId(messageIndex, [...path, i])}
+                domId={messagePartDomId(messageIndex, [...path, i], scope)}
                 messageIndex={messageIndex}
                 path={[...path, i]}
+                scope={scope}
               />
             ))}
           </div>
@@ -220,6 +270,37 @@ function MessagePartView({
       <div id={domId} className={styles.messageEmptyPart}>
         <span>{part.label}</span>
         <CopyButton value={messagePartCopyText(part)} ariaLabel="Copy block" className={styles.messagePartCopy} />
+      </div>
+    );
+  }
+  if (part.kind === 'raw' && isReasoningLabel(part.label)) {
+    // Reasoning is usually an order of magnitude longer than the answer it
+    // precedes, so it opens closed: expanded by default it buries the reply.
+    // Only the text is rendered — an encrypted_content or signature field is
+    // opaque bytes, and is one click away in the trace panel for anyone who
+    // wants it.
+    const text = reasoningPartText(part);
+    return (
+      <div id={domId} className={styles.messageToolBlock}>
+        <details className={styles.messageReasoning}>
+          <summary className={`${styles.messageToolHead} ${styles.messageReasoningHead}`}>
+            <span className={styles.messageToolTitle}>
+              <ChevronRight size={14} className={styles.messageReasoningChevron} />
+              <span>Thinking</span>
+              {part.label !== 'thinking' ? <span className={styles.messageToolName}>{part.label}</span> : null}
+            </span>
+          </summary>
+          <div className={styles.messageToolContent}>
+            {text ? (
+              <div className={styles.messagePartBlock}>
+                <CopyButton value={text} ariaLabel="Copy thinking" className={styles.messagePartCopy} />
+                <pre className={styles.messageText}>{text}</pre>
+              </div>
+            ) : (
+              <div className={styles.promptEmpty}>No readable thinking text in this block.</div>
+            )}
+          </div>
+        </details>
       </div>
     );
   }
@@ -320,6 +401,14 @@ export interface PromptReconstruction {
   system: string[];
   tools: ToolInfo[];
   messages: PromptMessage[];
+  /**
+   * The assistant turn decoded from the call's captured response. Deliberately
+   * absent from `blocks`: those describe the INPUT window that fed the context
+   * sunburst and the token estimates, and a reply counted there would inflate
+   * every context number on the page with tokens the request never carried.
+   * Always empty on the session page.
+   */
+  reply: PromptMessage[];
   blocks: PromptBlock[];
   /** Oldest request bodies left unread over the backend's read budget. */
   omittedRequests: number;
@@ -371,6 +460,10 @@ export function parsePromptReconstruction(source: SessionMessages): PromptRecons
     compositionBlockHash('tool_schemas', tool.name || 'unknown', tool.name || 'Tool schema', tool.hashText),
   );
   const messages = source.messages.map(promptMessage).filter((message) => message.parts.length > 0);
+  // The reply goes through the same renderer as the prompt because the backend
+  // hands it back in the same item shape — that is the whole point of decoding
+  // it wire-side rather than here.
+  const reply = (source.reply ?? []).map(promptMessage).filter((message) => message.parts.length > 0);
 
   const prompt = {
     model: source.model,
@@ -381,6 +474,7 @@ export function parsePromptReconstruction(source: SessionMessages): PromptRecons
   };
   return {
     ...prompt,
+    reply,
     blocks: promptBlocks(prompt),
   };
 }
@@ -398,7 +492,9 @@ function mergeUnique<T>(existing: T[], next: T[], keyOf: (item: T) => string): T
   return merged;
 }
 
-function promptBlocks(prompt: Omit<PromptReconstruction, 'blocks'>): PromptBlock[] {
+// promptBlocks weighs the INPUT window only, so `reply` is excluded at the type
+// level rather than by remembering not to read it.
+function promptBlocks(prompt: Omit<PromptReconstruction, 'blocks' | 'reply'>): PromptBlock[] {
   const out: PromptBlock[] = [];
 
   prompt.system.forEach((block, i) => {
@@ -505,7 +601,7 @@ function collectPartBlocks(
     });
     return;
   }
-  if (part.kind === 'raw' && (part.label.includes('thinking') || part.label === 'reasoning')) {
+  if (part.kind === 'raw' && isReasoningLabel(part.label)) {
     const text = reasoningPartText(part);
     if (!text) return;
     const title = part.label;
@@ -616,16 +712,32 @@ function partTitle(part: MessagePart): string {
   return messagePartCopyText(part).split('\n')[0] || 'Message block';
 }
 
+// isReasoningLabel names the block types that carry a model's own reasoning:
+// Anthropic's thinking and redacted_thinking blocks, and the Responses API's
+// top-level reasoning item.
+function isReasoningLabel(label: string): boolean {
+  return label.includes('thinking') || label === 'reasoning';
+}
+
+// reasoningPartText reads whichever field this vendor put the reasoning in.
+// The three probes are not alternatives to pick between — a Responses reasoning
+// item routinely arrives with `summary: []` and its whole text in
+// `content: [{type:"reasoning_text", …}]`, so stopping at the summary returns
+// the empty string for a block several thousand characters long.
 function reasoningPartText(part: Extract<MessagePart, { kind: 'raw' }>): string {
   if (!isRecord(part.raw)) return '';
-  if (typeof part.raw.thinking === 'string') return part.raw.thinking;
-  if (Array.isArray(part.raw.summary)) {
-    return part.raw.summary
-      .map((item) => (isRecord(item) && typeof item.text === 'string' ? item.text : ''))
-      .filter(Boolean)
-      .join('\n');
-  }
-  return '';
+  if (typeof part.raw.thinking === 'string' && part.raw.thinking !== '') return part.raw.thinking;
+  const summary = reasoningTexts(part.raw.summary);
+  if (summary) return summary;
+  return reasoningTexts(part.raw.content);
+}
+
+function reasoningTexts(value: unknown): string {
+  if (!Array.isArray(value)) return '';
+  return value
+    .map((item) => (isRecord(item) && typeof item.text === 'string' ? item.text : ''))
+    .filter(Boolean)
+    .join('\n');
 }
 
 export function snippet(text: string): string {
@@ -917,6 +1029,16 @@ function promptMessage(raw: unknown): PromptMessage {
       parts: [functionCallPart(raw)],
     };
   }
+  if (type === 'reasoning') {
+    // A top-level Responses reasoning item declares no role. Falling through
+    // would label the card "reasoning" as if that were a speaker; it is the
+    // assistant thinking, so it renders as one reasoning part of an assistant
+    // turn — the same shape Anthropic sends inline.
+    return {
+      role: 'assistant',
+      parts: [{ kind: 'raw', label: 'reasoning', raw: stripCacheControl(raw) }],
+    };
+  }
   if (type === 'function_call_output') {
     return {
       role: 'tool',
@@ -1107,8 +1229,8 @@ function toolBlockDomId(index: number): string {
   return `prompt-tool-${index}`;
 }
 
-function messagePartDomId(messageIndex: number, path: number[]): string {
-  return `prompt-message-${messageIndex}-part-${path.join('-')}`;
+function messagePartDomId(messageIndex: number, path: number[], scope = 'prompt'): string {
+  return `${scope}-message-${messageIndex}-part-${path.join('-')}`;
 }
 
 function toolPartDomId(kind: 'use' | 'result', id: string): string {
