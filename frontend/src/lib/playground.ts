@@ -52,6 +52,11 @@ const TEST_KIND: Record<string, TestKind> = {
   // Only the HTTP unidirectional TTS is fetch-drivable; the WebSocket stream and
   // bidirectional variants stay on the curl fallback.
   'volc/tts-unidirectional': 'tts',
+  // typesafe/systemone is deliberately absent: a System One call is a state plus
+  // a map of typed questions, which none of the panels above can express. It
+  // falls through to the honest "not interactively testable" panel and its curl
+  // /Python snippets — both of which build a real question below — rather than a
+  // prompt box that would send the wrong shape.
 };
 
 // The endpoint label per wire. <provider> is a placeholder the media panels
@@ -72,6 +77,7 @@ const TEST_ENDPOINT: Record<string, string> = {
   'volc/tts-unidirectional-stream': 'WS /api/v3/tts/unidirectional-stream',
   'volc/tts-bidirectional': 'WS /api/v3/tts/bidirection',
   'volc/voice-clone': 'POST /api/v3/tts/voice_clone',
+  'typesafe/systemone': 'POST /v1/systemone',
 };
 
 // Wires deliberately kept off the test card. Voice cloning trains a billed
@@ -180,10 +186,23 @@ export function snippetFor(wire: string, opts: SnippetOpts): string {
     case 'openai/responses':
     case 'openai/completions':
     case 'openai/chat':
+    case 'typesafe/systemone':
       return modelRoutedSnippet(wire, opts);
     default:
       return defaultSnippet(opts);
   }
+}
+
+/**
+ * The example input for a model-routed wire's snippet. Embeddings gets a phrase
+ * worth embedding, System One a state worth judging ("Hello!" is not urgent,
+ * ambiguous, or anything else — it would demo the wire with a question that has
+ * no interesting answer), and the chat wires a greeting.
+ */
+function samplePromptFor(wire: string): string {
+  if (wire === 'openai/embeddings') return 'The quick brown fox';
+  if (wire === 'typesafe/systemone') return SYSTEM_ONE_STATE;
+  return 'Hello!';
 }
 
 function bearer(token?: string): string {
@@ -198,8 +217,7 @@ function providerLines(providerId: string | undefined, required: boolean): strin
 }
 
 function modelRoutedSnippet(wire: string, { model, origin, token, providerId }: SnippetOpts): string {
-  const prompt = wire === 'openai/embeddings' ? 'The quick brown fox' : 'Hello!';
-  const req = buildTestRequest(model, wire, prompt);
+  const req = buildTestRequest(model, wire, samplePromptFor(wire));
   const headers = [bearer(token), ...providerLines(providerId, false), `-H "Content-Type: application/json"`];
   return `curl ${origin}${req.path} \\
   ${headers.join(' \\\n  ')} \\
@@ -432,6 +450,7 @@ function pythonSnippetFor(wire: string, opts: SnippetOpts): string {
     case 'openai/responses':
     case 'openai/completions':
     case 'openai/chat':
+    case 'typesafe/systemone':
       return pyModelRoutedSnippet(wire, opts);
     default:
       return pyDefaultSnippet(opts);
@@ -443,8 +462,7 @@ function pyProviderPair(providerId?: string): Array<[string, string]> {
 }
 
 function pyModelRoutedSnippet(wire: string, { model, origin, token, providerId }: SnippetOpts): string {
-  const prompt = wire === 'openai/embeddings' ? 'The quick brown fox' : 'Hello!';
-  const req = buildTestRequest(model, wire, prompt);
+  const req = buildTestRequest(model, wire, samplePromptFor(wire));
   const headers = pyHeaders([
     ['Authorization', `Bearer ${pyToken(token)}`],
     ...pyProviderPair(providerId),
@@ -641,11 +659,28 @@ export interface TestRequest {
   body: Record<string, unknown>;
 }
 
+/**
+ * The example System One call: a state plus one typed question. Shared by
+ * buildTestRequest and samplePromptFor so the curl and Python snippets show the
+ * same thing.
+ */
+const SYSTEM_ONE_STATE = 'Help! My payouts have been failing for 3 days.';
+const SYSTEM_ONE_QUESTIONS = {
+  is_urgent: { type: 'noul', instructions: 'Does this convey urgency?' },
+};
+
 /** Pick the request shape for a chat/embedding wire. */
 export function buildTestRequest(model: string, wire: string, prompt: string): TestRequest {
   switch (wire) {
     case 'openai/embeddings':
       return { path: '/v1/embeddings', body: { model, input: prompt } };
+    // System One takes a state and a map of typed questions — there is no
+    // message array and no prompt field, so the caller's text becomes the state.
+    case 'typesafe/systemone':
+      return {
+        path: '/v1/systemone',
+        body: { state: prompt, model, questions: SYSTEM_ONE_QUESTIONS },
+      };
     case 'anthropic/messages':
       return {
         path: '/v1/messages',

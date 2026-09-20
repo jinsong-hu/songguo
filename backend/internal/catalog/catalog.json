@@ -1294,6 +1294,96 @@
       }
     ]
   },
+  "typesafe": {
+    "id": "typesafe",
+    "name": "TypeSafe AI",
+    "doc": "https://typesafe.ai",
+    "models": {
+      "jev-1.13.0": {
+        "id": "jev-1.13.0",
+        "name": "Jev",
+        "family": "jev",
+        "note": "Hand-maintained: models.dev publishes no TypeSafe provider, so nothing here is generated and nothing refreshes it. Rate is the published $42/Btok input = $0.042 per 1M. The output 0 is a PUBLISHED zero — TypeSafe bills output tokens at nothing — not an absent rate; input carries the price, so the model is priced and never falls back to the provider ceiling. No release_date: TypeSafe publishes none, and guessing one would invent a fact.",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 64000
+        },
+        "cost": {
+          "input": 0.042,
+          "output": 0
+        }
+      },
+      "jev-latest": {
+        "id": "jev-latest",
+        "name": "Jev (latest)",
+        "family": "jev",
+        "note": "Alias for the current Jev build, priced in its own right because the ledger records the model string as the CALLER sent it — an unpriced alias would meter at the provider-ceiling fallback instead of Jev's rate.",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 64000
+        },
+        "cost": {
+          "input": 0.042,
+          "output": 0
+        }
+      },
+      "jev-preview": {
+        "id": "jev-preview",
+        "name": "Jev (preview)",
+        "family": "jev",
+        "note": "Alias for the next Jev build, priced for the same reason as jev-latest. TypeSafe publishes no separate preview rate; if that changes, this entry is where it goes.",
+        "modalities": {
+          "input": [
+            "text"
+          ],
+          "output": [
+            "text"
+          ]
+        },
+        "limit": {
+          "context": 64000
+        },
+        "cost": {
+          "input": 0.042,
+          "output": 0
+        }
+      }
+    },
+    "endpoints": [
+      {
+        "wire": "typesafe/systemone",
+        "endpoint": "https://api.typesafe.ai/v1/systemone",
+        "adapter": "openai-compatible",
+        "docs": "https://docs.typesafe.ai",
+        "note": "System One is not chat: you POST a state plus a map of typed questions and get typed answers (noul / choice / score) with calibrated probabilities. No message array, no generated text, no streaming. The adapter is openai-compatible because TypeSafe's scheme IS Authorization: Bearer — a separate adapter constant would split (origin, adapter) grouping for no behavioural difference.",
+        "models": [
+          "jev-1.13.0",
+          "jev-latest",
+          "jev-preview"
+        ]
+      },
+      {
+        "wire": "openai/models",
+        "endpoint": "https://api.typesafe.ai/v1",
+        "adapter": "openai-compatible",
+        "note": "Reuses openai/models rather than adding a typesafe/models: two wires claiming the /models suffix route ambiguously, which is why anthropic/models was deleted. TypeSafe's listing shape differs ({\"models\":[{name,description,release_date}]} rather than {\"data\":[…]}), and that never matters — the wire is ZeroCost and never parses the body, so the response is forwarded verbatim."
+      }
+    ]
+  },
   "azure-openai": {
     "id": "azure-openai",
     "name": "Azure OpenAI",

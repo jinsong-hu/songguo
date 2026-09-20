@@ -119,7 +119,7 @@ Two consequences:
 - **Paths are always native — there is no `/x/<provider>/` prefix.** A model-less endpoint is reached at its plain vendor path (`GET /v1/models`, `POST /api/v3/tts/unidirectional`); the provider comes from the header or the default, never the path.
 - **Bare `GET /v1/models` works** and returns the selected provider's list. That is a passthrough of *one* provider's response — Songguo still never aggregates lists across providers (a merged list would be a synthesized response = transform).
 
-## The registry — everything supported today (17 wires)
+## The registry — everything supported today (18 wires)
 
 One row per wire. **Endpoint** = the native path the consumer calls; **bold** marks the suffix that's actually matched (the prefix is conventional). **Providers** = example vendors that speak the wire — the real set is operator-configured in SQLite, not fixed here. **Routing** = how the provider is picked once the wire is matched (full order is always `header → model → default`; see [Provider selection](#provider-selection)). `exact model` = model-bearing, keyed on the body `model`; `header · default` = model-less, no model step.
 
@@ -135,6 +135,7 @@ One row per wire. **Endpoint** = the native path the consumer calls; **bold** ma
 | `POST /v1`**`/messages`** | `anthropic/messages` | Anthropic | exact `model` |
 | `POST /v1`**`/messages/count_tokens`** | `anthropic/count_tokens` | Anthropic | exact `model` |
 | `GET /v1`**`/models`** | `anthropic/models` | Anthropic | header · default |
+| `POST /v1`**`/systemone`** | `typesafe/systemone` | TypeSafe AI | exact `model` |
 | `POST /api/v3`**`/tts/unidirectional`** | `volc/tts` | Volcengine | header · default |
 | `POST /api/v3`**`/tts/voice_clone`** · `GET /api/v3`**`/tts/get_voice`** | `volc/voice-clone` | Volcengine | header · default |
 | `POST /api/v3`**`/auc/bigmodel/submit`** · `POST /api/v3`**`/auc/bigmodel/query`** | `volc/asr` | Volcengine | header · default |
@@ -175,6 +176,7 @@ Read-only by design: if a usage shape isn't recognized the call still succeeds w
 - **`openai/responses`** — `usage.input_tokens` (cache-inclusive) + `output_tokens` + `input_tokens_details.cached_tokens`; `input_tokens = input_tokens − cached` (fresh), `output_tokens_details.reasoning_tokens` → `thinking_tokens`. Streaming usage rides the `response.completed` event under `response.usage`.
 - **`anthropic/messages`** — the reference shape: `input_tokens` (already fresh) + `cache_read_input_tokens` + `cache_creation_input_tokens` mapped straight through as three disjoint fields (cache-create bills at the model's `cache_write` rate, else `input`); `output_tokens_details.thinking_tokens` → `thinking_tokens`. Streaming merges `message_start.message.usage` (input) with `message_delta.usage` (output).
 - **`openai/images-generate`, `openai/images-edit`** — whichever the vendor reported. A top-level `usage` (OpenAI's images API returns `input_tokens` + `output_tokens`, with a text/image split in `*_tokens_details`) is normalized like `openai/chat` and priced per token; a response without one falls back to `Calls = 1` for the per-call vendors (Ark Seedream). The text/image **input** split is not modeled — `Normalized` has one input axis, so image-input tokens bill at the text-input rate, which under-bills. Before this hybrid, both wires were per-call only, so a token-priced image model metered $0.
+- **`typesafe/systemone`** — flat top-level `usage`: `input_tokens` + `output_tokens`, mapped straight through. TypeSafe publishes no cache and no reasoning axis, so those stay zero rather than being inferred; input is fresh by construction (there is no cache to be inclusive of), so nothing is subtracted. No streaming mode exists, so the wire registers no scanner.
 - **`volc/tts`** — `usage.text_words` → `Chars` (per-char); streamed as NDJSON, and only returned when the client sets `X-Control-Require-Usage-Tokens-Return`, else coarse/unknown.
 - **`volc/asr`** — `audio_info.duration` (ms) → `Seconds` (per-second); the `submit` ack has no `audio_info` (meters zero), the `query` poll bills.
 - **`anthropic/count_tokens`** — zero-cost: Anthropic bills token counting as free, so the call is logged (for observability) but never priced; the response (`{"input_tokens":N}`, no `usage` object) is not parsed.
@@ -465,9 +467,13 @@ Derived from the wire name prefix — the operator never picks it. This is the
 
 | Adapter | Wires | Scheme |
 |---|---|---|
-| `openai-compatible` | `openai/*` | `Authorization: Bearer <key>` |
+| `openai-compatible` | `openai/*`, `typesafe/*` | `Authorization: Bearer <key>` |
 | `anthropic-compatible` | `anthropic/*` | `x-api-key: <key>` + `anthropic-version` header |
 | `volc-speech` | `volc/*` | `x-api-key: <key>` |
+
+TypeSafe rides `openai-compatible` because its scheme **is** `Authorization: Bearer` —
+the adapter names an auth scheme, not a vendor, and minting a second constant with
+identical behavior would only split the `(origin, adapter)` vendor grouping.
 
 **Ingress** (how the *client* presents its songguo key) is independent of the wire:
 songguo reads it from `Authorization: Bearer <key>` **or** `X-Api-Key: <key>`

@@ -34,4 +34,19 @@ describe('wireTests', () => {
   it('still drops management and deliberately untested wires', () => {
     expect(ids(['openai/models', 'volc/voice-clone', 'openai/chat'])).toEqual(['openai/chat']);
   });
+
+  it('offers System One, behind the wires that have an interactive panel', () => {
+    // typesafe/systemone has no panel (a state plus typed questions fits none of
+    // them), so it renders the snippet fallback — but it is model-serving, so it
+    // must still be listed rather than dropped like a management wire.
+    expect(ids(['typesafe/systemone', 'openai/chat'])).toEqual(['openai/chat', 'typesafe/systemone']);
+    expect(wireTests(['typesafe/systemone'])).toEqual([
+      {
+        wire: 'typesafe/systemone',
+        label: 'System One',
+        kind: 'unsupported',
+        endpoint: 'POST /v1/systemone',
+      },
+    ]);
+  });
 });

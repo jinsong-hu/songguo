@@ -24,6 +24,7 @@ const WIRE_NAMES: Record<string, string> = {
   'volc/asr-stream-async': 'ASR (streaming)',
   'volc/asr-stream-nostream': 'ASR (streaming, final-only)',
   'volc/voice-clone': 'Voice cloning',
+  'typesafe/systemone': 'System One',
 };
 
 // The vendor that owns each wire family. The owner shows the bare wire name
@@ -34,6 +35,7 @@ const WIRE_OWNER: Record<string, { id: string; name: string }> = {
   anthropic: { id: 'anthropic', name: 'Anthropic' },
   ark: { id: 'volcengine', name: 'Volcengine' },
   volc: { id: 'volcengine', name: 'Volcengine' },
+  typesafe: { id: 'typesafe', name: 'TypeSafe' },
 };
 
 // wireName labels a wire ("openai/chat" → "Chat Completions"). Pass the vendor
@@ -77,6 +79,13 @@ const WIRE_KIND: Record<string, string> = {
   'volc/asr-stream-async': 'stt',
   'volc/asr-stream-nostream': 'stt',
   'volc/voice-clone': 'tts',
+  // System One answers typed questions rather than generating messages, so no
+  // kind here really fits. It is filed as chat because "" means "management
+  // wire, serves no models" (wireServesModels) — which would drop Jev out of
+  // model routing in the UI — and chat is the only kind that keeps a
+  // text-in/text-out model visible. The backend wire is filed the same way so
+  // the two halves cannot disagree.
+  'typesafe/systemone': 'chat',
 };
 
 export function wireKind(wire: string): string {
