@@ -41,10 +41,10 @@ export function RequestDetailPage() {
   // that can read that shape — and swaps rather than adds, so it stays at one
   // captured-body read either way.
   const isSystemOne = data?.wire === 'typesafe/systemone';
-  const messages = useFetch(() => api.callMessages(callId), [callId], {
+  const messages = useFetch((signal) => api.callMessages(callId, signal), [callId], {
     enabled: valid && !!data?.has_trace && !isSystemOne,
   });
-  const systemOne = useFetch(() => api.callSystemOne(callId), [callId], {
+  const systemOne = useFetch((signal) => api.callSystemOne(callId, signal), [callId], {
     enabled: valid && !!data?.has_trace && isSystemOne,
   });
   const prompt = useMemo(

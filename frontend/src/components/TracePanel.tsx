@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { ChevronRight } from 'lucide-react';
 import { api } from '../api/client';
 import type { CallEntry, CallTrace, TraceSide } from '../api/types';
 import { CopyButton } from './CopyButton';
@@ -8,13 +10,27 @@ import { useFetch } from '../lib/useFetch';
 import styles from '../pages/ActivityFeed.module.css';
 
 /**
- * TracePanel renders the captured request/response payload for a call, lazily
- * fetched. Shared by the request-detail page (and previously the inline calls
- * table). Shows a note when no payload was captured.
+ * TracePanel renders the captured request/response payload for a call, behind a
+ * disclosure that fetches nothing until it is opened. Shows a note when no
+ * payload was captured.
+ *
+ * The disclosure is the point, not decoration. This is the largest read the
+ * dashboard makes — both BLOB columns of one `raw` row — and a captured agent
+ * turn is thousands of overflow pages that SQLite walks one dependent read at a
+ * time, on a disk the rest of the box shares. It used to fire on page load,
+ * concurrently with the /messages fetch beside it, so every open of a call
+ * detail page read the same multi-MB row twice before anyone had asked to see
+ * the bytes.
+ *
+ * What makes closed-by-default the right default rather than a tax: the
+ * PromptReconstruction card above already renders both halves of the turn
+ * formatted — what was sent and what came back. The raw JSON here is the
+ * fallback for when that rendering is not enough, so it is worth one click.
  */
 export function TracePanel({ entry }: { entry: CallEntry }) {
-  const trace = useFetch<CallTrace>(() => api.trace(entry.id), [entry.id], {
-    enabled: entry.has_trace,
+  const [open, setOpen] = useState(false);
+  const trace = useFetch<CallTrace>((signal) => api.trace(entry.id, signal), [entry.id], {
+    enabled: entry.has_trace && open,
   });
 
   if (!entry.has_trace) {
@@ -30,6 +46,34 @@ export function TracePanel({ entry }: { entry: CallEntry }) {
     );
   }
 
+  return (
+    <details
+      className={styles.traceDisclosure}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+    >
+      <summary className={styles.traceDisclosureHead}>
+        <ChevronRight size={15} className={styles.traceChevron} />
+        <span>Raw request and response</span>
+        <span className={styles.traceDisclosureHint}>reads the stored body</span>
+      </summary>
+      <TraceBody entry={entry} trace={trace} />
+    </details>
+  );
+}
+
+/**
+ * TraceBody is the opened disclosure's contents. It is a separate component so
+ * the fetch states render inside the <details> rather than in place of it —
+ * otherwise an error or a slow load would replace the summary the reader just
+ * clicked, and there would be nothing left to close.
+ */
+function TraceBody({
+  entry,
+  trace,
+}: {
+  entry: CallEntry;
+  trace: ReturnType<typeof useFetch<CallTrace>>;
+}) {
   if (trace.error) {
     return (
       <div className={styles.tracePanel}>

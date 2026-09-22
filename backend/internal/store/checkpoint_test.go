@@ -109,7 +109,7 @@ func TestCloseKeepsUncheckpointedWrites(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer s2.Close()
-	got, err := s2.GetPayload(id)
+	got, err := s2.GetPayload(t.Context(), id)
 	if err != nil || !bytes.Equal(got.ReqBody, body) {
 		t.Fatalf("payload after reopen: err %v, %d bytes (want %d identical)", err, len(got.ReqBody), len(body))
 	}

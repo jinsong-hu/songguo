@@ -365,11 +365,11 @@ func TestSessionTitleFallbackSkipsLargeBodies(t *testing.T) {
 	large := add(base, titleReq+strings.Repeat(" ", titleCandidateMaxBytes))
 
 	a := newAPI(Deps{Store: s})
-	if got := a.sessionTitleFromEntries("t", []calls.Entry{large}); got != "" {
+	if got := a.sessionTitleFromEntries(t.Context(), "t", []calls.Entry{large}); got != "" {
 		t.Fatalf("title = %q from a body over titleCandidateMaxBytes, want it skipped", got)
 	}
 	small := add(base.Add(time.Minute), titleReq)
-	if got := a.sessionTitleFromEntries("t", []calls.Entry{large, small}); got != "Found the title" {
+	if got := a.sessionTitleFromEntries(t.Context(), "t", []calls.Entry{large, small}); got != "Found the title" {
 		t.Fatalf("title = %q, want the small title request's", got)
 	}
 }

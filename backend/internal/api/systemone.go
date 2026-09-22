@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -21,8 +22,11 @@ type systemOneView struct {
 }
 
 func (a *api) handleCallSystemOne(w http.ResponseWriter, r *http.Request) {
-	view, err := a.callSystemOneData(r.PathValue("id"))
+	view, err := a.callSystemOneData(r.Context(), r.PathValue("id"))
 	if err != nil {
+		if r.Context().Err() != nil {
+			return // the viewer left; nobody to answer
+		}
 		a.writeDataErr(w, "get call system one", err)
 		return
 	}
@@ -32,16 +36,21 @@ func (a *api) handleCallSystemOne(w http.ResponseWriter, r *http.Request) {
 // callSystemOneData parses one call's captured bodies as System One, or returns
 // a *apiError (404) when no payload was captured for it.
 //
-// This is a point lookup on one row — the same read /messages and /trace
-// already do from this page — not the session-wide read the shed rules bound,
-// so it carries no a.shedding() gate and no bodyReads semaphore, matching
-// handleCallMessages.
+// It reads a captured body, so it passes admitBodyRead like every other reader
+// that does. Being a point lookup on one row bounds the number of rows, not the
+// bytes, and the bytes are what the disk charges for.
 //
 // A capture that is not a System One shape reads as an empty view rather than
 // an error, exactly as callMessagesData does: the parse is best-effort by
 // contract, and a body we could not read is not a missing call.
-func (a *api) callSystemOneData(id string) (systemOneView, error) {
-	p, err := a.store.GetPayload(id)
+func (a *api) callSystemOneData(ctx context.Context, id string) (systemOneView, error) {
+	release, err := a.admitBodyRead(ctx)
+	if err != nil {
+		return emptySystemOneView(), err
+	}
+	defer release()
+
+	p, err := a.store.GetPayload(ctx, id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return emptySystemOneView(), notFoundErr("trace not found")

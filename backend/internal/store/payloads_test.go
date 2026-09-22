@@ -44,7 +44,7 @@ func TestPayloadRoundTrip(t *testing.T) {
 		t.Fatalf("SavePayload: %v", err)
 	}
 
-	got, err := s.GetPayload(callID)
+	got, err := s.GetPayload(t.Context(), callID)
 	if err != nil {
 		t.Fatalf("GetPayload: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestPayloadRoundTrip(t *testing.T) {
 	if err := s.SavePayload(in); err != nil {
 		t.Fatalf("SavePayload (replace): %v", err)
 	}
-	got2, err := s.GetPayload(callID)
+	got2, err := s.GetPayload(t.Context(), callID)
 	if err != nil {
 		t.Fatalf("GetPayload (after replace): %v", err)
 	}
@@ -86,7 +86,7 @@ func TestPayloadRoundTrip(t *testing.T) {
 
 func TestGetPayloadNotFound(t *testing.T) {
 	s := openTestStore(t)
-	if _, err := s.GetPayload("nonexistent"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.GetPayload(t.Context(), "nonexistent"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("GetPayload(missing) err = %v, want ErrNotFound", err)
 	}
 }

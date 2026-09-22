@@ -281,9 +281,11 @@ export const api = {
   /** Fetch one session's rollups, agent tree, and calls. 404 if absent. */
   session: (id: string) => request<SessionDetail>(`/sessions/${encodeURIComponent(id)}`),
 
-  /** Fetch compact prompt material reconstructed from captured session requests. */
-  sessionMessages: (id: string) =>
-    request<SessionMessages>(`/sessions/${encodeURIComponent(id)}/messages`),
+  /** Fetch compact prompt material reconstructed from captured session requests.
+   *  Takes a signal: this reads stored bodies, and a reader who has navigated
+   *  away should stop the gateway paying for it (see useFetch). */
+  sessionMessages: (id: string, signal?: AbortSignal) =>
+    request<SessionMessages>(`/sessions/${encodeURIComponent(id)}/messages`, { signal }),
 
   /** Aggregated context-window composition over a range (Overview sunburst). */
   contextComposition: (since: number, until: number, filter?: UsageFilter) =>
@@ -297,15 +299,16 @@ export const api = {
     request<SessionContext>(`/sessions/${encodeURIComponent(id)}/context${qs({ agent: agent || undefined })}`),
 
   /** One call's own system/tools/messages, in the session messages shape. 404 if not captured. */
-  callMessages: (id: string) =>
-    request<SessionMessages>(`/calls/${encodeURIComponent(id)}/messages`),
+  callMessages: (id: string, signal?: AbortSignal) =>
+    request<SessionMessages>(`/calls/${encodeURIComponent(id)}/messages`, { signal }),
 
   /** One System One call's state, questions and answers. 404 if not captured. */
-  callSystemOne: (id: string) =>
-    request<SystemOneCall>(`/calls/${encodeURIComponent(id)}/systemone`),
+  callSystemOne: (id: string, signal?: AbortSignal) =>
+    request<SystemOneCall>(`/calls/${encodeURIComponent(id)}/systemone`, { signal }),
 
   /** Fetch the captured request/response trace for a call (UUID). 404 if none. */
-  trace: (id: string) => request<CallTrace>(`/calls/${encodeURIComponent(id)}/trace`),
+  trace: (id: string, signal?: AbortSignal) =>
+    request<CallTrace>(`/calls/${encodeURIComponent(id)}/trace`, { signal }),
 
   users: () => request<User[]>('/users'),
 

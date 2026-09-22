@@ -115,7 +115,7 @@ export function SessionDetailPage() {
     return includeUtility ? entries : entries.filter((e) => !isUtilityEntry(e));
   }, [data, includeUtility]);
   const sessionTitle = data?.title || ctx.data?.title || '';
-  const sessionMessages = useFetch(() => api.sessionMessages(id), [id], { enabled: id !== '' });
+  const sessionMessages = useFetch((signal) => api.sessionMessages(id, signal), [id], { enabled: id !== '' });
   const prompt = useMemo(
     () => (sessionMessages.data ? parsePromptReconstruction(sessionMessages.data) : null),
     [sessionMessages.data],

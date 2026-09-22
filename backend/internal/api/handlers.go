@@ -892,8 +892,11 @@ func (a *api) handleCallTrace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "trace not found")
 		return
 	}
-	view, err := a.callTraceData(id)
+	view, err := a.callTraceData(r.Context(), id)
 	if err != nil {
+		if r.Context().Err() != nil {
+			return // the viewer left; nobody to answer
+		}
 		a.writeDataErr(w, "get payload", err)
 		return
 	}
@@ -902,8 +905,19 @@ func (a *api) handleCallTrace(w http.ResponseWriter, r *http.Request) {
 
 // callTraceData returns the captured request/response payload for a call, or a
 // *apiError (404) when no payload was stored for it.
-func (a *api) callTraceData(id string) (traceView, error) {
-	p, err := a.store.GetPayload(id)
+//
+// This is the largest single read the dashboard makes — both BLOB columns of
+// one row, rendered whole — so it goes through admitBodyRead like every other
+// captured-body reader. The request page no longer asks for it on load; the
+// trace card fetches when the reader opens it.
+func (a *api) callTraceData(ctx context.Context, id string) (traceView, error) {
+	release, err := a.admitBodyRead(ctx)
+	if err != nil {
+		return traceView{}, err
+	}
+	defer release()
+
+	p, err := a.store.GetPayload(ctx, id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return traceView{}, notFoundErr("trace not found")
@@ -998,7 +1012,7 @@ func (a *api) callData(id string) (entryView, error) {
 // handleSession returns one session's rollups, agent tree, and calls (404 when
 // no call carries the session id).
 func (a *api) handleSession(w http.ResponseWriter, r *http.Request) {
-	view, err := a.sessionData(r.PathValue("id"))
+	view, err := a.sessionData(r.Context(), r.PathValue("id"))
 	if err != nil {
 		a.writeDataErr(w, "get session", err)
 		return
@@ -1009,7 +1023,7 @@ func (a *api) handleSession(w http.ResponseWriter, r *http.Request) {
 // sessionData aggregates a session's calls into rollups + the main-loop→subagent
 // tree, and returns the calls oldest-first. A *apiError (404) is returned when
 // the session has no calls. Bounded to the store's 1000-call page.
-func (a *api) sessionData(id string) (sessionView, error) {
+func (a *api) sessionData(ctx context.Context, id string) (sessionView, error) {
 	if id == "" {
 		return sessionView{}, notFoundErr("session not found")
 	}
@@ -1096,7 +1110,7 @@ func (a *api) sessionData(id string) (sessionView, error) {
 
 	return sessionView{
 		SessionID:           id,
-		Title:               a.sessionTitleFromEntries(id, entries),
+		Title:               a.sessionTitleFromEntries(ctx, id, entries),
 		Calls:               len(entries),
 		Cost:                cost,
 		InputTokens:         in,
@@ -1148,7 +1162,7 @@ func enrichClientFromHeaders(v *entryView, h map[string]string) {
 	v.ClientOSVersion = ci.OSVersion
 }
 
-func (a *api) sessionTitle(id string) string {
+func (a *api) sessionTitle(ctx context.Context, id string) string {
 	entries, err := a.store.QueryCalls(store.CallFilter{SessionID: id, Limit: 1000})
 	if err != nil || len(entries) == 0 {
 		return ""
@@ -1156,7 +1170,7 @@ func (a *api) sessionTitle(id string) string {
 	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
 		entries[i], entries[j] = entries[j], entries[i]
 	}
-	return a.sessionTitleFromEntries(id, entries)
+	return a.sessionTitleFromEntries(ctx, id, entries)
 }
 
 // Bounds on the title fallback's body reads. Claude Code's title request is a
@@ -1170,20 +1184,28 @@ const (
 	titleProbeBudget       = 8 << 20
 )
 
-func (a *api) sessionTitleFromEntries(id string, entries []calls.Entry) string {
+func (a *api) sessionTitleFromEntries(ctx context.Context, id string, entries []calls.Entry) string {
 	if title, err := a.store.SessionTitle(id); err == nil && title != "" {
 		return title
 	}
-	if a.shedding() {
+	// A session that has a durable title never gets here, so the admission is
+	// taken only on the fallback path — and taken after that check rather than
+	// before it, so the common case does not queue behind another reader for a
+	// title it already has. A missing title is cosmetic: every failure below
+	// returns the empty string rather than failing the page.
+	release, err := a.admitBodyRead(ctx)
+	if err != nil {
 		return ""
 	}
+	defer release()
+
 	var ids []string
 	for _, e := range entries {
 		if e.Wire == "anthropic/messages" {
 			ids = append(ids, e.ID)
 		}
 	}
-	sizes, err := a.store.RequestBodySizes(context.Background(), ids)
+	sizes, err := a.store.RequestBodySizes(ctx, ids)
 	if err != nil {
 		return ""
 	}
@@ -1196,7 +1218,7 @@ func (a *api) sessionTitleFromEntries(id string, entries []calls.Entry) string {
 		if spent += size; spent > titleProbeBudget {
 			return ""
 		}
-		p, err := a.store.GetPayload(callID)
+		p, err := a.store.GetPayload(ctx, callID)
 		if err != nil {
 			continue
 		}
@@ -1325,7 +1347,7 @@ func (a *api) handleSessionContext(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, sessionContextView{
 		SessionID: id,
-		Title:     a.sessionTitle(id),
+		Title:     a.sessionTitle(r.Context(), id),
 		Agent:     sel,
 		Agents:    agents,
 		Turns:     turns,

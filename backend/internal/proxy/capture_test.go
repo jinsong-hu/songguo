@@ -60,7 +60,7 @@ func TestCaptureNonStreaming(t *testing.T) {
 	}
 	callID := callIDForVendor(t, env, "vendorA")
 
-	p, err := st.GetPayload(callID)
+	p, err := st.GetPayload(t.Context(), callID)
 	if err != nil {
 		t.Fatalf("GetPayload: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestCaptureStreaming(t *testing.T) {
 	}
 
 	callID := callIDForVendor(t, env, "vendorA")
-	p, err := st.GetPayload(callID)
+	p, err := st.GetPayload(t.Context(), callID)
 	if err != nil {
 		t.Fatalf("GetPayload: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestCaptureOffStoresNothing(t *testing.T) {
 	resp.Body.Close()
 
 	callID := callIDForVendor(t, env, "vendorA")
-	if _, err := st.GetPayload(callID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := st.GetPayload(t.Context(), callID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected no payload when capture off, got err %v", err)
 	}
 }
@@ -181,7 +181,7 @@ func TestCaptureShedUnderPressure(t *testing.T) {
 	if len(entries) != 1 || entries[0].Status != http.StatusOK || entries[0].InputTokens != 10 {
 		t.Fatalf("call rows = %+v, want one metered 200 — metering is never shed", entries)
 	}
-	if _, err := st.GetPayload(entries[0].ID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := st.GetPayload(t.Context(), entries[0].ID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("payload stored under pressure (err %v); capture should have been shed", err)
 	}
 	if s := mon.Stats(); s.ShedCaptures != 1 {
@@ -310,7 +310,7 @@ func TestCaptureRequestVisibleWhileInFlight(t *testing.T) {
 	if entries[0].Status != calls.StatusPending {
 		t.Errorf("status = %d, want pending while in flight", entries[0].Status)
 	}
-	p, err := st.GetPayload(entries[0].ID)
+	p, err := st.GetPayload(t.Context(), entries[0].ID)
 	if err != nil {
 		t.Fatalf("in-flight request should be captured: GetPayload: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestCaptureRequestVisibleWhileInFlight(t *testing.T) {
 		t.Fatalf("status = %d, want 200", res.status)
 	}
 	env.drain(t)
-	p, err = st.GetPayload(entries[0].ID)
+	p, err = st.GetPayload(t.Context(), entries[0].ID)
 	if err != nil {
 		t.Fatalf("GetPayload after finalize: %v", err)
 	}
@@ -388,7 +388,7 @@ vendors:
 	if len(entries) != 1 {
 		t.Fatalf("call rows = %d, want 1", len(entries))
 	}
-	p, err := st.GetPayload(entries[0].ID)
+	p, err := st.GetPayload(t.Context(), entries[0].ID)
 	if err != nil {
 		t.Fatalf("transport-failed attempt should keep its request capture: %v", err)
 	}
@@ -426,7 +426,7 @@ func TestCaptureDeniedUnmatched(t *testing.T) {
 		t.Fatalf("call rows = %d, want 1", len(rows))
 	}
 	callID := callIDForVendor(t, env, "vendorA")
-	p, err := st.GetPayload(callID)
+	p, err := st.GetPayload(t.Context(), callID)
 	if err != nil {
 		t.Fatalf("denied 404 should be captured: GetPayload: %v", err)
 	}
@@ -457,7 +457,7 @@ func TestCaptureOffDeniedNoPayload(t *testing.T) {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
 	callID := callIDForVendor(t, env, "vendorA")
-	if _, err := st.GetPayload(callID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := st.GetPayload(t.Context(), callID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected no payload when capture off, got %v", err)
 	}
 }

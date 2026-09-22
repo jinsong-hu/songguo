@@ -381,6 +381,7 @@ paths:
               schema: { $ref: "#/components/schemas/Trace" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/SheddingLoad" }
   /api/calls/{id}/messages:
     get:
       tags: [calls]
@@ -396,6 +397,7 @@ paths:
               schema: { $ref: "#/components/schemas/SessionMessages" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/SheddingLoad" }
   /api/calls/{id}/systemone:
     get:
       tags: [calls]
@@ -411,6 +413,7 @@ paths:
               schema: { $ref: "#/components/schemas/SystemOneCall" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/SheddingLoad" }
   /api/sessions/{id}:
     get:
       tags: [calls]
@@ -440,6 +443,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SessionMessages" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "503": { $ref: "#/components/responses/SheddingLoad" }
   /api/sessions/{id}/context:
     get:
       tags: [calls]
@@ -937,6 +941,16 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     Conflict:
       description: Conflict (e.g. duplicate name)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    SheddingLoad:
+      description: >-
+        The gateway is short of disk or memory and has paused reading captured
+        bodies (songguo_shedding_load). Reading a capture is the dashboard's own
+        bookkeeping, on the disk the ledger is short of, so it stands down with
+        it; forwarding is unaffected. Retry once GET /api/status reports the
+        level back at normal.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

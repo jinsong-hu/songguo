@@ -238,8 +238,12 @@ type getCallTraceArgs struct {
 	ID string `json:"id" jsonschema:"the call id (from list_calls)"`
 }
 
-func (a *api) mcpGetCallTrace(_ context.Context, _ *mcp.CallToolRequest, args getCallTraceArgs) (*mcp.CallToolResult, traceView, error) {
-	v, err := a.callTraceData(args.ID)
+// mcpGetCallTrace reads the same captured bodies the dashboard's trace card
+// does, so it takes the same admission — see admitBodyRead. It passes its own
+// ctx rather than discarding it: an MCP client that hangs up mid-tool-call
+// should stop the read it started, exactly as a closed browser tab does.
+func (a *api) mcpGetCallTrace(ctx context.Context, _ *mcp.CallToolRequest, args getCallTraceArgs) (*mcp.CallToolResult, traceView, error) {
+	v, err := a.callTraceData(ctx, args.ID)
 	if err != nil {
 		return nil, traceView{}, err
 	}

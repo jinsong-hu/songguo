@@ -119,15 +119,33 @@ table, which reads every overflow chain under the write lock. Do not add a
 second stored copy of captured content without a reader that needs it.
 
 The dashboard reads captured bodies too, and a read is the same disk and the
-same memory. At any level above `normal` the session Messages view answers `503
-songguo_shedding_load` and the session-title fallback stops probing bodies. Even
-at `normal` such reads are bounded, never "just this once": one session-wide
-body read at a time, a stored-byte budget (the oldest bodies past it are left
-out and counted), sizes probed before bodies are fetched, one point lookup per
-body, and no `ORDER BY` over a BLOB — SQLite sorts BLOBs by copying them into a
-temp file. On 2026-09-15 a single unbounded open of one 12-thread Codex session
-read ~1,000 multi-MB bodies that way and hung the host within minutes, with
-capture already shed.
+same memory. **Every** route that decodes one goes through `admitBodyRead`:
+above `normal` it answers `503 songguo_shedding_load`, and at `normal` it admits
+one read at a time. That is the session Messages view, the single-call
+`/messages`, `/trace` and `/systemone`, the MCP trace tool, and the session-title
+fallback — no exceptions. The gate lives on the reader rather than on the HTTP
+handler, so a caller arriving by another door inherits it by construction.
+
+Even at `normal` such reads are bounded, never "just this once": one body read at
+a time, a stored-byte budget for session-wide reads (the oldest bodies past it
+are left out and counted), sizes probed before bodies are fetched, one point
+lookup per body, no `ORDER BY` over a BLOB — SQLite sorts BLOBs by copying them
+into a temp file — and the caller's context carried all the way into the query,
+so a closed tab stops paying for its read. Decoding is held to the same standard
+as reading: the prompt merge's comparison keys are a streaming digest, because
+unmarshalling a captured prompt into `map[string]any` costs an order of magnitude
+more heap than the bytes did. A view that is expensive to produce is also fetched
+only when it is asked for — the trace card reads nothing until it is opened.
+
+> History, twice on the same host. On 2026-09-15 a single unbounded open of one
+> 12-thread Codex session read ~1,000 multi-MB bodies in one `ORDER BY` query and
+> hung the host within minutes, with capture already shed. That fix bounded the
+> session route and deliberately left the single-call readers out, reasoning that
+> each was "a point lookup on one row" — the row is one, its size is not. Opening
+> any call detail page then read that row **twice**, concurrently, because
+> `/messages` and `/trace` both fired on load — ungated, unbounded, and
+> uncancellable. Fixed 2026-09-22 by widening the gate to every reader and
+> fetching the trace only when a reader opens it.
 
 The rules that keep this from turning into the things this file forbids:
 

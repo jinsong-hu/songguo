@@ -3,9 +3,14 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"hash"
 	"net/http"
+	"sort"
 
 	"github.com/songguo/songguo/internal/store"
 	"github.com/songguo/songguo/internal/wire"
@@ -40,12 +45,18 @@ type sessionMessagesView struct {
 }
 
 // sessionMessagesBudget bounds the stored request bytes one Messages view
-// reads. The merge below holds each decoded body several times over (raw
-// message values, a canonical key per message, the encoded response), so the
-// process pays a few hundred MB at this size — affordable on the 8 GB host the
-// gateway shares with other services, where an unbounded read of one busy
-// session was not.
-const sessionMessagesBudget = 64 << 20
+// reads. Past it the oldest covering bodies are left unread and counted in
+// OmittedRequests, which the panel reports — a view that starts part-way
+// through a session is a stated limit; a view that takes the host down with it
+// is not.
+//
+// The merge still holds each admitted body a small number of times over (the
+// raw message values, and the encoded response), so the multiple on this number
+// is single digits rather than the order of magnitude it was when every message
+// also decoded into a generic tree — see canonicalPromptKey. 32 MB on the 8 GB
+// host the gateway shares with several other services leaves room for the
+// forwarding path this whole file is subordinate to.
+const sessionMessagesBudget = 32 << 20
 
 type capturedPromptBody struct {
 	Model        string          `json:"model"`
@@ -62,17 +73,6 @@ type promptItem struct {
 }
 
 func (a *api) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
-	if a.shedding() {
-		writeError(w, http.StatusServiceUnavailable, "shedding_load",
-			"the gateway is short of disk or memory and has paused reading captured bodies; retry once it recovers")
-		return
-	}
-	select {
-	case a.bodyReads <- struct{}{}:
-		defer func() { <-a.bodyReads }()
-	case <-r.Context().Done():
-		return
-	}
 	view, err := a.sessionMessagesData(r.Context(), r.PathValue("id"))
 	if err != nil {
 		if r.Context().Err() != nil {
@@ -85,6 +85,12 @@ func (a *api) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *api) sessionMessagesData(ctx context.Context, id string) (sessionMessagesView, error) {
+	release, err := a.admitBodyRead(ctx)
+	if err != nil {
+		return emptyPromptView(id), err
+	}
+	defer release()
+
 	requests, omitted, err := a.store.SessionRequests(ctx, id, sessionMessagesBudget)
 	if err != nil {
 		return emptyPromptView(id), err
@@ -115,8 +121,11 @@ func (a *api) sessionMessagesData(ctx context.Context, id string) (sessionMessag
 // the same system/tools/messages view, built from one call's captured request
 // alone, so a request detail page reads the prompt it actually sent.
 func (a *api) handleCallMessages(w http.ResponseWriter, r *http.Request) {
-	view, err := a.callMessagesData(r.PathValue("id"))
+	view, err := a.callMessagesData(r.Context(), r.PathValue("id"))
 	if err != nil {
+		if r.Context().Err() != nil {
+			return // the viewer left; nobody to answer
+		}
 		a.writeDataErr(w, "get call messages", err)
 		return
 	}
@@ -126,8 +135,14 @@ func (a *api) handleCallMessages(w http.ResponseWriter, r *http.Request) {
 // callMessagesData returns the prompt view for one call, or a *apiError (404)
 // when no payload was captured for it. A capture that is not a JSON prompt body
 // reads as an empty view rather than an error, as it does for a session.
-func (a *api) callMessagesData(id string) (sessionMessagesView, error) {
-	p, err := a.store.GetPayload(id)
+func (a *api) callMessagesData(ctx context.Context, id string) (sessionMessagesView, error) {
+	release, err := a.admitBodyRead(ctx)
+	if err != nil {
+		return emptyPromptView(""), err
+	}
+	defer release()
+
+	p, err := a.store.GetPayload(ctx, id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return emptyPromptView(""), notFoundErr("trace not found")
@@ -208,6 +223,14 @@ func mergePrompts(prompts []capturedPromptBody) sessionMessagesView {
 		}
 	}
 
+	// A message key exists for exactly one purpose: mergePromptItems comparing
+	// one request's messages against another's. With a single request there is
+	// nothing to compare it to — the overlap is zero by construction, the loop
+	// never runs, and every key computed would be read by nobody. That is the
+	// whole single-call path (callMessagesData passes one prompt), which is also
+	// the path a request detail page takes on every open.
+	needKeys := len(prompts) > 1
+
 	seenSystem := map[string]struct{}{}
 	seenTools := map[string]struct{}{}
 	var messages []promptItem
@@ -224,7 +247,7 @@ func mergePrompts(prompts []capturedPromptBody) sessionMessagesView {
 			}
 		}
 
-		items := requestMessageItems(prompt.Messages, prompt.Input)
+		items := requestMessageItems(prompt.Messages, prompt.Input, needKeys)
 		inlineSystem, inlineTools, next := hoistInlinePrompt(items, adoptInlineSystem)
 		for _, tool := range inlineTools {
 			view.Tools = appendUniquePromptValue(view.Tools, seenTools, tool)
@@ -306,7 +329,10 @@ func hoistInlinePrompt(items []promptItem, adoptSystem bool) (system, tools []js
 	return system, tools, rest
 }
 
-func requestMessageItems(messages, input json.RawMessage) []promptItem {
+// requestMessageItems splits one request's message array into items. withKeys
+// asks for the comparison key each item carries; see mergePrompts for why a
+// single-request view asks for none.
+func requestMessageItems(messages, input json.RawMessage, withKeys bool) []promptItem {
 	items, ok := rawJSONArray(messages)
 	if !ok {
 		items, ok = rawJSONArray(input)
@@ -319,10 +345,11 @@ func requestMessageItems(messages, input json.RawMessage) []promptItem {
 	}
 	out := make([]promptItem, 0, len(items))
 	for _, raw := range items {
-		out = append(out, promptItem{
-			raw: cloneRawMessage(raw),
-			key: canonicalPromptJSON(raw, true),
-		})
+		item := promptItem{raw: cloneRawMessage(raw)}
+		if withKeys {
+			item.key = canonicalPromptKey(raw, true)
+		}
+		out = append(out, item)
 	}
 	return out
 }
@@ -357,7 +384,7 @@ func appendUniquePromptValue(dst []json.RawMessage, seen map[string]struct{}, ra
 	if !hasJSONValue(raw) {
 		return dst
 	}
-	key := canonicalPromptJSON(raw, false)
+	key := canonicalPromptKey(raw, false)
 	if _, ok := seen[key]; ok {
 		return dst
 	}
@@ -394,43 +421,175 @@ func cloneRawMessage(raw json.RawMessage) json.RawMessage {
 	return append(json.RawMessage(nil), raw...)
 }
 
-// canonicalPromptJSON produces a stable comparison key independent of object
-// key order. Message comparisons ignore cache_control because the frontend
-// strips it before rendering and equality checks.
-func canonicalPromptJSON(raw json.RawMessage, stripCacheControl bool) string {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return string(raw)
+// canonicalPromptKey produces a stable equality key for a captured JSON value:
+// two values share a key exactly when they are the same value, independent of
+// object key order — and, when stripCacheControl is set, of any cache_control
+// members. Message comparisons strip it because the frontend does the same
+// before rendering and comparing.
+//
+// It is a fixed-width DIGEST, and it is produced by walking the decoder's token
+// stream rather than by unmarshalling into `any`. That is not a micro-
+// optimization; it is what keeps the merge's cost proportional to the JSON
+// instead of to a Go representation of it. Unmarshalling a captured prompt into
+// `map[string]any` / `[]any` / boxed scalars costs an order of magnitude more
+// heap than the bytes it came from, and the old implementation paid for that
+// tree twice — once to decode, once more for the cache_control-stripped copy —
+// before marshalling a canonical string it then RETAINED, one per message, for
+// as long as the view was being built. Against the budget of session bodies
+// upstream, that is the difference between a merge that costs megabytes and one
+// that costs gigabytes on a host with no swap.
+//
+// The walk holds one sub-digest per member of each open object (objects must be
+// sorted to be order-independent; arrays are written in order and need no
+// buffer), so peak memory is the nesting depth times the widest object — tens
+// of KB for a captured turn, whatever its size.
+//
+// The encoding is self-delimiting: every value writes a type tag, scalars write
+// their length before their bytes, and arrays and objects write a terminator.
+// Without that, adjacent siblings could run together and ["a","b"] would key the
+// same as ["ab"].
+func canonicalPromptKey(raw json.RawMessage, stripCacheControl bool) string {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	sum := sha256.New()
+	if err := hashCanonicalValue(dec, sum, stripCacheControl); err != nil {
+		// Not JSON we can walk. The old implementation fell back to the raw text
+		// as the key; hash it instead, so one malformed capture cannot put a
+		// body-sized string in the map. The domain tag keeps a malformed value
+		// from ever colliding with a well-formed one.
+		bad := sha256.Sum256(raw)
+		return "r" + string(bad[:])
 	}
-	if stripCacheControl {
-		value = withoutCacheControl(value)
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return string(raw)
-	}
-	return string(encoded)
+	return "c" + string(sum.Sum(nil))
 }
 
-func withoutCacheControl(value any) any {
-	switch value := value.(type) {
-	case []any:
-		out := make([]any, len(value))
-		for i, child := range value {
-			out[i] = withoutCacheControl(child)
+// hashCanonicalValue writes the next value in the stream to h.
+func hashCanonicalValue(dec *json.Decoder, h hash.Hash, strip bool) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	switch t := tok.(type) {
+	case json.Delim:
+		switch t {
+		case '{':
+			return hashCanonicalObject(dec, h, strip)
+		case '[':
+			return hashCanonicalArray(dec, h, strip)
 		}
-		return out
-	case map[string]any:
-		out := make(map[string]any, len(value))
-		for key, child := range value {
-			if key != "cache_control" {
-				out[key] = withoutCacheControl(child)
+		return fmt.Errorf("canonical key: unexpected %q", t)
+	case string:
+		hashTagged(h, 's', []byte(t))
+	case json.Number:
+		// The literal as it was written, which is what json.Marshal of a
+		// json.Number also emits — so 1 and 1.0 stayed distinct before and stay
+		// distinct now.
+		hashTagged(h, 'n', []byte(t.String()))
+	case bool:
+		if t {
+			h.Write([]byte{'t'})
+		} else {
+			h.Write([]byte{'f'})
+		}
+	case nil:
+		h.Write([]byte{'z'})
+	default:
+		return fmt.Errorf("canonical key: unexpected token %T", tok)
+	}
+	return nil
+}
+
+func hashCanonicalArray(dec *json.Decoder, h hash.Hash, strip bool) error {
+	h.Write([]byte{'['})
+	for dec.More() {
+		if err := hashCanonicalValue(dec, h, strip); err != nil {
+			return err
+		}
+	}
+	if _, err := dec.Token(); err != nil { // the closing ']'
+		return err
+	}
+	h.Write([]byte{']'})
+	return nil
+}
+
+func hashCanonicalObject(dec *json.Decoder, h hash.Hash, strip bool) error {
+	type member struct {
+		key    string
+		digest []byte
+	}
+	var members []member
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return fmt.Errorf("canonical key: object key %T is not a string", tok)
+		}
+		if strip && key == "cache_control" {
+			if err := skipJSONValue(dec); err != nil {
+				return err
+			}
+			continue
+		}
+		sub := sha256.New()
+		if err := hashCanonicalValue(dec, sub, strip); err != nil {
+			return err
+		}
+		members = append(members, member{key: key, digest: sub.Sum(nil)})
+	}
+	if _, err := dec.Token(); err != nil { // the closing '}'
+		return err
+	}
+
+	// Sorting by key is what makes the digest independent of the order the
+	// client serialized its object in. Ties keep their original order so that
+	// the last of a duplicated key wins below, matching what unmarshalling into
+	// a map would have done.
+	sort.SliceStable(members, func(i, j int) bool { return members[i].key < members[j].key })
+
+	h.Write([]byte{'{'})
+	for i, m := range members {
+		if i+1 < len(members) && members[i+1].key == m.key {
+			continue // a later member repeats this key; that one is the value
+		}
+		hashTagged(h, 'k', []byte(m.key))
+		h.Write(m.digest)
+	}
+	h.Write([]byte{'}'})
+	return nil
+}
+
+// skipJSONValue consumes the next value without hashing it.
+func skipJSONValue(dec *json.Decoder) error {
+	depth := 0
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if delim, ok := tok.(json.Delim); ok {
+			switch delim {
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
 			}
 		}
-		return out
-	default:
-		return value
+		if depth == 0 {
+			return nil
+		}
 	}
+}
+
+// hashTagged writes a tagged, length-prefixed scalar, so that neither the tag
+// nor the bytes of one value can be read as part of the next.
+func hashTagged(h hash.Hash, tag byte, b []byte) {
+	var prefix [9]byte
+	prefix[0] = tag
+	binary.BigEndian.PutUint64(prefix[1:], uint64(len(b)))
+	h.Write(prefix[:])
+	h.Write(b)
 }

@@ -32,7 +32,7 @@ interface Options {
  * routes the app back to the gate.
  */
 export function useFetch<T>(
-  loader: () => Promise<T>,
+  loader: (signal: AbortSignal) => Promise<T>,
   deps: ReadonlyArray<unknown>,
   options: Options = {},
 ): FetchState<T> {
@@ -44,24 +44,33 @@ export function useFetch<T>(
   const loaderRef = useRef(loader);
   loaderRef.current = loader;
   const cancelled = useRef(false);
+  const inflight = useRef<AbortController | null>(null);
 
   const run = useCallback(async () => {
     if (!enabled) return;
+    // A superseded request is aborted, not merely ignored. Dropping the result
+    // on the floor still leaves the server reading — and for the endpoints that
+    // decode a captured body that is seconds of disk nobody is waiting for.
+    inflight.current?.abort();
+    const controller = new AbortController();
+    inflight.current = controller;
+    const done = () => cancelled.current || controller.signal.aborted;
     setLoading(true);
     try {
-      const result = await loaderRef.current();
-      if (cancelled.current) return;
+      const result = await loaderRef.current(controller.signal);
+      if (done()) return;
       setData(result);
       setError(null);
     } catch (e) {
-      if (cancelled.current) return;
+      // An abort is this hook's own doing, never something to show a reader.
+      if (done()) return;
       if (e instanceof ApiError && e.status === 401) {
         // Handled globally by the gate; don't surface a banner.
         return;
       }
       setError(e instanceof Error ? e.message : 'Request failed');
     } finally {
-      if (!cancelled.current) {
+      if (!done()) {
         setLoading(false);
         setInitialLoading(false);
       }
@@ -81,11 +90,13 @@ export function useFetch<T>(
       const id = window.setInterval(run, intervalMs);
       return () => {
         cancelled.current = true;
+        inflight.current?.abort();
         window.clearInterval(id);
       };
     }
     return () => {
       cancelled.current = true;
+      inflight.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, enabled, intervalMs]);

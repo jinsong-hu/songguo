@@ -87,9 +87,13 @@ type api struct {
 	// stepped clock cannot invert the comparison.
 	bootTime time.Time
 
-	// bodyReads admits one session-wide body read at a time (see
-	// sessionMessagesBudget). Its budget bounds one read; this bounds how many
-	// of them a few open tabs can stack up.
+	// bodyReads admits one captured-body read at a time, session-wide or single
+	// call. A session read has a stored-byte budget that bounds what one of them
+	// costs (see sessionMessagesBudget); this bounds how many a few open tabs can
+	// stack up. Both kinds queue here because the scarce thing is the disk, and
+	// there is one of those: a single call's capture is not automatically the
+	// smaller read — an agent turn is a multi-MB body whose overflow chain SQLite
+	// walks one dependent page at a time.
 	bodyReads chan struct{}
 
 	warnOnce sync.Once
@@ -100,6 +104,43 @@ type api struct {
 // hit the same disk the ledger is short of, so they stand down with it.
 func (a *api) shedding() bool {
 	return a.pressure != nil && a.pressure().Level != pressure.Normal.String()
+}
+
+// admitBodyRead is the gate every read of a captured body passes through: it
+// stands down while the gateway is shedding, and otherwise admits one read at a
+// time. The caller runs release when it is done with the bodies.
+//
+// It lives on the *Data methods rather than on the HTTP handlers so that the
+// MCP surface, which reaches the same readers by a different door, cannot be
+// left ungated — and so a reader added later inherits the gate by calling the
+// method instead of by remembering this paragraph.
+//
+// > History: the gate and the semaphore were added on 2026-09-15 for the
+// > session Messages view and put in its handler, and the single-call readers
+// > (/messages, /trace, /systemone, and the MCP trace tool) were left out with
+// > the reasoning that each is "a point lookup on one row". The row is one; its
+// > size has no bound. Opening one call detail page read that row twice over,
+// > concurrently, with nothing to stand either read down — and a multi-MB body
+// > is thousands of overflow pages SQLite walks one dependent read at a time,
+// > on a disk the rest of the box shares.
+func (a *api) admitBodyRead(ctx context.Context) (release func(), err error) {
+	// Checked before the select rather than only inside it. A select whose send
+	// and whose <-ctx.Done() are both ready picks between them at random, so a
+	// caller that is already gone would be admitted about half the time — and
+	// would then go and read the body it no longer has anyone to give.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if a.shedding() {
+		return nil, &apiError{http.StatusServiceUnavailable, "shedding_load",
+			"the gateway is short of disk or memory and has paused reading captured bodies; retry once it recovers"}
+	}
+	select {
+	case a.bodyReads <- struct{}{}:
+		return func() { <-a.bodyReads }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // newAPI resolves Deps into a concrete *api with defaults applied. It is shared

@@ -70,8 +70,16 @@ func (s *Store) SavePayload(p Payload) error {
 
 // GetPayload returns the raw body row for a call, or ErrNotFound if none was
 // captured.
-func (s *Store) GetPayload(callID string) (Payload, error) {
-	row := s.db.QueryRow(
+//
+// ctx is not decoration: this selects both BLOB columns, and a captured agent
+// turn is thousands of overflow pages that SQLite walks one dependent read at a
+// time. That is seconds of disk on a cold cache, so a caller that has gone away
+// must be able to stop paying for it mid-read — the same reason SessionRequests
+// takes one. Every caller passes the context it is actually serving; there is
+// deliberately no context.Background() convenience wrapper, so each new call
+// site has to answer the question rather than inherit an answer.
+func (s *Store) GetPayload(ctx context.Context, callID string) (Payload, error) {
+	row := s.db.QueryRowContext(ctx,
 		`SELECT call_id, req_headers, req_body, req_content_type,
 		        resp_headers, resp_body, resp_content_type, created_at
 		 FROM raw WHERE call_id = ?`,
