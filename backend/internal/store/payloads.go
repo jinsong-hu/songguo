@@ -12,7 +12,7 @@ import (
 
 // Payload is the captured request/response body pair for a single call, stored
 // 1:1 with calls.id in the `raw` table. Header maps are already redacted by the
-// caller. See docs/arch-gateway.md — raw is capture-gated and pruned at 7 days.
+// caller. See docs/arch-gateway.md — raw is capture-gated and pruned at 3 days.
 type Payload struct {
 	CallID          string
 	ReqHeaders      map[string]string

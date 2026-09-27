@@ -57,7 +57,7 @@ they differ by **grain** and by **who owns them**:
 
 | Table | Grain | Owner | Holds | Retention |
 |-------|-------|-------|-------|-----------|
-| **`raw`** | per-call | gateway | full raw request + response bodies and headers, capture-gated | **7 days** |
+| **`raw`** | per-call | gateway | full raw request + response bodies and headers, capture-gated | **3 days** |
 | **`calls`** | per-call | gateway | the call-level **stats** — timestamps, status, err, model/vendor/wire, normalized tokens, cost, latency, session id | **90 days** |
 | **`sessions`** | per-session | insights | a **materialized rollup** of a coding-agent session — captured title, turns, tokens, duration, inferred outcome | **90 days** |
 
@@ -65,7 +65,7 @@ Read this as three concentric lifetimes:
 
 - **`raw`** is the fullest and most expensive record (whole payloads) and the
   shortest-lived. It exists to debug and to feed the parse pipeline. Off by
-  default (the `capture` toggle); pruned at 7 days.
+  default (the `capture` toggle); pruned at 3 days.
 - **`calls`** is the durable ledger — one row per call, enough to meter, price,
   and chart, but **not** the bodies. This is what "the stats, at call level"
   means. Pruned at 90 days.
@@ -77,11 +77,11 @@ Read this as three concentric lifetimes:
 
 ### Why `raw` and `calls` are separate
 
-They have different lifetimes (7d vs 90d), different sizes (whole bodies vs a
+They have different lifetimes (3d vs 90d), different sizes (whole bodies vs a
 row of scalars), and different gates (`raw` only exists when capture is on;
 `calls` is always written). Folding bodies into `calls` would forfeit all three
 distinctions. `raw` is a 1:1 child of `calls`, keyed by the call id, `ON DELETE
-CASCADE` — so pruning a call drops its body, and the 7-day body prune runs
+CASCADE` — so pruning a call drops its body, and the 3-day body prune runs
 independently and earlier.
 
 ### Why `sessions` is separate from an on-the-fly `GROUP BY`
@@ -143,7 +143,7 @@ A background janitor prunes on a fixed clock, entirely on the insights/analysis
 side (it is derived-data housekeeping, not forwarding). It never blocks the
 gateway. Windows:
 
-- `raw` — 7 days (by capture time)
+- `raw` — 3 days (by capture time; override with `SONGGUO_RETAIN_RAW_DAYS`)
 - `calls` — 90 days (by call timestamp; cascades to `raw` and other per-call
   children)
 - `sessions` — 90 days (by last activity)

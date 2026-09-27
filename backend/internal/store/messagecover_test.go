@@ -149,7 +149,7 @@ func TestCoverCountDropEndsOnlyItsOwnThread(t *testing.T) {
 	}, "a1", "b2", "a3")
 }
 
-// raw is pruned at 7 days while calls lives 90, so a run's last member often has
+// raw is pruned at 3 days while calls lives 90, so a run's last member often has
 // no body left. The cover falls back to the latest member that still has one:
 // those are prefixes of the missing request, so they carry every message up to
 // where they end. Failing the whole run instead would discard recoverable

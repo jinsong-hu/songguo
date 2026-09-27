@@ -115,7 +115,7 @@ func (c callShape) known() bool { return c.Count > 0 && len(c.Head) > 0 }
 // a spurious run on every occurrence.
 //
 // The LEFT JOIN onto raw resolves capture availability in the same pass, because
-// the cover has to know it: raw is pruned at 7 days while calls lives 90, so the
+// the cover has to know it: raw is pruned at 3 days while calls lives 90, so the
 // last member of a run frequently has no body left to read.
 //
 // There is deliberately NO LIMIT. The rows are narrow (two ids, a timestamp, a
@@ -196,7 +196,7 @@ func extends(prev, cur callShape) bool {
 // Within an agent, one run is open per msg_head (see THE RULE).
 //
 // Within a run the last member wins — but only if its body still exists. When it
-// does not (raw pruned at 7 days), the walk falls back to the latest member of
+// does not (raw pruned at 3 days), the walk falls back to the latest member of
 // the same run that does. That is a strictly better answer than failing: those
 // earlier requests are prefixes of the missing one, so they still carry every
 // message up to where they end. A run with no captures at all contributes
@@ -299,7 +299,7 @@ type UnfingerprintedCall struct {
 // captured request body but no fingerprint yet, newest first.
 //
 // Only rows with a surviving capture can be backfilled at all — raw is pruned at
-// 7 days while calls lives 90 — so the reachable set is bounded by the capture
+// 3 days while calls lives 90 — so the reachable set is bounded by the capture
 // window, not by the ledger. Newest first because those are the sessions someone
 // is most likely to open.
 //

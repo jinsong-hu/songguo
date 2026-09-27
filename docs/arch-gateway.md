@@ -215,7 +215,7 @@ the call id. It is:
   client gone at the gate, build/transport failure — keeps the request-only row:
   the request really was dispatched, and what we tried to send a dead provider
   is exactly what an operator debugging it wants.
-- **Short-lived** — pruned at 7 days, independently of and earlier than the
+- **Short-lived** — pruned at 3 days, independently of and earlier than the
   90-day `calls` prune.
 
 Capture is the one place the gateway reads the full response body it would

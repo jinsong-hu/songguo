@@ -23,9 +23,9 @@ type Windows struct {
 	Sessions time.Duration // materialized session rollups (sessions table)
 }
 
-// DefaultWindows is the policy from docs/arch.md: raw 7d, calls 90d, sessions 90d.
+// DefaultWindows is the policy from docs/arch.md: raw 3d, calls 90d, sessions 90d.
 var DefaultWindows = Windows{
-	Raw:      7 * 24 * time.Hour,
+	Raw:      3 * 24 * time.Hour,
 	Calls:    90 * 24 * time.Hour,
 	Sessions: 90 * 24 * time.Hour,
 }

@@ -249,7 +249,7 @@ func main() {
 	// See docs/arch.md.
 	janitorCtx, stopJanitor := context.WithCancel(context.Background())
 	jan := janitor.New(st, logger, janitor.Windows{
-		Raw:      getdays("SONGGUO_RETAIN_RAW_DAYS", 7),
+		Raw:      getdays("SONGGUO_RETAIN_RAW_DAYS", 3),
 		Calls:    getdays("SONGGUO_RETAIN_CALLS_DAYS", 90),
 		Sessions: getdays("SONGGUO_RETAIN_SESSIONS_DAYS", 90),
 	}, time.Hour)

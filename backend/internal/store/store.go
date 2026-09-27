@@ -221,7 +221,7 @@ func (s *Store) migrate() error {
 		)`,
 		// raw holds the full request/response bodies (the previous "payloads"
 		// table, renamed — see docs/arch-gateway.md). Capture-gated, redacted,
-		// 1:1 with calls.id, pruned at 7 days independently of the 90-day calls
+		// 1:1 with calls.id, pruned at 3 days independently of the 90-day calls
 		// prune. renamePayloadsToRaw migrates pre-existing databases.
 		`CREATE TABLE IF NOT EXISTS raw (
 			call_id          TEXT PRIMARY KEY REFERENCES calls(id) ON DELETE CASCADE,

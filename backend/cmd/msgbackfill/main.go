@@ -16,7 +16,7 @@
 // never treats as redundant, so the only cost of never running this is that old
 // sessions keep reading every body the way they always did. New traffic is
 // fingerprinted by the parse pipeline as it arrives, so the backlog shrinks on
-// its own as the 7-day capture window rolls forward. This command only makes the
+// its own as the 3-day capture window rolls forward. This command only makes the
 // improvement retroactive.
 //
 // Usage:

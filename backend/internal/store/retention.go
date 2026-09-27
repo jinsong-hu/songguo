@@ -119,7 +119,7 @@ func (s *Store) PruneRaw(ctx context.Context, before time.Time) (int64, error) {
 
 // PruneCalls deletes call-level stats rows older than the cutoff, by start time
 // (ts). Foreign-key cascade drops each pruned call's raw/composition children,
-// so this also reclaims any raw bodies the 7-day PruneRaw hasn't already
+// so this also reclaims any raw bodies the 3-day PruneRaw hasn't already
 // removed. Returns rows deleted.
 //
 // The cascade makes this the most expensive of the three — each deleted call

@@ -134,7 +134,7 @@ working is not a session that failed.
 A background janitor, on the insights side, prunes on a fixed clock. It is
 derived-data maintenance and never blocks the gateway:
 
-- `raw` — 7 days (by capture time)
+- `raw` — 3 days (by capture time)
 - `calls` — 90 days (by call timestamp; cascades to per-call children)
 - `sessions` — 90 days (by last activity)
 
